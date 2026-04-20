@@ -1,0 +1,15 @@
+[Unit]
+Description=Initialize PostgreSQL cluster on first boot if missing
+Documentation=man:initdb(1)
+Before=postgresql.service
+ConditionPathExists=!/var/lib/postgres/data/PG_VERSION
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/bin/install -d -o postgres -g postgres -m 0700 /var/lib/postgres/data
+ExecStart=/usr/bin/runuser -u postgres -- /usr/bin/initdb --locale=en_US.UTF-8 --encoding=UTF8 --data-checksums -D /var/lib/postgres/data
+
+[Install]
+WantedBy=multi-user.target

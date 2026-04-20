@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# shedos-check-updates — count pending pacman + AUR updates.
+#
+# Modes:
+#   (no args)           Print a human summary.
+#   --waybar            Print JSON for waybar custom module.
+#   --refresh-waybar    Send SIGRTMIN+8 to waybar so its custom/updates
+#                       module re-polls immediately.
+#
+# Runs as an unprivileged user. checkupdates uses fakeroot on an isolated
+# temp DB (man checkupdates(8)) so it's safe to call hourly.
+
+set -u
+
+mode=${1:-text}
+
+_pacman_count() {
+    # checkupdates prints one line per update; empty output → 0.
+    checkupdates 2>/dev/null | grep -c . || true
+}
+
+_aur_count() {
+    if command -v yay >/dev/null 2>&1; then
+        yay -Qua 2>/dev/null | grep -c . || true
+    elif command -v paru >/dev/null 2>&1; then
+        paru -Qua 2>/dev/null | grep -c . || true
+    else
+        echo 0
+    fi
+}
+
+case "$mode" in
+    --refresh-waybar)
+        pkill -RTMIN+8 waybar 2>/dev/null || true
+        exit 0
+        ;;
+esac
+
+pac=$(_pacman_count)
+aur=$(_aur_count)
+total=$(( pac + aur ))
+
+case "$mode" in
+    --waybar)
+        if (( total > 0 )); then
+            printf '{"text":"\uf461 %d","tooltip":"%d update(s) available\\n(click to review \u0026 upgrade)","class":"has-updates"}\n' \
+                "$total" "$total"
+        else
+            printf '{"text":"","tooltip":"System is up to date","class":"no-updates"}\n'
+        fi
+        ;;
+    text|*)
+        if (( total == 0 )); then
+            echo "System is up to date."
+        else
+            echo "$total update(s) available — run shedos-update to review."
+            echo "  pacman: $pac"
+            echo "  AUR:    $aur"
+        fi
+        ;;
+esac

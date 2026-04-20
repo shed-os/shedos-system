@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# shedos-update — interactive ShedOS upgrade flow.
+#
+# The user is prompted to confirm before ANYTHING is applied, and pacman /
+# yay re-prompt with their own package lists. No silent or --noconfirm paths.
+#
+# Flow:
+#   1. checkupdates  → list pacman updates
+#   2. yay -Qua      → list AUR updates (if yay is installed)
+#   3. y/N           → proceed?
+#   4. pacman -Syu   → pacman's own confirmation
+#   5. yay -Sua      → yay's own confirmation (if needed)
+#   6. shedos-sync-configs → 3-way merge for $HOME dotfiles (own prompt)
+
+set -uo pipefail
+
+_hr() { printf '%s\n' "------------------------------------------------------------"; }
+
+_hr
+echo "ShedOS update"
+_hr
+
+echo "Checking for pacman updates…"
+pac=$(checkupdates 2>/dev/null || true)
+
+aur=""
+if command -v yay >/dev/null 2>&1; then
+    echo "Checking for AUR updates…"
+    aur=$(yay -Qua 2>/dev/null || true)
+elif command -v paru >/dev/null 2>&1; then
+    echo "Checking for AUR updates (paru)…"
+    aur=$(paru -Qua 2>/dev/null || true)
+fi
+
+pac_n=$([[ -z $pac ]] && echo 0 || grep -c . <<<"$pac")
+aur_n=$([[ -z $aur ]] && echo 0 || grep -c . <<<"$aur")
+total=$(( pac_n + aur_n ))
+
+if (( total == 0 )); then
+    echo
+    echo "System is up to date."
+    exit 0
+fi
+
+echo
+if (( pac_n > 0 )); then
+    echo "Pacman updates ($pac_n):"
+    echo "$pac" | sed 's/^/  /'
+fi
+if (( aur_n > 0 )); then
+    echo
+    echo "AUR updates ($aur_n):"
+    echo "$aur" | sed 's/^/  /'
+fi
+
+echo
+read -rp "Proceed with upgrade? [y/N] " yn
+case "$yn" in
+    [yY]|[yY][eE][sS]) ;;
+    *) echo "Cancelled."; exit 0 ;;
+esac
+
+if (( pac_n > 0 )); then
+    echo
+    _hr
+    echo "Running pacman -Syu (pacman will prompt again with the full list)…"
+    _hr
+    sudo pacman -Syu || {
+        echo "pacman exited non-zero; aborting before config sync." >&2
+        exit 1
+    }
+fi
+
+if (( aur_n > 0 )); then
+    echo
+    _hr
+    echo "Running yay -Sua (yay will prompt again)…"
+    _hr
+    if command -v yay >/dev/null 2>&1; then
+        yay -Sua || echo "yay exited non-zero; continuing." >&2
+    elif command -v paru >/dev/null 2>&1; then
+        paru -Sua || echo "paru exited non-zero; continuing." >&2
+    fi
+fi
+
+echo
+_hr
+echo "Syncing ShedOS config defaults (will prompt before applying)…"
+_hr
+if command -v shedos-sync-configs >/dev/null 2>&1; then
+    shedos-sync-configs || echo "config sync skipped or failed." >&2
+else
+    echo "shedos-sync-configs not installed; skipping config sync."
+fi
+
+# Refresh the waybar indicator so the user sees "up to date" right away.
+shedos-check-updates --refresh-waybar 2>/dev/null || true
+
+echo
+echo "Update complete."
+read -rp "Press Enter to close… " _ || true

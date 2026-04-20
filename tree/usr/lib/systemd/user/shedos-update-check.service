@@ -1,0 +1,7 @@
+[Unit]
+Description=Poll for ShedOS / Arch updates and refresh the waybar indicator
+Documentation=man:checkupdates(8)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/shedos-check-updates --refresh-waybar

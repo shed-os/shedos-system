@@ -1,0 +1,12 @@
+NAME="shedOS"
+PRETTY_NAME="shedOS"
+ID=shedos
+ID_LIKE=arch
+BUILD_ID=rolling
+ANSI_COLOR="38;2;137;180;250"
+HOME_URL="https://github.com/theshedman/shedos"
+DOCUMENTATION_URL="https://github.com/theshedman/shedos/wiki"
+SUPPORT_URL="https://github.com/theshedman/shedos/issues"
+BUG_REPORT_URL="https://github.com/theshedman/shedos/issues"
+PRIVACY_POLICY_URL="https://github.com/theshedman/shedos"
+LOGO=shedos

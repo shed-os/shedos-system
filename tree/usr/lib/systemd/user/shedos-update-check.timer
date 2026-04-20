@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic ShedOS update check (1h)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+Unit=shedos-update-check.service
+
+[Install]
+WantedBy=timers.target

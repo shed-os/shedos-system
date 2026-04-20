@@ -1,0 +1,19 @@
+[Unit]
+Description=Ensure a postgres role+database exists for each regular Linux user
+Documentation=man:psql(1)
+# Depends on the cluster actually existing. shedos-pg-initdb.service runs
+# first-boot if PG_VERSION is missing; after that postgresql.service itself
+# keeps the daemon running.
+After=postgresql.service
+Wants=postgresql.service
+ConditionPathExists=/var/lib/postgres/data/PG_VERSION
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/shedos-pg-user-bootstrap
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

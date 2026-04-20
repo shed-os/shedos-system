@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+# shedos-sync-configs — 3-way merge for $HOME dotfiles shipped by ShedOS.
+#
+# For each file under /usr/share/shedos/<pkg>/defaults/ we compare three
+# states:
+#   src      the pristine default shipped by the package
+#   dst      the user's live copy in $HOME
+#   last     the last-seen sha256 we wrote after the previous sync
+#
+# Case A (no dst)               seed  — copy src → dst, record last.
+# Case B (src == last)          noop  — nothing changed upstream.
+# Case C (dst == last, ≠ src)   auto  — backup dst → .shedosbak, copy src, record.
+# Case D (otherwise)            conflict — write src → dst.shedosnew, NO record.
+#
+# Case D never touches dst: a file the user edited is never clobbered. The
+# manifest is intentionally NOT updated on conflict so the next run re-offers
+# the same resolution.
+#
+# Per-package policy file /usr/share/shedos/<pkg>/sync-policy may contain:
+#   always-conflict   treat Case C as Case D (stricter — for shedos-nvim)
+#
+# Exclusion list: runtime state we must never track.
+#   .config/nvim/lazy-lock.json
+#   .config/nvim/lazyvim.json
+#   .local/state/**
+#   .cache/**
+
+set -uo pipefail
+
+SHEDOS_DEFAULTS_ROOT=/usr/share/shedos
+STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/shedos/last-seen"
+
+DRY_RUN=0
+REBUILD_MANIFEST=0
+LIST_DIFFS=0
+
+usage() {
+    cat <<'EOF'
+Usage: shedos-sync-configs [--dry-run] [--rebuild-manifest] [--help]
+
+Synchronises $HOME dotfiles against ShedOS package defaults using an
+explicit 3-way merge. A file the user has edited is never overwritten; at
+worst a .shedosnew file is written alongside (exactly like pacman's .pacnew).
+
+Options:
+  --dry-run            Print what would happen, change nothing.
+  --rebuild-manifest   Hash current $HOME files against current defaults and
+                       write the manifest. Use this if the state dir was
+                       lost — effectively says "trust me, I'm aligned now".
+  --help               This message.
+
+Run without flags to perform an interactive sync: prints a plan, asks for
+y/N, then applies. Default answer is N.
+EOF
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=1 ;;
+        --rebuild-manifest) REBUILD_MANIFEST=1 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "unknown option: $arg" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+_is_excluded() {
+    # $1 = relpath (no leading slash)
+    case "$1" in
+        .config/nvim/lazy-lock.json|.config/nvim/lazyvim.json) return 0 ;;
+        .local/state/*|.cache/*) return 0 ;;
+    esac
+    return 1
+}
+
+_sha() {
+    # $1 = path. Print sha256 hex, or empty string if missing/unreadable.
+    [[ -f $1 && -r $1 ]] || { echo ""; return; }
+    sha256sum -- "$1" 2>/dev/null | awk '{print $1}'
+}
+
+_read_sha() {
+    # $1 = manifest file path. Print stored sha or "".
+    [[ -f $1 ]] || { echo ""; return; }
+    tr -d '[:space:]' < "$1"
+}
+
+_write_sha() {
+    # $1 = manifest file path, $2 = sha
+    install -Dm600 /dev/null "$1"
+    printf '%s' "$2" > "$1"
+}
+
+_pkg_policy() {
+    # $1 = pkg name. Print policy line or "".
+    local f="$SHEDOS_DEFAULTS_ROOT/$1/sync-policy"
+    [[ -f $f ]] || return 0
+    awk 'NF && $1 !~ /^#/ { print; exit }' "$f"
+}
+
+# ---------------------------------------------------------------------------
+# Walk defaults and build a plan.
+# Each entry: "<case>\t<pkg>\t<relpath>\t<src>\t<dst>\t<last>"
+# case ∈ seed | noop | auto | conflict
+# ---------------------------------------------------------------------------
+plan=()
+
+shopt -s dotglob nullglob
+
+if [[ ! -d $SHEDOS_DEFAULTS_ROOT ]]; then
+    echo "No ShedOS defaults found under $SHEDOS_DEFAULTS_ROOT; nothing to sync."
+    exit 0
+fi
+
+for pkg_root in "$SHEDOS_DEFAULTS_ROOT"/*/defaults; do
+    [[ -d $pkg_root ]] || continue
+    pkg_name=$(basename "$(dirname "$pkg_root")")
+    policy=$(_pkg_policy "$pkg_name")
+
+    while IFS= read -r -d '' src; do
+        relpath=${src#"$pkg_root/"}
+        if _is_excluded "$relpath"; then continue; fi
+
+        dst=$HOME/$relpath
+        last=$STATE_ROOT/$relpath.sha256
+
+        src_sha=$(_sha "$src")
+        dst_sha=$(_sha "$dst")
+        last_sha=$(_read_sha "$last")
+
+        if [[ -z $dst_sha ]]; then
+            kind=seed
+        elif [[ $src_sha == "$last_sha" ]]; then
+            kind=noop
+        elif [[ $dst_sha == "$last_sha" ]]; then
+            if [[ $policy == always-conflict ]]; then
+                kind=conflict
+            else
+                kind=auto
+            fi
+        else
+            kind=conflict
+        fi
+
+        plan+=("$kind"$'\t'"$pkg_name"$'\t'"$relpath"$'\t'"$src"$'\t'"$dst"$'\t'"$last")
+    done < <(find "$pkg_root" -type f -print0)
+done
+
+# ---------------------------------------------------------------------------
+# --rebuild-manifest: hash current $HOME files against current defaults and
+# write last-seen = sha(src) unconditionally. Does NOT copy files.
+# ---------------------------------------------------------------------------
+if (( REBUILD_MANIFEST )); then
+    n=0
+    for entry in "${plan[@]}"; do
+        IFS=$'\t' read -r _ _ _ src _ last <<<"$entry"
+        src_sha=$(_sha "$src")
+        [[ -n $src_sha ]] || continue
+        _write_sha "$last" "$src_sha"
+        ((n++))
+    done
+    echo "Rebuilt manifest: $n entries under $STATE_ROOT"
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Print plan.
+# ---------------------------------------------------------------------------
+seed_n=0 auto_n=0 conflict_n=0 noop_n=0
+for entry in "${plan[@]}"; do
+    IFS=$'\t' read -r kind pkg relpath _ _ _ <<<"$entry"
+    case $kind in
+        seed) ((seed_n++)) ;;
+        auto) ((auto_n++)) ;;
+        conflict) ((conflict_n++)) ;;
+        noop) ((noop_n++)) ;;
+    esac
+done
+
+if (( seed_n + auto_n + conflict_n == 0 )); then
+    echo "Nothing to sync ($noop_n files already in sync)."
+    exit 0
+fi
+
+echo "ShedOS config sync plan:"
+for entry in "${plan[@]}"; do
+    IFS=$'\t' read -r kind pkg relpath _ _ _ <<<"$entry"
+    case $kind in
+        seed)     printf '  seed         %s  (first-time copy)\n' "$relpath" ;;
+        auto)     printf '  auto-update  %s  (no local changes)\n' "$relpath" ;;
+        conflict) printf '  conflict     %s  → will write %s.shedosnew\n' "$relpath" "$relpath" ;;
+    esac
+done
+echo
+echo "Summary: $seed_n seed, $auto_n auto-update, $conflict_n conflict, $noop_n noop"
+
+if (( DRY_RUN )); then
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Prompt.
+# ---------------------------------------------------------------------------
+while :; do
+    read -rp "Apply this plan? [y/N/list-diffs] " yn
+    case "$yn" in
+        [yY]|[yY][eE][sS]) break ;;
+        list-diffs|diffs|l)
+            for entry in "${plan[@]}"; do
+                IFS=$'\t' read -r kind _ relpath src dst _ <<<"$entry"
+                [[ $kind == conflict ]] || continue
+                echo
+                echo "=== diff for $relpath ==="
+                diff -u "$dst" "$src" || true
+            done
+            echo
+            ;;
+        *) echo "Cancelled."; exit 0 ;;
+    esac
+done
+
+# ---------------------------------------------------------------------------
+# Apply.
+# ---------------------------------------------------------------------------
+for entry in "${plan[@]}"; do
+    IFS=$'\t' read -r kind pkg relpath src dst last <<<"$entry"
+
+    case $kind in
+        seed)
+            install -Dm644 /dev/null "$dst"
+            cp --preserve=mode "$src" "$dst"
+            _write_sha "$last" "$(_sha "$src")"
+            ;;
+        auto)
+            cp -a "$dst" "$dst.shedosbak"
+            cp --preserve=mode "$src" "$dst"
+            _write_sha "$last" "$(_sha "$src")"
+            ;;
+        conflict)
+            cp --preserve=mode "$src" "$dst.shedosnew"
+            # Intentionally do NOT update $last — we want to re-present this
+            # conflict on the next sync if the user defers resolving it.
+            ;;
+        noop) ;;
+    esac
+done
+
+echo
+echo "Sync complete. Conflicts (if any) landed as <path>.shedosnew alongside"
+echo "your files — inspect with: find ~ -name '*.shedosnew'"

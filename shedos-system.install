@@ -1,0 +1,45 @@
+# shedos-system install scriptlet
+#
+# Runs as root in the target install root. For a normal `pacman -S` this is
+# the live system; during pacstrap it's the install target.
+
+post_install() {
+    systemctl daemon-reload || true
+    systemctl enable shedos-pg-initdb.service || true
+    # Creates a LOGIN+CREATEDB postgres role + same-named database for each
+    # regular Linux user, on every boot (idempotent). Safety net for the
+    # Calamares-time bootstrap in shedos_finalize — if that fails silently,
+    # or if a new user is added post-install, this catches it.
+    systemctl enable shedos-pg-user-bootstrap.service || true
+    # --global enables the user-scope unit for every user on the system via
+    # /etc/systemd/user/timers.target.wants/. Each user's systemd --user
+    # instance picks it up on next login without any per-user bootstrap.
+    systemctl --global enable shedos-update-check.timer || true
+
+    cat <<'EOF'
+
+ShedOS system installed. Notes:
+  * PostgreSQL cluster at /var/lib/postgres/data will be initialized on next
+    boot if missing (via shedos-pg-initdb.service).
+  * shedos-pg-user-bootstrap.service ensures each regular Linux user has a
+    matching postgres role + database on every boot (idempotent).
+  * shedos-update-check.timer is enabled system-wide; it starts automatically
+    on your next user-session login. Click the waybar indicator to run
+    shedos-update interactively.
+EOF
+}
+
+post_upgrade() {
+    systemctl daemon-reload || true
+    systemctl enable shedos-pg-user-bootstrap.service || true
+    systemctl --global enable shedos-update-check.timer || true
+}
+
+pre_remove() {
+    systemctl disable --now shedos-pg-initdb.service 2>/dev/null || true
+    systemctl disable --now shedos-pg-user-bootstrap.service 2>/dev/null || true
+}
+
+post_remove() {
+    systemctl daemon-reload || true
+}
