@@ -3,6 +3,33 @@
 # Runs as root in the target install root. For a normal `pacman -S` this is
 # the live system; during pacstrap it's the install target.
 
+_add_shedos_repo() {
+    # /etc/pacman.conf is owned by the `pacman` package, so we can't ship a
+    # replacement. Instead, append a fenced block between markers. Idempotent:
+    # the grep guard skips the append if the block is already there.
+    if ! grep -q '^# >>> shedos <<<' /etc/pacman.conf; then
+        cat >>/etc/pacman.conf <<'EOF'
+
+# >>> shedos <<<
+# Managed by shedos-system — do not edit between these markers.
+# Run `pacman -R shedos-system` to remove automatically.
+[shedos]
+SigLevel = Required DatabaseRequired
+Server = https://repo.shedos.org/$arch
+# <<< shedos >>>
+EOF
+    fi
+}
+
+_remove_shedos_repo() {
+    # Strip the fenced block on uninstall. sed operates on an exact marker
+    # range so a user who scribbles outside the block keeps their edits.
+    # May leave one trailing blank line in /etc/pacman.conf — cosmetic only.
+    if grep -q '^# >>> shedos <<<' /etc/pacman.conf; then
+        sed -i '/^# >>> shedos <<<$/,/^# <<< shedos >>>$/d' /etc/pacman.conf
+    fi
+}
+
 post_install() {
     systemctl daemon-reload || true
     systemctl enable shedos-pg-initdb.service || true
@@ -16,6 +43,8 @@ post_install() {
     # instance picks it up on next login without any per-user bootstrap.
     systemctl --global enable shedos-update-check.timer || true
 
+    _add_shedos_repo
+
     cat <<'EOF'
 
 ShedOS system installed. Notes:
@@ -26,6 +55,7 @@ ShedOS system installed. Notes:
   * shedos-update-check.timer is enabled system-wide; it starts automatically
     on your next user-session login. Click the waybar indicator to run
     shedos-update interactively.
+  * [shedos] repo added to /etc/pacman.conf — run `pacman -Sy` to refresh.
 EOF
 }
 
@@ -33,11 +63,15 @@ post_upgrade() {
     systemctl daemon-reload || true
     systemctl enable shedos-pg-user-bootstrap.service || true
     systemctl --global enable shedos-update-check.timer || true
+
+    _add_shedos_repo
 }
 
 pre_remove() {
     systemctl disable --now shedos-pg-initdb.service 2>/dev/null || true
     systemctl disable --now shedos-pg-user-bootstrap.service 2>/dev/null || true
+
+    _remove_shedos_repo
 }
 
 post_remove() {
