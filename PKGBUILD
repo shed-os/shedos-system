@@ -5,7 +5,7 @@
 # lives in shedos-hyprland, not here.
 
 pkgname=shedos-system
-pkgver=0.1.0
+pkgver=2026.04.21
 pkgrel=1
 pkgdesc='ShedOS system utilities, systemd units, and /etc drop-ins'
 arch=('any')
