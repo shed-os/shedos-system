@@ -6,7 +6,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.21
-pkgrel=3
+pkgrel=4
 pkgdesc='ShedOS system utilities, systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
