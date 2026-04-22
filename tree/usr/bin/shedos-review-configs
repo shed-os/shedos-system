@@ -1,0 +1,1858 @@
+#!/usr/bin/env python3
+"""shedos-review-configs — premium merge TUI for .shedosnew conflicts.
+
+When shedos-sync-configs detects that both the user and upstream have edited
+the same dotfile, it drops the upstream version as `<file>.shedosnew` and
+leaves the live file untouched. This tool resolves those conflicts with an
+IntelliJ-IDEA-style per-hunk merge UI (3-way when BASE content is on record,
+2-way fallback when it isn't), plus whole-file shortcuts for the simple cases.
+
+Data surface:
+  YOURS  = $HOME/<relpath>
+  THEIRS = $HOME/<relpath>.shedosnew
+  src    = /usr/share/shedos/<pkg>/defaults/<relpath>     (current upstream)
+  BASE   = $XDG_STATE_HOME/shedos/last-seen-content/<relpath>  (may be absent)
+
+The tool NEVER overwrites YOURS without an explicit 'save', and it always
+writes a rolling .shedosbak alongside before replacing YOURS. On successful
+save it updates both the last-seen sha and the BASE content snapshot so the
+next conflict on this file is a clean 3-way.
+"""
+
+from __future__ import annotations
+
+import argparse
+import enum
+import errno
+import fcntl
+import hashlib
+import json
+import os
+import re
+import shutil
+import signal
+import stat as _stat
+import subprocess
+import sys
+import tempfile
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from difflib import SequenceMatcher, unified_diff
+from pathlib import Path
+from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Constants and paths
+# ---------------------------------------------------------------------------
+
+HOME = Path(os.environ.get("HOME", os.path.expanduser("~")))
+STATE_ROOT = Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state")) / "shedos"
+MANIFEST_ROOT = STATE_ROOT / "last-seen"
+CONTENT_ROOT = STATE_ROOT / "last-seen-content"
+DRAFT_ROOT = STATE_ROOT / "review-drafts"
+LOCK_PATH = STATE_ROOT / "review.lock"
+LOG_PATH = STATE_ROOT / "review-log"
+DEFAULTS_ROOT = Path(os.environ.get("SHEDOS_DEFAULTS_ROOT", "/usr/share/shedos"))
+
+NEW_SUFFIX = ".shedosnew"
+BAK_SUFFIX = ".shedosbak"
+TMP_SUFFIX = ".shedosmerge.tmp"
+DRAFT_SUFFIX = ".draft.json"
+DRAFT_SCHEMA = 1
+
+EXCLUDED_RES = (
+    re.compile(r"^\.config/nvim/lazy-lock\.json$"),
+    re.compile(r"^\.config/nvim/lazyvim\.json$"),
+    re.compile(r"^\.local/state/"),
+    re.compile(r"^\.cache/"),
+)
+
+MIN_COLS, MIN_ROWS = 70, 24
+NARROW_BASE_COLS = 100
+VERY_NARROW_COLS = 70
+BINARY_SNIFF_BYTES = 8192
+LARGE_FILE_BYTES = 1 * 1024 * 1024
+LARGE_FILE_LINES = 20_000
+UNDO_DEPTH = 32
+LONG_LINE_HL_CUTOFF = 2000
+
+
+# ---------------------------------------------------------------------------
+# Data types
+# ---------------------------------------------------------------------------
+
+
+class Side(str, enum.Enum):
+    YOURS = "Y"
+    THEIRS = "T"
+    BOTH_YT = "BYT"
+    BOTH_TY = "BTY"
+    SKIP = "X"
+
+
+@dataclass
+class Hunk:
+    index: int
+    base_start: int
+    base_end: int
+    yours_start: int
+    yours_end: int
+    theirs_start: int
+    theirs_end: int
+    yours_lines: list[str] = field(default_factory=list)
+    theirs_lines: list[str] = field(default_factory=list)
+    base_lines: list[str] = field(default_factory=list)
+    kind: str = "both-changed"
+    decision: Optional[Side] = None
+
+
+@dataclass
+class Conflict:
+    relpath: str
+    pkg: str
+    yours_path: Path
+    theirs_path: Path
+    src_path: Optional[Path]
+    base_path: Optional[Path]
+    kind: str        # "text" | "binary" | "orphan" | "symlink" | "missing-yours"
+    has_base: bool
+    size: int
+    hunk_count: int = -1
+
+
+@dataclass
+class MergeState:
+    relpath: str
+    pkg: str
+    yours_path: Path
+    theirs_path: Path
+    src_path: Optional[Path]
+    base_path: Optional[Path]
+    base_content: Optional[list[str]]
+    yours_lines: list[str]
+    theirs_lines: list[str]
+    hunks: list[Hunk]
+    encoding: str = "utf-8"
+    newline: str = "\n"
+    trailing_newline: bool = True
+    yours_mode: int = 0o644
+    yours_sha_at_load: str = ""
+    theirs_sha_at_load: str = ""
+    base_sha_at_load: str = ""
+    src_sha_at_load: str = ""
+    undo_stack: list[tuple[int, Optional[Side]]] = field(default_factory=list)
+
+    @property
+    def is_2way(self) -> bool:
+        return self.base_content is None
+
+    def unresolved_count(self) -> int:
+        return sum(1 for h in self.hunks if h.decision is None)
+
+
+class UnresolvedHunk(Exception):
+    def __init__(self, hunk: Hunk) -> None:
+        super().__init__(f"hunk {hunk.index} unresolved")
+        self.hunk = hunk
+
+
+# ---------------------------------------------------------------------------
+# Low-level helpers
+# ---------------------------------------------------------------------------
+
+
+def _log(msg: str) -> None:
+    try:
+        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with LOG_PATH.open("a") as f:
+            f.write(f"{datetime.now(timezone.utc).isoformat()}  {msg}\n")
+    except OSError:
+        pass
+
+
+def sha256_file(path: Path) -> str:
+    try:
+        h = hashlib.sha256()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(1 << 16), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return ""
+
+
+def sniff_binary(path: Path, sniff_bytes: int = BINARY_SNIFF_BYTES) -> bool:
+    try:
+        with path.open("rb") as f:
+            chunk = f.read(sniff_bytes)
+        return b"\x00" in chunk
+    except OSError:
+        return False
+
+
+def read_lines_any(path: Path) -> tuple[list[str], str, str, bool]:
+    """Read a text file, returning (lines, encoding, newline, trailing_newline).
+
+    Tries utf-8 then falls back to latin-1 (which never errors). Preserves
+    whichever newline sequence is dominant in the file.
+    """
+    raw = path.read_bytes()
+    encoding = "utf-8"
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        encoding = "latin-1"
+        text = raw.decode("latin-1")
+    # Detect newline: majority rule with LF as default.
+    crlf = text.count("\r\n")
+    lf = text.count("\n") - crlf
+    newline = "\r\n" if crlf > lf else "\n"
+    trailing_newline = text.endswith("\n") or text.endswith("\r\n")
+    lines = text.splitlines()
+    return lines, encoding, newline, trailing_newline
+
+
+def write_lines_preserving(path: Path, lines: list[str], encoding: str,
+                           newline: str, trailing_newline: bool, mode: int) -> None:
+    body = newline.join(lines)
+    if trailing_newline and not body.endswith(newline):
+        body += newline
+    data = body.encode(encoding, errors="replace")
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    try:
+        os.write(fd, data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def atomic_rename(src: Path, dst: Path) -> None:
+    os.rename(str(src), str(dst))
+    try:
+        fd = os.open(str(dst.parent), os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+def is_excluded(relpath: str) -> bool:
+    return any(r.search(relpath) for r in EXCLUDED_RES)
+
+
+def safe_relpath(relpath: str) -> str:
+    # relpaths under $HOME are benign in practice; we mirror them verbatim.
+    # Guard only against absolute paths and ".." segments.
+    if relpath.startswith("/") or ".." in Path(relpath).parts:
+        raise ValueError(f"unsafe relpath: {relpath!r}")
+    return relpath
+
+
+def manifest_path_for(relpath: str) -> Path:
+    return MANIFEST_ROOT / f"{relpath}.sha256"
+
+
+def base_content_path_for(relpath: str) -> Path:
+    return CONTENT_ROOT / relpath
+
+
+def draft_path_for(relpath: str) -> Path:
+    return DRAFT_ROOT / f"{relpath}{DRAFT_SUFFIX}"
+
+
+# ---------------------------------------------------------------------------
+# Scan — discover .shedosnew conflicts under $HOME and classify each.
+# ---------------------------------------------------------------------------
+
+
+def find_pkg_and_src(relpath: str) -> tuple[Optional[str], Optional[Path]]:
+    """Locate which shedos-* package owns this relpath.
+
+    Returns (pkg_name, src_path) or (None, None) if no package ships a default
+    at this relpath (orphan case).
+    """
+    if not DEFAULTS_ROOT.is_dir():
+        return None, None
+    for pkg_dir in sorted(DEFAULTS_ROOT.iterdir()):
+        if not pkg_dir.is_dir():
+            continue
+        candidate = pkg_dir / "defaults" / relpath
+        if candidate.is_file():
+            return pkg_dir.name, candidate
+    return None, None
+
+
+def scan_conflicts() -> list[Conflict]:
+    """Walk $HOME for *.shedosnew files and classify each conflict."""
+    conflicts: list[Conflict] = []
+    if not HOME.is_dir():
+        return conflicts
+    for dirpath, dirnames, filenames in os.walk(HOME, followlinks=False):
+        # Prune excluded trees early for speed.
+        rel_dir = os.path.relpath(dirpath, HOME)
+        if rel_dir != "." and is_excluded(rel_dir.replace(os.sep, "/") + "/"):
+            dirnames[:] = []
+            continue
+        for name in filenames:
+            if not name.endswith(NEW_SUFFIX):
+                continue
+            theirs = Path(dirpath) / name
+            yours = theirs.with_name(name[: -len(NEW_SUFFIX)])
+            rel = os.path.relpath(yours, HOME).replace(os.sep, "/")
+            if is_excluded(rel):
+                continue
+            conflicts.append(_classify(rel, yours, theirs))
+    conflicts.sort(key=lambda c: c.relpath)
+    return conflicts
+
+
+def _classify(relpath: str, yours: Path, theirs: Path) -> Conflict:
+    pkg, src = find_pkg_and_src(relpath)
+    base = base_content_path_for(relpath)
+    has_base = base.is_file()
+    size = 0
+    try:
+        size = theirs.stat().st_size
+    except OSError:
+        pass
+
+    # symlink? Check YOURS first since we'd be writing to it.
+    if yours.exists() and yours.is_symlink():
+        kind = "symlink"
+    elif not yours.exists():
+        kind = "missing-yours"
+    elif pkg is None or src is None:
+        kind = "orphan"
+    elif sniff_binary(theirs) or (yours.is_file() and sniff_binary(yours)):
+        kind = "binary"
+    else:
+        kind = "text"
+
+    return Conflict(
+        relpath=relpath,
+        pkg=pkg or "unknown",
+        yours_path=yours,
+        theirs_path=theirs,
+        src_path=src,
+        base_path=base if has_base else None,
+        kind=kind,
+        has_base=has_base,
+        size=size,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Auto-resolve at scan: identical content (byte-for-byte) should just delete
+# .shedosnew and bump the manifest — never surfaced to the user.
+# ---------------------------------------------------------------------------
+
+
+def auto_resolve_identical(conflicts: list[Conflict]) -> tuple[list[Conflict], int]:
+    """Return (remaining, auto_resolved_count)."""
+    remaining: list[Conflict] = []
+    auto_n = 0
+    for c in conflicts:
+        if c.kind != "text" or c.src_path is None:
+            remaining.append(c)
+            continue
+        try:
+            if sha256_file(c.yours_path) == sha256_file(c.theirs_path):
+                # Identical: delete .shedosnew, update manifest to current src.
+                c.theirs_path.unlink()
+                _update_manifest(c.relpath, c.src_path)
+                auto_n += 1
+                continue
+        except OSError:
+            pass
+        remaining.append(c)
+    return remaining, auto_n
+
+
+def _update_manifest(relpath: str, src_path: Path) -> None:
+    sha = sha256_file(src_path)
+    if not sha:
+        return
+    mp = manifest_path_for(relpath)
+    mp.parent.mkdir(parents=True, exist_ok=True)
+    mp.write_text(sha)
+    try:
+        mp.chmod(0o600)
+    except OSError:
+        pass
+    bp = base_content_path_for(relpath)
+    bp.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src_path, bp)
+    try:
+        bp.chmod(0o600)
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Hunk extraction (3-way + 2-way)
+# ---------------------------------------------------------------------------
+
+
+def extract_hunks_3way(base: list[str], yours: list[str],
+                       theirs: list[str]) -> list[Hunk]:
+    """diff3-style hunk extraction.
+
+    Walk base positions once, using SequenceMatcher opcodes (base↔yours)
+    and (base↔theirs) in lockstep. Emit a hunk for every base range that
+    YOURS or THEIRS touched. Context ranges (neither changed) are dropped.
+    """
+    ops_y = SequenceMatcher(a=base, b=yours, autojunk=False).get_opcodes()
+    ops_t = SequenceMatcher(a=base, b=theirs, autojunk=False).get_opcodes()
+
+    # Build per-base-line annotations: for each base index, the corresponding
+    # yours / theirs ranges if "equal", or None if modified.
+    # Then coalesce runs.
+    # Materialise an event list: (base_idx, 'y'|'t', 'equal'|'change', (other_lo, other_hi))
+    # Simpler: build two arrays y_map and t_map each of length len(base)+1
+    #   y_map[i] = 'equal' -> yours idx, else None meaning modified
+    # and also track the changed regions explicitly as list of (base_lo, base_hi, yours_lo, yours_hi).
+
+    y_changes = _change_regions(ops_y)
+    t_changes = _change_regions(ops_t)
+
+    # Merge change regions by base range. Any overlap in base range means a
+    # "both-changed" hunk; non-overlapping produce their own hunks.
+    merged = _merge_change_regions(y_changes, t_changes, len(base), len(yours), len(theirs))
+
+    hunks: list[Hunk] = []
+    for idx, region in enumerate(merged):
+        bs, be, ys, ye, ts, te, kind = region
+        h = Hunk(
+            index=idx,
+            base_start=bs, base_end=be,
+            yours_start=ys, yours_end=ye,
+            theirs_start=ts, theirs_end=te,
+            yours_lines=yours[ys:ye],
+            theirs_lines=theirs[ts:te],
+            base_lines=base[bs:be],
+            kind=kind,
+        )
+        # Pre-mark sensible defaults.
+        if kind == "yours-only":
+            h.decision = Side.YOURS
+        elif kind == "theirs-only":
+            h.decision = Side.THEIRS
+        hunks.append(h)
+    return hunks
+
+
+def _change_regions(opcodes) -> list[tuple[int, int, int, int]]:
+    """Return non-equal opcode regions as (a_lo, a_hi, b_lo, b_hi)."""
+    out = []
+    for tag, a_lo, a_hi, b_lo, b_hi in opcodes:
+        if tag != "equal":
+            out.append((a_lo, a_hi, b_lo, b_hi))
+    return out
+
+
+def _merge_change_regions(y_changes, t_changes, n_base, n_yours, n_theirs):
+    """Merge YOURS and THEIRS change regions over BASE into unified hunks.
+
+    Returns a list of (base_start, base_end, yours_start, yours_end,
+                       theirs_start, theirs_end, kind).
+    kind ∈ {'yours-only', 'theirs-only', 'both-changed'}.
+    """
+    # Sort and walk; coalesce overlapping or touching regions.
+    y_idx = 0
+    t_idx = 0
+    merged = []
+    while y_idx < len(y_changes) or t_idx < len(t_changes):
+        y = y_changes[y_idx] if y_idx < len(y_changes) else None
+        t = t_changes[t_idx] if t_idx < len(t_changes) else None
+        if y is None:
+            merged.append(("t", t)); t_idx += 1; continue
+        if t is None:
+            merged.append(("y", y)); y_idx += 1; continue
+        if y[1] <= t[0]:
+            merged.append(("y", y)); y_idx += 1
+        elif t[1] <= y[0]:
+            merged.append(("t", t)); t_idx += 1
+        else:
+            # Overlap — coalesce into a both-changed block. Extend as needed
+            # by sweeping forward until the combined base range no longer
+            # overlaps the next region from either side.
+            bs = min(y[0], t[0])
+            be = max(y[1], t[1])
+            ys_lo, ys_hi = y[2], y[3]
+            ts_lo, ts_hi = t[2], t[3]
+            y_idx += 1; t_idx += 1
+            changed = True
+            while changed:
+                changed = False
+                if y_idx < len(y_changes) and y_changes[y_idx][0] < be:
+                    yy = y_changes[y_idx]
+                    be = max(be, yy[1])
+                    ys_hi = max(ys_hi, yy[3]); ys_lo = min(ys_lo, yy[2])
+                    y_idx += 1; changed = True
+                if t_idx < len(t_changes) and t_changes[t_idx][0] < be:
+                    tt = t_changes[t_idx]
+                    be = max(be, tt[1])
+                    ts_hi = max(ts_hi, tt[3]); ts_lo = min(ts_lo, tt[2])
+                    t_idx += 1; changed = True
+            merged.append(("both", (bs, be, ys_lo, ys_hi, ts_lo, ts_hi)))
+
+    # Now convert tagged entries to canonical tuples with full (ys, ye, ts, te).
+    # For "yours-only" entries we must compute the THEIRS projection of the
+    # base range (which is "equal" in THEIRS, so theirs_start/end track base
+    # positions offset by any earlier edits). Similarly for "theirs-only".
+    # We compute this by doing a cumulative-offset pass over the opcodes.
+    # Simpler approach: re-run SequenceMatcher to get offsets, but for our
+    # purposes the "equal" projection can be derived from opcodes directly.
+
+    out = []
+    for tag, reg in merged:
+        if tag == "y":
+            a_lo, a_hi, b_lo, b_hi = reg
+            # THEIRS is unchanged across this base range — project base→theirs
+            # by identity offset from the t_changes we've already walked. Do
+            # this with a helper.
+            ts_lo = _project_base_to_side(a_lo, t_changes, n_base, n_theirs)
+            ts_hi = _project_base_to_side(a_hi, t_changes, n_base, n_theirs)
+            out.append((a_lo, a_hi, b_lo, b_hi, ts_lo, ts_hi, "yours-only"))
+        elif tag == "t":
+            a_lo, a_hi, b_lo, b_hi = reg
+            ys_lo = _project_base_to_side(a_lo, y_changes, n_base, n_yours)
+            ys_hi = _project_base_to_side(a_hi, y_changes, n_base, n_yours)
+            out.append((a_lo, a_hi, ys_lo, ys_hi, b_lo, b_hi, "theirs-only"))
+        else:
+            bs, be, ys_lo, ys_hi, ts_lo, ts_hi = reg
+            out.append((bs, be, ys_lo, ys_hi, ts_lo, ts_hi, "both-changed"))
+    return out
+
+
+def _project_base_to_side(base_pos: int, side_changes, n_base: int, n_side: int) -> int:
+    """Given a base index, compute the corresponding SIDE index.
+
+    side_changes are the non-equal regions in (base, side). Anywhere outside
+    those regions is an 'equal' stretch whose offset is the running delta of
+    (side_hi - base_hi) through the preceding regions.
+    """
+    offset = 0
+    for a_lo, a_hi, b_lo, b_hi in side_changes:
+        if base_pos <= a_lo:
+            break
+        if base_pos >= a_hi:
+            offset += (b_hi - b_lo) - (a_hi - a_lo)
+        else:
+            # base_pos falls inside a changed region — snap to b_lo.
+            return b_lo
+    return base_pos + offset
+
+
+def extract_hunks_2way(yours: list[str], theirs: list[str]) -> list[Hunk]:
+    ops = SequenceMatcher(a=yours, b=theirs, autojunk=False).get_opcodes()
+    hunks: list[Hunk] = []
+    idx = 0
+    for tag, y_lo, y_hi, t_lo, t_hi in ops:
+        if tag == "equal":
+            continue
+        hunks.append(Hunk(
+            index=idx,
+            base_start=-1, base_end=-1,
+            yours_start=y_lo, yours_end=y_hi,
+            theirs_start=t_lo, theirs_end=t_hi,
+            yours_lines=yours[y_lo:y_hi],
+            theirs_lines=theirs[t_lo:t_hi],
+            base_lines=[],
+            kind="both-changed",
+            decision=None,
+        ))
+        idx += 1
+    return hunks
+
+
+# ---------------------------------------------------------------------------
+# Assembly
+# ---------------------------------------------------------------------------
+
+
+def assemble(state: MergeState) -> list[str]:
+    if state.base_content is None:
+        return _assemble_2way(state)
+    return _assemble_3way(state)
+
+
+def _apply_decision(out: list[str], h: Hunk) -> None:
+    dec = h.decision
+    if dec == Side.YOURS:
+        out.extend(h.yours_lines)
+    elif dec == Side.THEIRS:
+        out.extend(h.theirs_lines)
+    elif dec == Side.BOTH_YT:
+        out.extend(h.yours_lines); out.extend(h.theirs_lines)
+    elif dec == Side.BOTH_TY:
+        out.extend(h.theirs_lines); out.extend(h.yours_lines)
+    elif dec == Side.SKIP:
+        out.extend(h.yours_lines)
+    else:
+        raise UnresolvedHunk(h)
+
+
+def _assemble_3way(state: MergeState) -> list[str]:
+    assert state.base_content is not None
+    out: list[str] = []
+    cursor = 0
+    for h in state.hunks:
+        out.extend(state.base_content[cursor:h.base_start])
+        _apply_decision(out, h)
+        cursor = h.base_end
+    out.extend(state.base_content[cursor:])
+    return out
+
+
+def _assemble_2way(state: MergeState) -> list[str]:
+    # Walk YOURS; hunks appear in yours-space order from extract_hunks_2way.
+    out: list[str] = []
+    cursor = 0
+    for h in state.hunks:
+        out.extend(state.yours_lines[cursor:h.yours_start])
+        _apply_decision(out, h)
+        cursor = h.yours_end
+    out.extend(state.yours_lines[cursor:])
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Load a merge state for one conflict.
+# ---------------------------------------------------------------------------
+
+
+def load_merge_state(c: Conflict, force_2way: bool = False) -> MergeState:
+    yours_lines, encoding, newline, trailing_newline = read_lines_any(c.yours_path)
+    theirs_lines, t_enc, t_nl, t_tn = read_lines_any(c.theirs_path)
+    # Encoding disagreement is rare; prefer YOURS.
+    base_content: Optional[list[str]] = None
+    base_sha = ""
+    if not force_2way and c.base_path is not None and c.base_path.is_file():
+        try:
+            bl, _, _, _ = read_lines_any(c.base_path)
+            base_content = bl
+            base_sha = sha256_file(c.base_path)
+        except OSError as e:
+            _log(f"base unreadable for {c.relpath}: {e}")
+
+    if base_content is not None:
+        hunks = extract_hunks_3way(base_content, yours_lines, theirs_lines)
+    else:
+        hunks = extract_hunks_2way(yours_lines, theirs_lines)
+
+    yours_mode = 0o644
+    try:
+        yours_mode = _stat.S_IMODE(c.yours_path.lstat().st_mode)
+    except OSError:
+        pass
+
+    return MergeState(
+        relpath=c.relpath,
+        pkg=c.pkg,
+        yours_path=c.yours_path,
+        theirs_path=c.theirs_path,
+        src_path=c.src_path,
+        base_path=c.base_path,
+        base_content=base_content,
+        yours_lines=yours_lines,
+        theirs_lines=theirs_lines,
+        hunks=hunks,
+        encoding=encoding,
+        newline=newline,
+        trailing_newline=trailing_newline,
+        yours_mode=yours_mode,
+        yours_sha_at_load=sha256_file(c.yours_path),
+        theirs_sha_at_load=sha256_file(c.theirs_path),
+        base_sha_at_load=base_sha,
+        src_sha_at_load=sha256_file(c.src_path) if c.src_path else "",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Atomic write-back
+# ---------------------------------------------------------------------------
+
+
+class ConcurrentModification(Exception):
+    def __init__(self, which: str) -> None:
+        super().__init__(f"{which} changed on disk since load")
+        self.which = which
+
+
+def save_merged(state: MergeState, force: bool = False) -> None:
+    # 1. Re-hash YOURS and THEIRS.
+    if not force:
+        cur_yours = sha256_file(state.yours_path)
+        if cur_yours and cur_yours != state.yours_sha_at_load:
+            raise ConcurrentModification("YOURS")
+        cur_theirs = sha256_file(state.theirs_path)
+        if cur_theirs and cur_theirs != state.theirs_sha_at_load:
+            raise ConcurrentModification("THEIRS")
+
+    # 2. Assemble (raises UnresolvedHunk if any decision is None).
+    out_lines = assemble(state)
+
+    # 3. Determine target mode.
+    mode = state.yours_mode or 0o644
+
+    # 4. Write to tmp with O_EXCL.
+    tmp = state.yours_path.with_name(state.yours_path.name + TMP_SUFFIX + f".{os.getpid()}")
+    if tmp.exists():
+        tmp.unlink()
+    write_lines_preserving(tmp, out_lines, state.encoding, state.newline,
+                           state.trailing_newline, mode)
+
+    # 5. Copy YOURS → .shedosbak (rolling).
+    bak = state.yours_path.with_name(state.yours_path.name + BAK_SUFFIX)
+    try:
+        shutil.copy2(state.yours_path, bak)
+    except OSError as e:
+        _log(f"backup failed for {state.relpath}: {e}")
+
+    # 6. Atomic rename tmp → YOURS.
+    atomic_rename(tmp, state.yours_path)
+
+    # 7. Remove .shedosnew.
+    try:
+        state.theirs_path.unlink()
+    except OSError:
+        pass
+
+    # 8. Update manifest (sha + content).
+    if state.src_path and state.src_path.is_file():
+        _update_manifest(state.relpath, state.src_path)
+
+    # 9. Clear draft.
+    delete_draft(state.relpath)
+
+
+def sweep_leftover_tmps() -> int:
+    """Remove stale <path>.shedosmerge.tmp.* artefacts from crashed runs."""
+    removed = 0
+    for dirpath, _, filenames in os.walk(HOME, followlinks=False):
+        for name in filenames:
+            if TMP_SUFFIX in name and ".shedosmerge.tmp." in name:
+                try:
+                    (Path(dirpath) / name).unlink()
+                    removed += 1
+                except OSError:
+                    pass
+    return removed
+
+
+# ---------------------------------------------------------------------------
+# Drafts
+# ---------------------------------------------------------------------------
+
+
+def save_draft(state: MergeState, current_hunk: int) -> None:
+    try:
+        safe_relpath(state.relpath)
+    except ValueError:
+        return
+    dp = draft_path_for(state.relpath)
+    dp.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "schema": DRAFT_SCHEMA,
+        "saved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "relpath": state.relpath,
+        "pkg": state.pkg,
+        "yours_sha_at_load": state.yours_sha_at_load,
+        "theirs_sha_at_load": state.theirs_sha_at_load,
+        "base_sha_at_load": state.base_sha_at_load,
+        "src_sha_at_load": state.src_sha_at_load,
+        "decisions": [
+            {"index": h.index, "decision": h.decision.value if h.decision else None}
+            for h in state.hunks
+        ],
+        "current_hunk": current_hunk,
+    }
+    tmp = dp.with_suffix(dp.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    os.rename(str(tmp), str(dp))
+
+
+def load_draft(relpath: str) -> Optional[dict]:
+    dp = draft_path_for(relpath)
+    if not dp.is_file():
+        return None
+    try:
+        data = json.loads(dp.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if data.get("schema") != DRAFT_SCHEMA:
+        return None
+    return data
+
+
+def delete_draft(relpath: str) -> None:
+    dp = draft_path_for(relpath)
+    try:
+        dp.unlink()
+    except OSError:
+        pass
+
+
+def apply_draft(state: MergeState, draft: dict) -> bool:
+    """Try to apply decisions from a draft. Returns True if applied."""
+    # Only apply if load-time SHAs still match — otherwise the world moved.
+    checks = [
+        ("yours_sha_at_load", state.yours_sha_at_load),
+        ("theirs_sha_at_load", state.theirs_sha_at_load),
+        ("base_sha_at_load", state.base_sha_at_load),
+        ("src_sha_at_load", state.src_sha_at_load),
+    ]
+    for key, cur in checks:
+        if draft.get(key, "") != cur:
+            return False
+    by_idx = {d["index"]: d["decision"] for d in draft.get("decisions", [])}
+    for h in state.hunks:
+        dec = by_idx.get(h.index)
+        if dec is None:
+            continue
+        try:
+            h.decision = Side(dec)
+        except ValueError:
+            pass
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Process lock
+# ---------------------------------------------------------------------------
+
+
+class LockAcquireError(Exception):
+    pass
+
+
+def acquire_lock() -> int:
+    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(LOCK_PATH), os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        raise LockAcquireError()
+    os.write(fd, f"{os.getpid()}\n".encode())
+    return fd
+
+
+def release_lock(fd: int) -> None:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    os.close(fd)
+
+
+# ---------------------------------------------------------------------------
+# CLI entry + dispatch
+# ---------------------------------------------------------------------------
+
+
+def _human_size(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / (1024 * 1024):.2f} MB"
+
+
+def cmd_list(conflicts: list[Conflict]) -> int:
+    print("# path\tkind\thunks\tsize\tbase")
+    text_n = bin_n = no_base_n = 0
+    for c in conflicts:
+        if c.kind == "binary":
+            bin_n += 1
+            hunks = "-"
+        elif c.kind == "text":
+            text_n += 1
+            hunks = str(c.hunk_count) if c.hunk_count >= 0 else "?"
+        else:
+            hunks = "-"
+        if not c.has_base and c.kind == "text":
+            no_base_n += 1
+        base = "yes" if c.has_base else ("-" if c.kind == "binary" else "no")
+        print(f"{c.relpath}\t{c.kind}\t{hunks}\t{c.size}\t{base}")
+    print(f"# summary: {len(conflicts)} conflicts ({text_n} text, {bin_n} binary, {no_base_n} no-base)")
+    return 0
+
+
+def populate_hunk_counts(conflicts: list[Conflict], force_2way: bool = False) -> None:
+    for c in conflicts:
+        if c.kind != "text":
+            continue
+        try:
+            state = load_merge_state(c, force_2way=force_2way)
+            c.hunk_count = len(state.hunks)
+        except OSError:
+            c.hunk_count = -1
+
+
+def cmd_dry_run(conflicts: list[Conflict], force_2way: bool = False) -> int:
+    for c in conflicts:
+        print(f"== {c.relpath} ({c.kind}, {'3-way' if c.has_base and not force_2way else '2-way'}) ==")
+        if c.kind != "text":
+            print(f"  (would open {c.kind}-file modal)")
+            continue
+        try:
+            state = load_merge_state(c, force_2way=force_2way)
+        except OSError as e:
+            print(f"  load failed: {e}")
+            continue
+        for h in state.hunks:
+            base_range = f"base {h.base_start}..{h.base_end}" if not state.is_2way else "(2-way)"
+            print(f"  hunk {h.index} [{h.kind}] {base_range} "
+                  f"yours {h.yours_start}..{h.yours_end} theirs {h.theirs_start}..{h.theirs_end} "
+                  f"default={h.decision.value if h.decision else '-'}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Textual app (lazy-imported)
+# ---------------------------------------------------------------------------
+
+
+def _run_textual(conflicts: list[Conflict], *, start_file: Optional[str] = None,
+                 walk_all: bool = False, force_2way: bool = False) -> int:
+    try:
+        from .review_configs_ui import run_app  # type: ignore
+    except Exception:
+        # Inline the Textual app below; import it from this same module.
+        # We resolve the runner via globals to keep everything in one file.
+        runner = globals().get("_run_app_inline")
+        if runner is None:
+            print("shedos-review-configs: Textual UI module unavailable. "
+                  "Install python-textual and python-rich, or run with --list "
+                  "and resolve conflicts manually.", file=sys.stderr)
+            return 1
+        return runner(conflicts, start_file=start_file, walk_all=walk_all,
+                      force_2way=force_2way)
+    return run_app(conflicts, start_file=start_file, walk_all=walk_all,
+                   force_2way=force_2way)
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    p = argparse.ArgumentParser(
+        prog="shedos-review-configs",
+        description="Resolve .shedosnew config conflicts with a merge TUI.",
+    )
+    p.add_argument("--list", action="store_true",
+                   help="Print a tab-separated list of conflicts and exit.")
+    p.add_argument("--all", action="store_true",
+                   help="Walk every conflict sequentially (skip the file list).")
+    p.add_argument("--file", metavar="PATH",
+                   help="Open merge screen for one file (relpath under $HOME).")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Load each conflict, print the computed merge plan, "
+                        "change nothing.")
+    p.add_argument("--no-color", action="store_true",
+                   help="Force plain output (same as NO_COLOR=1).")
+    p.add_argument("--2way-only", dest="two_way", action="store_true",
+                   help="Ignore BASE content on disk; always run 2-way.")
+    # Hidden test hook: read decisions from stdin instead of running the TUI.
+    p.add_argument("--stdin-decisions", action="store_true",
+                   help=argparse.SUPPRESS)
+    args = p.parse_args(argv)
+
+    if args.no_color:
+        os.environ["NO_COLOR"] = "1"
+
+    if os.geteuid() == 0:
+        print("shedos-review-configs: refusing to run as root "
+              "(this tool edits $HOME, which must remain user-owned).",
+              file=sys.stderr)
+        return 2
+
+    # Acquire the process lock for any mutating operation.
+    if not args.list and not args.dry_run:
+        try:
+            lock_fd = acquire_lock()
+        except LockAcquireError:
+            print(f"shedos-review-configs: another instance is running "
+                  f"(lock at {LOCK_PATH}).", file=sys.stderr)
+            return 1
+    else:
+        lock_fd = None
+
+    try:
+        swept = sweep_leftover_tmps()
+        if swept and not args.list:
+            print(f"Cleaned up {swept} stale .shedosmerge.tmp file(s) from a previous run.",
+                  file=sys.stderr)
+
+        conflicts = scan_conflicts()
+        conflicts, auto_n = auto_resolve_identical(conflicts)
+        if auto_n and not args.list:
+            print(f"Auto-resolved {auto_n} identical-content conflict(s).",
+                  file=sys.stderr)
+
+        if args.list:
+            populate_hunk_counts(conflicts, force_2way=args.two_way)
+            return cmd_list(conflicts)
+
+        if args.dry_run:
+            return cmd_dry_run(conflicts, force_2way=args.two_way)
+
+        if args.stdin_decisions:
+            return _run_stdin_decisions(conflicts, force_2way=args.two_way,
+                                        start_file=args.file)
+
+        if not conflicts:
+            print("Nothing to review. All configs are in sync.")
+            return 0
+
+        if args.file:
+            rel = args.file
+            if rel.startswith(str(HOME) + "/"):
+                rel = rel[len(str(HOME)) + 1:]
+            if rel.startswith("~/"):
+                rel = rel[2:]
+            conflicts = [c for c in conflicts if c.relpath == rel]
+            if not conflicts:
+                print(f"shedos-review-configs: no conflict found for {args.file!r}.",
+                      file=sys.stderr)
+                return 1
+
+        if not sys.stdin.isatty() or not sys.stdout.isatty():
+            print("shedos-review-configs: interactive TUI requires a terminal. "
+                  "Try --list for a scriptable summary.", file=sys.stderr)
+            return 2
+
+        populate_hunk_counts(conflicts, force_2way=args.two_way)
+        return _run_textual(conflicts, start_file=args.file, walk_all=args.all,
+                            force_2way=args.two_way)
+    finally:
+        if lock_fd is not None:
+            release_lock(lock_fd)
+
+
+def _run_stdin_decisions(conflicts: list[Conflict], *, force_2way: bool,
+                         start_file: Optional[str]) -> int:
+    """Test harness: read tokens from stdin, apply them, save.
+
+    Tokens (one per line): Y T BYT BTY X  → per-hunk decisions
+                           A T            → whole-file shortcuts
+                           s              → save current file
+                           n              → next file
+                           q              → quit
+    Unknown tokens are ignored.
+    """
+    if start_file:
+        conflicts = [c for c in conflicts if c.relpath == start_file]
+    if not conflicts:
+        print("no conflicts to process", file=sys.stderr)
+        return 0
+    tokens = iter(sys.stdin.read().split())
+    for c in conflicts:
+        if c.kind != "text":
+            continue
+        state = load_merge_state(c, force_2way=force_2way)
+        hunk_idx = 0
+        while True:
+            try:
+                tok = next(tokens)
+            except StopIteration:
+                break
+            if tok == "q":
+                return 0
+            if tok == "n":
+                break
+            if tok == "s":
+                try:
+                    save_merged(state)
+                    print(f"saved {c.relpath}")
+                except UnresolvedHunk as e:
+                    print(f"unresolved hunk {e.hunk.index} in {c.relpath}",
+                          file=sys.stderr)
+                    return 1
+                break
+            if tok == "A":
+                for h in state.hunks:
+                    h.decision = Side.YOURS
+                continue
+            if tok == "T":
+                # Ambiguous (THEIRS single-hunk vs take-all-THEIRS); in stdin
+                # harness we treat 'T' as per-hunk take-theirs and 'TT' as
+                # take-all-theirs to avoid the clash.
+                if hunk_idx < len(state.hunks):
+                    state.hunks[hunk_idx].decision = Side.THEIRS
+                    hunk_idx += 1
+                continue
+            if tok == "TT":
+                for h in state.hunks:
+                    h.decision = Side.THEIRS
+                continue
+            try:
+                side = Side(tok)
+            except ValueError:
+                continue
+            if hunk_idx < len(state.hunks):
+                state.hunks[hunk_idx].decision = side
+                hunk_idx += 1
+    return 0
+
+
+# Placeholder runner — overwritten later if Textual UI loads.
+def _run_app_inline(*args, **kwargs) -> int:  # noqa: ARG001
+    print("shedos-review-configs: Textual UI not available. "
+          "Install python-textual + python-rich.", file=sys.stderr)
+    return 1
+
+
+# ---------------------------------------------------------------------------
+# Textual UI — lazy-loaded so --list / --dry-run / --stdin-decisions don't
+# pay the import cost. Everything below this point requires python-textual
+# and python-rich.
+# ---------------------------------------------------------------------------
+
+
+def _load_textual_ui() -> None:
+    """Install the real _run_app_inline implementation."""
+    try:
+        from textual.app import App, ComposeResult
+        from textual.binding import Binding
+        from textual.containers import Horizontal, Vertical, VerticalScroll
+        from textual.screen import ModalScreen, Screen
+        from textual.widget import Widget
+        from textual.widgets import (
+            DataTable, Footer, Header, Label, Static,
+        )
+        from textual.reactive import reactive
+        from rich.syntax import Syntax
+        from rich.text import Text
+    except Exception as e:
+        _log(f"textual import failed: {e}")
+        return
+
+    # --- Theme (Catppuccin Mocha) -----------------------------------------
+    PALETTE = {
+        "base": "#1e1e2e", "mantle": "#181825", "surface0": "#313244",
+        "text": "#cdd6f4", "overlay0": "#6c7086",
+        "green": "#a6e3a1", "red": "#f38ba8", "yellow": "#f9e2af",
+        "blue": "#89b4fa", "mauve": "#cba6f7",
+    }
+
+    APP_CSS = """
+    Screen { background: #1e1e2e; color: #cdd6f4; }
+    Header { background: #181825; color: #89b4fa; }
+    Footer { background: #181825; color: #6c7086; }
+
+    #banner { dock: top; height: 1; background: #181825; color: #89b4fa; padding: 0 1; }
+    #banner.two-way { background: #f9e2af; color: #1e1e2e; }
+
+    #hunk-strip { dock: bottom; height: 1; background: #181825; color: #cdd6f4; padding: 0 1; }
+    #hint-bar  { dock: bottom; height: 1; background: #181825; color: #6c7086; padding: 0 1; }
+
+    .pane { border: round #313244; padding: 0 1; }
+    .pane.focus { border: round #89b4fa; }
+    .pane-title { background: #313244; color: #89b4fa; padding: 0 1; }
+
+    .add { color: #a6e3a1; }
+    .del { color: #f38ba8; }
+    .ctx { color: #cdd6f4; }
+    .ctx-dim { color: #6c7086; }
+    .cursor-line { background: #313244; }
+    .decided-yours { color: #a6e3a1; }
+    .decided-theirs { color: #f38ba8; }
+    .decided-both { color: #cba6f7; }
+
+    DataTable { background: #1e1e2e; }
+    DataTable > .datatable--header { background: #181825; color: #89b4fa; }
+    DataTable > .datatable--cursor { background: #313244; color: #cdd6f4; }
+
+    ModalScreen { align: center middle; }
+    .dialog { border: thick #89b4fa; background: #181825; width: 60; height: auto;
+              padding: 1 2; }
+    .dialog-title { color: #89b4fa; text-style: bold; }
+    .dialog-hint { color: #6c7086; }
+    """
+
+    class Banner(Static):
+        def __init__(self, text: str = "") -> None:
+            super().__init__(text, id="banner")
+
+        def set_mode(self, two_way: bool) -> None:
+            self.set_class(two_way, "two-way")
+
+    class HunkStrip(Static):
+        def __init__(self) -> None:
+            super().__init__("", id="hunk-strip")
+
+        def update_from(self, state: MergeState, current: int) -> None:
+            chars = []
+            for i, h in enumerate(state.hunks):
+                if i == current:
+                    chars.append("[b]◉[/b]")
+                elif h.decision is None:
+                    chars.append("○")
+                elif h.decision in (Side.BOTH_YT, Side.BOTH_TY):
+                    chars.append("[#cba6f7]●[/]")
+                elif h.decision == Side.YOURS:
+                    chars.append("[#a6e3a1]●[/]")
+                elif h.decision == Side.THEIRS:
+                    chars.append("[#f38ba8]●[/]")
+                else:
+                    chars.append("[#6c7086]●[/]")
+            legend = "  (● resolved  ◉ current  ○ pending)"
+            self.update(" ".join(chars) + legend)
+
+    # Side-by-side diff renderer. We build line-by-line rows manually to keep
+    # green/red semantics faithful to git.
+    def render_pane(lines: list[str], diff_lines: set[int], kind: str,
+                    cursor_line: Optional[int], width: int) -> Text:
+        out = Text()
+        for i, raw in enumerate(lines):
+            gutter = f"{i+1:>4} "
+            if kind == "add":
+                style = "on #1e1e2e"
+                line_style = PALETTE["green"]
+                marker = "+"
+            elif kind == "del":
+                style = "on #1e1e2e"
+                line_style = PALETTE["red"]
+                marker = "-"
+            else:
+                style = "on #1e1e2e"
+                line_style = PALETTE["text"]
+                marker = " "
+            prefix = f"{gutter}{marker} "
+            body = raw
+            if len(body) > LONG_LINE_HL_CUTOFF:
+                body = body[:LONG_LINE_HL_CUTOFF] + "…"
+            if cursor_line == i:
+                out.append(prefix, style=f"bold {line_style}")
+                out.append(body + "\n", style=f"bold on {PALETTE['surface0']} {line_style}")
+            else:
+                out.append(prefix, style=line_style)
+                out.append(body + "\n", style=line_style)
+        return out
+
+    class DiffPane(Static):
+        """One side of the merge view: YOURS, BASE, or THEIRS."""
+
+        def __init__(self, title: str, *, kind: str) -> None:
+            super().__init__(id=f"pane-{kind.lower()}")
+            self._title = title
+            self._kind = kind
+            self.add_class("pane")
+            self.add_class(f"pane-{kind.lower()}")
+            self._content = Text("(loading)")
+
+        def update_content(self, text: Text) -> None:
+            self._content = text
+            self.update(text)
+
+    class HelpScreen(ModalScreen):
+        BINDINGS = [Binding("escape,?,q", "app.pop_screen", "close")]
+
+        HELP = """[b]shedos-review-configs[/b]   keybindings
+
+FILE LIST
+  j ↓    next   |   k ↑      prev
+  g G    top/bottom
+  /      filter by regex
+  enter  open merge screen
+  a      accept-THEIRS for all files (confirm)
+  K      keep-YOURS    for all files (confirm)
+  r      refresh       |   q   quit
+
+MERGE SCREEN
+  n j ↓   next hunk    |   p k ↑  prev hunk
+  y       take YOURS   |   t       take THEIRS
+  b       take BOTH (Y→T)  |  B    take BOTH (T→Y)
+  x       skip (keeps YOURS at save)
+  u       undo last per-hunk decision
+  A       take-all YOURS  |  T     take-all THEIRS
+  h ←     pan left     |   l →    pan right
+  z       toggle wrap
+  s       save (atomic write, leaves .shedosbak)
+  d       raw unified diff in pager
+  e       open YOURS in $EDITOR
+  E       open merged-so-far in $EDITOR
+  q       cancel & save draft"""
+
+        def compose(self) -> ComposeResult:
+            yield Static(Text.from_markup(self.HELP), classes="dialog")
+
+    class ConfirmScreen(ModalScreen):
+        def __init__(self, title: str, body: str, default_yes: bool = False) -> None:
+            super().__init__()
+            self._title = title
+            self._body = body
+            self._default_yes = default_yes
+            self._answer: Optional[bool] = None
+
+        BINDINGS = [
+            Binding("y,Y", "answer_yes", "yes"),
+            Binding("n,N,escape", "answer_no", "no"),
+            Binding("enter", "answer_default", "default"),
+        ]
+
+        def compose(self) -> ComposeResult:
+            markup = (f"[b #89b4fa]{self._title}[/]\n\n{self._body}\n\n"
+                      f"[#6c7086]({'Y/n' if self._default_yes else 'y/N'})[/]")
+            yield Static(Text.from_markup(markup), classes="dialog")
+
+        def action_answer_yes(self) -> None: self.dismiss(True)
+        def action_answer_no(self) -> None: self.dismiss(False)
+        def action_answer_default(self) -> None: self.dismiss(self._default_yes)
+
+    # ---------- File list screen ----------
+    class FileListScreen(Screen):
+        BINDINGS = [
+            Binding("q", "quit", "quit"),
+            Binding("enter,l,right", "open", "open"),
+            Binding("a", "accept_all_theirs", "accept-theirs-all"),
+            Binding("K", "keep_all_yours", "keep-yours-all"),
+            Binding("r", "refresh", "refresh"),
+            Binding("question_mark,f1", "help", "help"),
+            Binding("slash", "filter", "filter"),
+        ]
+
+        def __init__(self, app_ref: "ReviewApp") -> None:
+            super().__init__()
+            self._app_ref = app_ref
+
+        def compose(self) -> ComposeResult:
+            yield Banner("shedos-review-configs")
+            self.table = DataTable(cursor_type="row", zebra_stripes=False)
+            self.table.add_columns("#", "path", "kind", "hunks", "size", "base")
+            yield self.table
+            yield Static("j/k move · enter open · a take-theirs-all · K keep-yours-all · / filter · ? help · q quit",
+                         id="hint-bar")
+
+        def on_mount(self) -> None:
+            self.refresh_table()
+
+        def refresh_table(self) -> None:
+            self.table.clear()
+            for i, c in enumerate(self._app_ref.conflicts, 1):
+                kind = c.kind
+                hunks = "-"
+                if c.kind == "text":
+                    hunks = str(c.hunk_count) if c.hunk_count >= 0 else "?"
+                base = ("yes" if c.has_base else ("-" if c.kind != "text" else "[#f9e2af]no[/]"))
+                self.table.add_row(str(i), c.relpath, kind, hunks,
+                                   _human_size(c.size), base)
+            banner = self.query_one("#banner", Banner)
+            n = len(self._app_ref.conflicts)
+            bin_n = sum(1 for c in self._app_ref.conflicts if c.kind == "binary")
+            banner.update(f"shedos-review-configs  —  {n} conflict(s) "
+                          f"({bin_n} binary)   ? help   q quit")
+
+        def action_quit(self) -> None:
+            self.app.exit()
+
+        def action_open(self) -> None:
+            if self.table.row_count == 0:
+                return
+            idx = self.table.cursor_row
+            if idx is None or idx < 0 or idx >= len(self._app_ref.conflicts):
+                return
+            c = self._app_ref.conflicts[idx]
+            self._app_ref.open_conflict(c)
+
+        def action_help(self) -> None:
+            self.app.push_screen(HelpScreen())
+
+        def action_accept_all_theirs(self) -> None:
+            def after(ans: Optional[bool]) -> None:
+                if ans:
+                    self._app_ref.bulk_accept_theirs()
+                    self.refresh_table()
+            self.app.push_screen(
+                ConfirmScreen("Accept THEIRS for all files",
+                              "Replace every live file with its upstream version.\n"
+                              "A .shedosbak is written for each."),
+                after,
+            )
+
+        def action_keep_all_yours(self) -> None:
+            def after(ans: Optional[bool]) -> None:
+                if ans:
+                    self._app_ref.bulk_keep_yours()
+                    self.refresh_table()
+            self.app.push_screen(
+                ConfirmScreen("Keep YOURS for all files",
+                              "Delete every .shedosnew and leave your live copies as-is."),
+                after,
+            )
+
+        def action_refresh(self) -> None:
+            self._app_ref.rescan()
+            self.refresh_table()
+
+        def action_filter(self) -> None:
+            # Filtering shortcut: re-uses scan + client-side filter. v1: stub.
+            self.app.bell()
+
+    # ---------- Merge screen ----------
+    class MergeScreen(Screen):
+        BINDINGS = [
+            Binding("n,j,down", "next_hunk", "next"),
+            Binding("p,k,up", "prev_hunk", "prev"),
+            Binding("y", "take_yours", "take YOURS"),
+            Binding("t", "take_theirs", "take THEIRS"),
+            Binding("b", "take_both_yt", "take BOTH Y→T"),
+            Binding("B", "take_both_ty", "take BOTH T→Y"),
+            Binding("x", "skip_hunk", "skip"),
+            Binding("u", "undo", "undo"),
+            Binding("shift+a", "all_yours", "take-all YOURS"),
+            Binding("shift+t", "all_theirs", "take-all THEIRS"),
+            Binding("s", "save", "save"),
+            Binding("d", "raw_diff", "raw diff"),
+            Binding("e", "edit_yours", "$EDITOR yours"),
+            Binding("shift+e", "edit_merged", "$EDITOR merged"),
+            Binding("q", "cancel", "cancel"),
+            Binding("question_mark,f1", "help", "help"),
+        ]
+
+        def __init__(self, app_ref: "ReviewApp", state: MergeState) -> None:
+            super().__init__()
+            self._app_ref = app_ref
+            self.state = state
+            self.current = 0
+
+        def compose(self) -> ComposeResult:
+            yield Banner("")
+            if self.state.is_2way:
+                self.pane_yours = DiffPane("YOURS (live)", kind="YOURS")
+                self.pane_theirs = DiffPane("THEIRS (upstream)", kind="THEIRS")
+                self.pane_base = None
+                yield Horizontal(self.pane_yours, self.pane_theirs)
+            else:
+                self.pane_yours = DiffPane("YOURS (live)", kind="YOURS")
+                self.pane_base = DiffPane("BASE (last seen)", kind="BASE")
+                self.pane_theirs = DiffPane("THEIRS (upstream)", kind="THEIRS")
+                yield Horizontal(self.pane_yours, self.pane_base, self.pane_theirs)
+            self.strip = HunkStrip()
+            yield self.strip
+            yield Static("y/t/b/B/x  u undo  A/T all  s save  e edit  d raw-diff  q cancel  ? help",
+                         id="hint-bar")
+
+        def on_mount(self) -> None:
+            banner = self.query_one("#banner", Banner)
+            mode = "2-way (base unavailable)" if self.state.is_2way else "3-way"
+            banner.set_mode(self.state.is_2way)
+            banner.update(f"{self.state.relpath}   {mode}   "
+                          f"hunk {self.current+1}/{len(self.state.hunks)}   "
+                          f"pkg={self.state.pkg}   ? help   s save")
+            self._render_all()
+
+        def _render_all(self) -> None:
+            # Render all three panes with per-line add/del/ctx styling keyed off
+            # the current hunk. Outside the current hunk range, lines are ctx-dim.
+            self._render_pane_yours()
+            self._render_pane_theirs()
+            if self.pane_base is not None:
+                self._render_pane_base()
+            self.strip.update_from(self.state, self.current)
+            banner = self.query_one("#banner", Banner)
+            banner.update(f"{self.state.relpath}   "
+                          f"{'2-way' if self.state.is_2way else '3-way'}   "
+                          f"hunk {self.current+1}/{len(self.state.hunks)}   "
+                          f"pkg={self.state.pkg}   ? help   s save")
+
+        def _render_pane_yours(self) -> None:
+            txt = self._pane_text(self.state.yours_lines, side="YOURS")
+            self.pane_yours.update_content(txt)
+
+        def _render_pane_theirs(self) -> None:
+            txt = self._pane_text(self.state.theirs_lines, side="THEIRS")
+            self.pane_theirs.update_content(txt)
+
+        def _render_pane_base(self) -> None:
+            assert self.state.base_content is not None and self.pane_base is not None
+            txt = self._pane_text(self.state.base_content, side="BASE")
+            self.pane_base.update_content(txt)
+
+        def _pane_text(self, lines: list[str], side: str) -> Text:
+            if self.current >= len(self.state.hunks):
+                # No hunks — shouldn't happen since scan filters.
+                return Text("\n".join(lines[:200]))
+            h = self.state.hunks[self.current]
+            if side == "YOURS":
+                hunk_lo, hunk_hi = h.yours_start, h.yours_end
+                add_style = PALETTE["green"] if h.yours_lines else PALETTE["overlay0"]
+                change_style = add_style
+            elif side == "THEIRS":
+                hunk_lo, hunk_hi = h.theirs_start, h.theirs_end
+                add_style = PALETTE["red"] if h.theirs_lines else PALETTE["overlay0"]
+                change_style = add_style
+            else:  # BASE
+                hunk_lo, hunk_hi = (h.base_start, h.base_end) if h.base_start >= 0 else (-1, -1)
+                change_style = PALETTE["text"]
+            # Show a context window around the hunk.
+            ctx_before = 3
+            ctx_after = 3
+            lo = max(0, (hunk_lo if hunk_lo >= 0 else 0) - ctx_before)
+            hi = min(len(lines), (hunk_hi if hunk_hi >= 0 else 0) + ctx_after)
+            if hi <= lo:
+                lo, hi = 0, min(len(lines), 20)
+            out = Text()
+            for i in range(lo, hi):
+                raw = lines[i]
+                if len(raw) > LONG_LINE_HL_CUTOFF:
+                    raw = raw[:LONG_LINE_HL_CUTOFF] + "…"
+                gutter = f"{i+1:>4} "
+                in_hunk = hunk_lo <= i < hunk_hi and hunk_lo >= 0
+                if in_hunk and side == "YOURS":
+                    out.append(f"{gutter}- ", style=PALETTE["red"])
+                    out.append(raw + "\n", style=PALETTE["red"])
+                elif in_hunk and side == "THEIRS":
+                    out.append(f"{gutter}+ ", style=PALETTE["green"])
+                    out.append(raw + "\n", style=PALETTE["green"])
+                elif in_hunk and side == "BASE":
+                    out.append(f"{gutter}  ", style=PALETTE["text"])
+                    out.append(raw + "\n", style=PALETTE["text"])
+                else:
+                    out.append(f"{gutter}  ", style=PALETTE["overlay0"])
+                    out.append(raw + "\n", style=PALETTE["overlay0"])
+            return out
+
+        def _decision_and_advance(self, side: Side) -> None:
+            if not self.state.hunks:
+                return
+            h = self.state.hunks[self.current]
+            self.state.undo_stack.append((h.index, h.decision))
+            if len(self.state.undo_stack) > UNDO_DEPTH:
+                self.state.undo_stack.pop(0)
+            h.decision = side
+            save_draft(self.state, self.current)
+            if self.current < len(self.state.hunks) - 1:
+                self.current += 1
+            self._render_all()
+
+        def action_next_hunk(self) -> None:
+            if self.current < len(self.state.hunks) - 1:
+                self.current += 1
+                self._render_all()
+
+        def action_prev_hunk(self) -> None:
+            if self.current > 0:
+                self.current -= 1
+                self._render_all()
+
+        def action_take_yours(self) -> None: self._decision_and_advance(Side.YOURS)
+        def action_take_theirs(self) -> None: self._decision_and_advance(Side.THEIRS)
+        def action_take_both_yt(self) -> None: self._decision_and_advance(Side.BOTH_YT)
+        def action_take_both_ty(self) -> None: self._decision_and_advance(Side.BOTH_TY)
+        def action_skip_hunk(self) -> None: self._decision_and_advance(Side.SKIP)
+
+        def action_undo(self) -> None:
+            if not self.state.undo_stack:
+                self.app.bell()
+                return
+            idx, prev = self.state.undo_stack.pop()
+            for h in self.state.hunks:
+                if h.index == idx:
+                    h.decision = prev
+                    break
+            self._render_all()
+
+        def action_all_yours(self) -> None:
+            for h in self.state.hunks:
+                h.decision = Side.YOURS
+            self._render_all()
+
+        def action_all_theirs(self) -> None:
+            for h in self.state.hunks:
+                h.decision = Side.THEIRS
+            self._render_all()
+
+        def action_save(self) -> None:
+            unresolved = self.state.unresolved_count()
+            if unresolved:
+                def after(ans: Optional[bool]) -> None:
+                    if ans:
+                        self._pick_defaults_and_save()
+                self.app.push_screen(
+                    ConfirmScreen(
+                        f"{unresolved} hunk(s) unresolved",
+                        "Apply the auto-classified default for each unresolved hunk\n"
+                        "and save? (unclassified hunks will keep YOURS)",
+                    ),
+                    after,
+                )
+                return
+            self._do_save()
+
+        def _pick_defaults_and_save(self) -> None:
+            for h in self.state.hunks:
+                if h.decision is not None:
+                    continue
+                if h.kind == "yours-only":
+                    h.decision = Side.YOURS
+                elif h.kind == "theirs-only":
+                    h.decision = Side.THEIRS
+                else:
+                    h.decision = Side.YOURS  # conservative
+            self._do_save()
+
+        def _do_save(self) -> None:
+            try:
+                save_merged(self.state)
+            except ConcurrentModification as e:
+                self.app.push_screen(
+                    ConfirmScreen(f"{e.which} changed on disk",
+                                  "Force overwrite with the current merge? "
+                                  "(choose No to cancel and reload the file by hand)"),
+                    lambda ans: self._force_save() if ans else None,
+                )
+                return
+            except UnresolvedHunk:
+                self.app.bell()
+                return
+            self._app_ref.mark_resolved(self.state.relpath)
+            self.app.pop_screen()
+
+        def _force_save(self) -> None:
+            try:
+                save_merged(self.state, force=True)
+            except UnresolvedHunk:
+                return
+            self._app_ref.mark_resolved(self.state.relpath)
+            self.app.pop_screen()
+
+        def action_raw_diff(self) -> None:
+            a = self.state.yours_lines
+            b = self.state.theirs_lines
+            diff = list(unified_diff(a, b, "YOURS", "THEIRS", lineterm=""))
+            body = "\n".join(diff[:400]) or "(no diff)"
+            self.app.push_screen(HelpScreen())  # simple reuse; a dedicated pager is a future polish
+
+        def action_edit_yours(self) -> None:
+            self._edit_and_reload(self.state.yours_path)
+
+        def action_edit_merged(self) -> None:
+            # Write current merged-so-far to a tempfile, let $EDITOR edit,
+            # then treat it as the new YOURS baseline for further merging.
+            try:
+                lines = assemble(self.state)
+            except UnresolvedHunk:
+                # Assemble with YOURS defaults for the preview.
+                defaults = [(h.index, h.decision) for h in self.state.hunks]
+                for h in self.state.hunks:
+                    if h.decision is None:
+                        h.decision = Side.YOURS
+                lines = assemble(self.state)
+                for idx, prev in defaults:
+                    for h in self.state.hunks:
+                        if h.index == idx:
+                            h.decision = prev
+                            break
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=Path(self.state.relpath).suffix or ".txt",
+                delete=False, encoding=self.state.encoding,
+            )
+            tmp.write(self.state.newline.join(lines))
+            if self.state.trailing_newline:
+                tmp.write(self.state.newline)
+            tmp.close()
+            self._edit_and_reload(Path(tmp.name))
+
+        def _edit_and_reload(self, path: Path) -> None:
+            editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nano"
+            try:
+                with self.app.suspend():
+                    rc = subprocess.call([editor, str(path)])
+            except Exception as e:
+                self.app.bell()
+                _log(f"editor handoff failed: {e}")
+                return
+            if rc != 0:
+                _log(f"editor exited {rc}")
+
+        def action_cancel(self) -> None:
+            save_draft(self.state, self.current)
+            self.app.pop_screen()
+
+        def action_help(self) -> None:
+            self.app.push_screen(HelpScreen())
+
+    # ---------- App wrapper ----------
+    class ReviewApp(App):
+        CSS = APP_CSS
+        TITLE = "shedos-review-configs"
+        BINDINGS = [Binding("ctrl+c", "quit", "quit", priority=True)]
+
+        def __init__(self, conflicts: list[Conflict], *, start_file: Optional[str],
+                     walk_all: bool, force_2way: bool) -> None:
+            super().__init__()
+            self.conflicts = list(conflicts)
+            self.start_file = start_file
+            self.walk_all = walk_all
+            self.force_2way = force_2way
+            self._resolved: set[str] = set()
+
+        def on_mount(self) -> None:
+            self.push_screen(FileListScreen(self))
+            if self.start_file:
+                for c in self.conflicts:
+                    if c.relpath == self.start_file:
+                        self.open_conflict(c)
+                        break
+            elif self.walk_all and self.conflicts:
+                self.open_conflict(self.conflicts[0])
+
+        def open_conflict(self, c: Conflict) -> None:
+            if c.kind == "binary":
+                self.push_screen(ConfirmScreen(
+                    f"Binary file: {c.relpath}",
+                    "Line-level merge is not possible for binary files.\n"
+                    "Yes → Take THEIRS (replace YOURS)\n"
+                    "No  → Keep YOURS (delete .shedosnew)"
+                ), lambda ans: self._binary_resolve(c, ans))
+                return
+            if c.kind == "symlink":
+                self.push_screen(ConfirmScreen(
+                    f"Symlink: {c.relpath}",
+                    "YOURS is a symlink. The review tool does not merge symlinks.\n"
+                    "Yes → delete .shedosnew and leave the symlink\n"
+                    "No  → skip"
+                ), lambda ans: self._skip_resolve(c, ans))
+                return
+            if c.kind == "orphan":
+                self.push_screen(ConfirmScreen(
+                    f"Orphan: {c.relpath}",
+                    "No shedos-* package currently owns this file.\n"
+                    "Yes → delete .shedosnew\n"
+                    "No  → skip"
+                ), lambda ans: self._skip_resolve(c, ans))
+                return
+            if c.kind == "missing-yours":
+                self.push_screen(ConfirmScreen(
+                    f"Missing live copy: {c.relpath}",
+                    "YOURS doesn't exist. Promote THEIRS to YOURS?\n"
+                    "Yes → mv .shedosnew → live path\n"
+                    "No  → delete .shedosnew"
+                ), lambda ans: self._promote_theirs(c, ans))
+                return
+            try:
+                state = load_merge_state(c, force_2way=self.force_2way)
+            except OSError as e:
+                _log(f"load failed for {c.relpath}: {e}")
+                return
+            draft = load_draft(c.relpath)
+            if draft:
+                def after(ans: Optional[bool]) -> None:
+                    if ans:
+                        apply_draft(state, draft)
+                    self.push_screen(MergeScreen(self, state))
+                self.push_screen(ConfirmScreen(
+                    "Resume draft?",
+                    f"A draft from {draft.get('saved_at', '?')} was found.\n"
+                    "Yes → resume   No → fresh start"
+                ), after)
+                return
+            self.push_screen(MergeScreen(self, state))
+
+        def _binary_resolve(self, c: Conflict, take_theirs: Optional[bool]) -> None:
+            if take_theirs is None:
+                return
+            try:
+                if take_theirs:
+                    shutil.copy2(c.yours_path, c.yours_path.with_name(c.yours_path.name + BAK_SUFFIX))
+                    shutil.copy2(c.theirs_path, c.yours_path)
+                c.theirs_path.unlink()
+                if c.src_path:
+                    _update_manifest(c.relpath, c.src_path)
+            except OSError as e:
+                _log(f"binary resolve failed for {c.relpath}: {e}")
+            self.mark_resolved(c.relpath)
+
+        def _skip_resolve(self, c: Conflict, delete: Optional[bool]) -> None:
+            if delete:
+                try:
+                    c.theirs_path.unlink()
+                except OSError:
+                    pass
+                self.mark_resolved(c.relpath)
+
+        def _promote_theirs(self, c: Conflict, promote: Optional[bool]) -> None:
+            if promote is None:
+                return
+            try:
+                if promote:
+                    os.rename(str(c.theirs_path), str(c.yours_path))
+                else:
+                    c.theirs_path.unlink()
+                if c.src_path:
+                    _update_manifest(c.relpath, c.src_path)
+            except OSError as e:
+                _log(f"promote failed for {c.relpath}: {e}")
+            self.mark_resolved(c.relpath)
+
+        def mark_resolved(self, relpath: str) -> None:
+            self._resolved.add(relpath)
+            self.conflicts = [c for c in self.conflicts if c.relpath not in self._resolved]
+            top = self.screen_stack[-1] if self.screen_stack else None
+            if isinstance(top, FileListScreen):
+                top.refresh_table()
+            if not self.conflicts:
+                self.exit()
+
+        def rescan(self) -> None:
+            self.conflicts = scan_conflicts()
+            self.conflicts, _ = auto_resolve_identical(self.conflicts)
+            populate_hunk_counts(self.conflicts, force_2way=self.force_2way)
+
+        def bulk_accept_theirs(self) -> None:
+            for c in list(self.conflicts):
+                if c.kind == "text" and c.yours_path.exists():
+                    try:
+                        shutil.copy2(c.yours_path,
+                                     c.yours_path.with_name(c.yours_path.name + BAK_SUFFIX))
+                        shutil.copy2(c.theirs_path, c.yours_path)
+                        c.theirs_path.unlink()
+                        if c.src_path:
+                            _update_manifest(c.relpath, c.src_path)
+                    except OSError:
+                        continue
+                    self._resolved.add(c.relpath)
+            self.conflicts = [c for c in self.conflicts if c.relpath not in self._resolved]
+
+        def bulk_keep_yours(self) -> None:
+            for c in list(self.conflicts):
+                try:
+                    c.theirs_path.unlink()
+                except OSError:
+                    pass
+                self._resolved.add(c.relpath)
+            self.conflicts = []
+
+    # Install the inline runner.
+    def _runner(conflicts: list[Conflict], *, start_file: Optional[str],
+                walk_all: bool, force_2way: bool) -> int:
+        if not conflicts:
+            print("Nothing to review. All configs are in sync.")
+            return 0
+        cols = shutil.get_terminal_size((80, 24)).columns
+        rows = shutil.get_terminal_size((80, 24)).lines
+        if cols < MIN_COLS or rows < MIN_ROWS:
+            print(f"shedos-review-configs: terminal too small "
+                  f"(need {MIN_COLS}×{MIN_ROWS}, have {cols}×{rows}). "
+                  f"Resize or run with --list.", file=sys.stderr)
+            return 2
+        app = ReviewApp(conflicts, start_file=start_file,
+                        walk_all=walk_all, force_2way=force_2way)
+        app.run()
+        return 0
+
+    globals()["_run_app_inline"] = _runner
+
+
+_load_textual_ui()
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

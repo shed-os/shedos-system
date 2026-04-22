@@ -155,8 +155,41 @@ fi
 # Refresh the waybar indicator so the user sees "up to date" right away.
 shedos-check-updates --refresh-waybar 2>/dev/null || true
 
+# Count leftover .shedosnew conflicts. A sync may have produced new ones, or
+# there may be old ones the user never resolved — either way they block the
+# "in sync" guarantee, so surface them now.
+conflict_n=0
+if command -v shedos-review-configs >/dev/null 2>&1; then
+    # shellcheck disable=SC2012
+    while IFS= read -r -d '' _; do ((conflict_n++)); done \
+        < <(find "$HOME" -xdev -type f -name '*.shedosnew' -print0 2>/dev/null)
+fi
+
 echo
 echo "Update complete."
+
+if (( conflict_n > 0 )); then
+    if (( YES )); then
+        # Unattended: never launch a TUI. Just tell the user how many are
+        # waiting — they'll see it in the journal and can resolve on their
+        # next interactive session.
+        echo
+        echo "$conflict_n config conflict(s) remain as .shedosnew files."
+        echo "Resolve interactively with: shedos-review-configs"
+    else
+        echo
+        read -rp "$conflict_n config conflict(s) remain. Review now with shedos-review-configs? [Y/n] " yn
+        case "$yn" in
+            ""|[yY]|[yY][eE][sS])
+                exec shedos-review-configs
+                ;;
+            *)
+                echo "Skipped. Run 'shedos-review-configs' whenever you're ready."
+                ;;
+        esac
+    fi
+fi
+
 if ! (( YES )); then
     read -rp "Press Enter to close… " _ || true
 fi

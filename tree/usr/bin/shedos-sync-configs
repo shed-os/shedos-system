@@ -29,6 +29,7 @@ set -uo pipefail
 
 SHEDOS_DEFAULTS_ROOT=/usr/share/shedos
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/shedos/last-seen"
+CONTENT_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/shedos/last-seen-content"
 
 DRY_RUN=0
 REBUILD_MANIFEST=0
@@ -98,6 +99,16 @@ _write_sha() {
     printf '%s' "$2" > "$1"
 }
 
+_write_content() {
+    # Snapshot a BASE content file. $1 = relpath (key), $2 = source to copy.
+    # shedos-review-configs needs BASE content — not just the hash — to show a
+    # real 3-way diff. We mirror the manifest layout under CONTENT_ROOT so the
+    # review tool can locate BASE via the same relpath key.
+    local dest="$CONTENT_ROOT/$1"
+    install -Dm600 /dev/null "$dest"
+    cp --preserve=mode -- "$2" "$dest"
+}
+
 _pkg_policy() {
     # $1 = pkg name. Print policy line or "".
     local f="$SHEDOS_DEFAULTS_ROOT/$1/sync-policy"
@@ -160,10 +171,11 @@ done
 if (( REBUILD_MANIFEST )); then
     n=0
     for entry in "${plan[@]}"; do
-        IFS=$'\t' read -r _ _ _ src _ last <<<"$entry"
+        IFS=$'\t' read -r _ _ relpath src _ last <<<"$entry"
         src_sha=$(_sha "$src")
         [[ -n $src_sha ]] || continue
         _write_sha "$last" "$src_sha"
+        _write_content "$relpath" "$src"
         ((n++))
     done
     echo "Rebuilt manifest: $n entries under $STATE_ROOT"
@@ -188,8 +200,10 @@ if (( REBUILD_MANIFEST )); then
             (( ${#_bak[@]} > 5 )) && echo "    …and $(( ${#_bak[@]} - 5 )) more"
         fi
         echo
-        echo "Review .shedosnew files against your live copies, merge by hand,"
-        echo "then remove them. To delete all of either type after review:"
+        echo "Review .shedosnew files interactively:"
+        echo "  shedos-review-configs            # TUI merge (IDE-style)"
+        echo
+        echo "Or merge by hand, then delete all of either type:"
         echo "  find ~ -name '*.shedosnew' -delete"
         echo "  find ~ -name '*.shedosbak' -delete"
     fi
@@ -265,16 +279,19 @@ for entry in "${plan[@]}"; do
             install -Dm644 /dev/null "$dst"
             cp --preserve=mode "$src" "$dst"
             _write_sha "$last" "$(_sha "$src")"
+            _write_content "$relpath" "$src"
             ;;
         auto)
             cp -a "$dst" "$dst.shedosbak"
             cp --preserve=mode "$src" "$dst"
             _write_sha "$last" "$(_sha "$src")"
+            _write_content "$relpath" "$src"
             ;;
         conflict)
             cp --preserve=mode "$src" "$dst.shedosnew"
-            # Intentionally do NOT update $last — we want to re-present this
-            # conflict on the next sync if the user defers resolving it.
+            # Intentionally do NOT update $last or CONTENT_ROOT — we want the
+            # previous BASE preserved so shedos-review-configs can render a
+            # real 3-way diff against it.
             ;;
         noop) ;;
     esac

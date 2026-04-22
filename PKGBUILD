@@ -6,7 +6,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.21
-pkgrel=2
+pkgrel=3
 pkgdesc='ShedOS system utilities, systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -18,6 +18,9 @@ depends=(
     'coreutils'        # sha256sum, install
     'diffutils'        # diff for shedos-sync-configs --list-diffs
     'sudo'
+    'python'           # shedos-review-configs
+    'python-textual'   # shedos-review-configs TUI framework
+    'python-rich'      # transitive dep of textual, declared for clarity
 )
 optdepends=(
     'postgresql: shedos-pg-initdb.service initializes a cluster on first boot'
@@ -50,6 +53,8 @@ package() {
         "$pkgdir/usr/bin/shedos-update"
     install -Dm755 tree/usr/bin/shedos-sync-configs \
         "$pkgdir/usr/bin/shedos-sync-configs"
+    install -Dm755 tree/usr/bin/shedos-review-configs \
+        "$pkgdir/usr/bin/shedos-review-configs"
     install -Dm755 tree/usr/bin/shedos-pg-user-bootstrap \
         "$pkgdir/usr/bin/shedos-pg-user-bootstrap"
 
