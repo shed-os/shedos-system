@@ -6,7 +6,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.21
-pkgrel=4
+pkgrel=5
 pkgdesc='ShedOS system utilities, systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -49,6 +49,8 @@ package() {
         "$pkgdir/usr/bin/shedos-user-session"
     install -Dm755 tree/usr/bin/shedos-check-updates \
         "$pkgdir/usr/bin/shedos-check-updates"
+    install -Dm755 tree/usr/bin/shedos-check-conflicts \
+        "$pkgdir/usr/bin/shedos-check-conflicts"
     install -Dm755 tree/usr/bin/shedos-update \
         "$pkgdir/usr/bin/shedos-update"
     install -Dm755 tree/usr/bin/shedos-sync-configs \

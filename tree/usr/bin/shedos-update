@@ -157,6 +157,10 @@ fi
 shedos-check-updates --refresh-waybar 2>/dev/null || true
 shedos-check-updates --reset-notify-state 2>/dev/null || true
 
+# Mirror for the conflict indicator: sync-configs may have produced new
+# .shedosnew files during this run. --tick surfaces them on waybar + mako.
+shedos-check-conflicts --tick 2>/dev/null || true
+
 # Count leftover .shedosnew conflicts. A sync may have produced new ones, or
 # there may be old ones the user never resolved — either way they block the
 # "in sync" guarantee, so surface them now.

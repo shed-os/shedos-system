@@ -1005,6 +1005,20 @@ def save_merged(state: MergeState, force: bool = False) -> None:
     # 9. Clear draft.
     delete_draft(state.relpath)
 
+    # 10. Kick the waybar conflict indicator. Best-effort: we've already
+    # changed the live file; the badge is decoration. Keep the timeout
+    # tight so a misbehaving signal path never blocks the save flow.
+    try:
+        subprocess.run(
+            ["shedos-check-conflicts", "--refresh-waybar"],
+            check=False,
+            timeout=2,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
 
 def sweep_leftover_tmps() -> int:
     """Remove stale <path>.shedosmerge.tmp.* artefacts from crashed runs."""

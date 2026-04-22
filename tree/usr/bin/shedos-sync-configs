@@ -300,3 +300,7 @@ done
 echo
 echo "Sync complete. Conflicts (if any) landed as <path>.shedosnew alongside"
 echo "your files — inspect with: find ~ -name '*.shedosnew'"
+
+# Refresh the waybar conflict indicator and notify if the count just went
+# up. Silent when there's nothing to see or no DBus session.
+shedos-check-conflicts --tick 2>/dev/null || true
