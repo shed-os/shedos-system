@@ -2,7 +2,7 @@
 # shedos-update — interactive ShedOS upgrade flow.
 #
 # The user is prompted to confirm before ANYTHING is applied, and pacman /
-# yay re-prompt with their own package lists. No silent or --noconfirm paths.
+# yay re-prompt with their own package lists. No silent paths by default.
 #
 # Flow:
 #   1. checkupdates  → list pacman updates
@@ -11,13 +11,52 @@
 #   4. pacman -Syu   → pacman's own confirmation
 #   5. yay -Sua      → yay's own confirmation (if needed)
 #   6. shedos-sync-configs → 3-way merge for $HOME dotfiles (own prompt)
+#
+# --yes flips every prompt to auto-accept (noconfirm across the chain).
+# NOTE: --yes does NOT auto-resolve config conflicts — a "conflict" means
+# you AND upstream edited the same file, and silently picking a side is
+# exactly the data loss shedos-sync-configs exists to prevent. Conflicts
+# still land as <file>.shedosnew for you to reconcile by hand later.
 
 set -uo pipefail
+
+YES=0
+
+usage() {
+    cat <<'EOF'
+Usage: shedos-update [--yes] [--help]
+
+Interactive upgrade wrapper for ShedOS: pacman -Syu → yay -Sua → shedos-sync-configs.
+
+Options:
+  -y, --yes    Unattended mode. Skip prompts, pass --noconfirm to pacman/yay,
+               and --yes to shedos-sync-configs. Conflicts still drop
+               .shedosnew files instead of overwriting your edits — no
+               silent data loss. Intended for cron/systemd-timer driven
+               upgrades on trusted systems.
+  -h, --help   This message.
+
+Run without flags for the normal interactive flow (default answer is N
+at every prompt).
+EOF
+}
+
+for arg in "$@"; do
+    case "$arg" in
+        -y|--yes) YES=1 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "unknown option: $arg" >&2; usage >&2; exit 2 ;;
+    esac
+done
 
 _hr() { printf '%s\n' "------------------------------------------------------------"; }
 
 _hr
-echo "ShedOS update"
+if (( YES )); then
+    echo "ShedOS update (unattended — --yes)"
+else
+    echo "ShedOS update"
+fi
 _hr
 
 echo "Checking for pacman updates…"
@@ -53,19 +92,27 @@ if (( aur_n > 0 )); then
     echo "$aur" | sed 's/^/  /'
 fi
 
-echo
-read -rp "Proceed with upgrade? [y/N] " yn
-case "$yn" in
-    [yY]|[yY][eE][sS]) ;;
-    *) echo "Cancelled."; exit 0 ;;
-esac
+if ! (( YES )); then
+    echo
+    read -rp "Proceed with upgrade? [y/N] " yn
+    case "$yn" in
+        [yY]|[yY][eE][sS]) ;;
+        *) echo "Cancelled."; exit 0 ;;
+    esac
+fi
 
 if (( pac_n > 0 )); then
     echo
     _hr
-    echo "Running pacman -Syu (pacman will prompt again with the full list)…"
+    if (( YES )); then
+        echo "Running pacman -Syu --noconfirm…"
+    else
+        echo "Running pacman -Syu (pacman will prompt again with the full list)…"
+    fi
     _hr
-    sudo pacman -Syu || {
+    pacman_args=(-Syu)
+    (( YES )) && pacman_args+=(--noconfirm)
+    sudo pacman "${pacman_args[@]}" || {
         echo "pacman exited non-zero; aborting before config sync." >&2
         exit 1
     }
@@ -74,21 +121,33 @@ fi
 if (( aur_n > 0 )); then
     echo
     _hr
-    echo "Running yay -Sua (yay will prompt again)…"
+    if (( YES )); then
+        echo "Running yay -Sua --noconfirm…"
+    else
+        echo "Running yay -Sua (yay will prompt again)…"
+    fi
     _hr
+    aur_args=(-Sua)
+    (( YES )) && aur_args+=(--noconfirm)
     if command -v yay >/dev/null 2>&1; then
-        yay -Sua || echo "yay exited non-zero; continuing." >&2
+        yay "${aur_args[@]}" || echo "yay exited non-zero; continuing." >&2
     elif command -v paru >/dev/null 2>&1; then
-        paru -Sua || echo "paru exited non-zero; continuing." >&2
+        paru "${aur_args[@]}" || echo "paru exited non-zero; continuing." >&2
     fi
 fi
 
 echo
 _hr
-echo "Syncing ShedOS config defaults (will prompt before applying)…"
+if (( YES )); then
+    echo "Syncing ShedOS config defaults (--yes; conflicts → .shedosnew)…"
+else
+    echo "Syncing ShedOS config defaults (will prompt before applying)…"
+fi
 _hr
 if command -v shedos-sync-configs >/dev/null 2>&1; then
-    shedos-sync-configs || echo "config sync skipped or failed." >&2
+    sync_args=()
+    (( YES )) && sync_args+=(--yes)
+    shedos-sync-configs "${sync_args[@]}" || echo "config sync skipped or failed." >&2
 else
     echo "shedos-sync-configs not installed; skipping config sync."
 fi
@@ -98,4 +157,6 @@ shedos-check-updates --refresh-waybar 2>/dev/null || true
 
 echo
 echo "Update complete."
-read -rp "Press Enter to close… " _ || true
+if ! (( YES )); then
+    read -rp "Press Enter to close… " _ || true
+fi

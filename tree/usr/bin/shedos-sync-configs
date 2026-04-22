@@ -33,10 +33,11 @@ STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/shedos/last-seen"
 DRY_RUN=0
 REBUILD_MANIFEST=0
 LIST_DIFFS=0
+YES=0
 
 usage() {
     cat <<'EOF'
-Usage: shedos-sync-configs [--dry-run] [--rebuild-manifest] [--help]
+Usage: shedos-sync-configs [--dry-run] [--yes] [--rebuild-manifest] [--help]
 
 Synchronises $HOME dotfiles against ShedOS package defaults using an
 explicit 3-way merge. A file the user has edited is never overwritten; at
@@ -44,10 +45,16 @@ worst a .shedosnew file is written alongside (exactly like pacman's .pacnew).
 
 Options:
   --dry-run            Print what would happen, change nothing.
+  -y, --yes            Skip the apply prompt. Conflicts still drop
+                       .shedosnew files (NOT auto-resolved — the tool
+                       never silently picks between your edits and
+                       upstream). Intended for unattended upgrades.
   --rebuild-manifest   Hash current $HOME files against current defaults and
                        write the manifest. Use this if the state dir was
                        lost — effectively says "trust me, I'm aligned now".
-  --help               This message.
+                       Also scans for leftover .shedosnew/.shedosbak files
+                       and tells you how to clean them up.
+  -h, --help           This message.
 
 Run without flags to perform an interactive sync: prints a plan, asks for
 y/N, then applies. Default answer is N.
@@ -57,6 +64,7 @@ EOF
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=1 ;;
+        -y|--yes) YES=1 ;;
         --rebuild-manifest) REBUILD_MANIFEST=1 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $arg" >&2; usage >&2; exit 2 ;;
@@ -159,6 +167,32 @@ if (( REBUILD_MANIFEST )); then
         ((n++))
     done
     echo "Rebuilt manifest: $n entries under $STATE_ROOT"
+
+    # Scan for stranded conflict/backup artefacts the user may have forgotten
+    # about. After --rebuild-manifest the tool's view of the world is "aligned
+    # now", which means any remaining .shedosnew is definitionally a file the
+    # user hasn't reviewed yet — point them at it.
+    mapfile -t _new  < <(find "$HOME" -xdev -type f -name '*.shedosnew' 2>/dev/null)
+    mapfile -t _bak  < <(find "$HOME" -xdev -type f -name '*.shedosbak' 2>/dev/null)
+    if (( ${#_new[@]} + ${#_bak[@]} > 0 )); then
+        echo
+        echo "Leftover artefacts in \$HOME:"
+        if (( ${#_new[@]} > 0 )); then
+            echo "  ${#_new[@]} .shedosnew file(s) — unreviewed upstream versions"
+            printf '    %s\n' "${_new[@]}" | head -5
+            (( ${#_new[@]} > 5 )) && echo "    …and $(( ${#_new[@]} - 5 )) more"
+        fi
+        if (( ${#_bak[@]} > 0 )); then
+            echo "  ${#_bak[@]} .shedosbak file(s) — auto-update backups"
+            printf '    %s\n' "${_bak[@]}" | head -5
+            (( ${#_bak[@]} > 5 )) && echo "    …and $(( ${#_bak[@]} - 5 )) more"
+        fi
+        echo
+        echo "Review .shedosnew files against your live copies, merge by hand,"
+        echo "then remove them. To delete all of either type after review:"
+        echo "  find ~ -name '*.shedosnew' -delete"
+        echo "  find ~ -name '*.shedosbak' -delete"
+    fi
     exit 0
 fi
 
@@ -198,25 +232,27 @@ if (( DRY_RUN )); then
 fi
 
 # ---------------------------------------------------------------------------
-# Prompt.
+# Prompt (skipped in --yes mode; conflicts still produce .shedosnew).
 # ---------------------------------------------------------------------------
-while :; do
-    read -rp "Apply this plan? [y/N/list-diffs] " yn
-    case "$yn" in
-        [yY]|[yY][eE][sS]) break ;;
-        list-diffs|diffs|l)
-            for entry in "${plan[@]}"; do
-                IFS=$'\t' read -r kind _ relpath src dst _ <<<"$entry"
-                [[ $kind == conflict ]] || continue
+if ! (( YES )); then
+    while :; do
+        read -rp "Apply this plan? [y/N/list-diffs] " yn
+        case "$yn" in
+            [yY]|[yY][eE][sS]) break ;;
+            list-diffs|diffs|l)
+                for entry in "${plan[@]}"; do
+                    IFS=$'\t' read -r kind _ relpath src dst _ <<<"$entry"
+                    [[ $kind == conflict ]] || continue
+                    echo
+                    echo "=== diff for $relpath ==="
+                    diff -u "$dst" "$src" || true
+                done
                 echo
-                echo "=== diff for $relpath ==="
-                diff -u "$dst" "$src" || true
-            done
-            echo
-            ;;
-        *) echo "Cancelled."; exit 0 ;;
-    esac
-done
+                ;;
+            *) echo "Cancelled."; exit 0 ;;
+        esac
+    done
+fi
 
 # ---------------------------------------------------------------------------
 # Apply.
