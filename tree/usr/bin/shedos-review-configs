@@ -621,6 +621,282 @@ def _assemble_2way(state: MergeState) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Aligned-row model for the 3-pane merge viewer.
+#
+# The merge UI shows YOURS | BASE | THEIRS as three parallel columns with the
+# lines lined up: context regions occupy the same visual row in all three
+# panes, and a hunk region is padded with blank cells on the shorter sides so
+# the three pane heights stay equal. This is the data model IntelliJ's merge
+# viewer shows; we need the alignment here so vertical scroll stays in sync
+# without the reader having to cross-reference line numbers.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Cell:
+    # lineno is 1-based; None for padding rows inside a hunk.
+    lineno: Optional[int]
+    text: Optional[str]
+    # Per-cell diff classification vs BASE (in 3-way) or vs the counterpart
+    # side (in 2-way). Renderer turns this into a git-style marker + color:
+    #   "equal"   → neutral, no marker  (line unchanged from BASE)
+    #   "add"     → green "+"           (line the side introduced)
+    #   "del"     → red "-"             (line the side deleted from BASE;
+    #                                    cell.text holds the deleted content)
+    #   "ctx"     → neutral, no marker  (context row outside any hunk)
+    tag: str = "ctx"
+
+
+@dataclass
+class AlignedRow:
+    yours: Cell
+    base: Cell
+    theirs: Cell
+    # None for context rows, otherwise the hunk index this row is part of.
+    hunk_index: Optional[int]
+
+    @property
+    def is_hunk(self) -> bool:
+        return self.hunk_index is not None
+
+
+def _align_pair_vs_base(base: list[str], side: list[str]
+                        ) -> tuple[list[tuple[str, Optional[int]]],
+                                   list[list[int]]]:
+    """Pairwise-align one side (YOURS or THEIRS) against BASE.
+
+    Returns a pair ``(at, inserts_before)`` where:
+
+    - ``at`` has length ``len(base)``. Each entry is ``(tag, side_idx)`` where
+      tag is ``"equal"`` (side has this base line unchanged, side_idx is the
+      matching index into ``side``) or ``"del"`` (side deleted this base
+      line; side_idx is None).
+    - ``inserts_before`` has length ``len(base) + 1``. Entry ``k`` is a list
+      of ``side`` indices that the side inserted anchored just before
+      ``base[k]`` (or at end-of-file when k == len(base)).
+
+    "Replace" opcodes are decomposed into the base-range becoming ``"del"``
+    plus the side-range becoming inserts anchored at the start of the
+    replaced base range — that way the pane can render each changed line as
+    a distinct green "+" or red "-" in the git-diff tradition.
+    """
+    at: list[tuple[str, Optional[int]]] = [("del", None)] * len(base)
+    inserts_before: list[list[int]] = [[] for _ in range(len(base) + 1)]
+    sm = SequenceMatcher(None, base, side, autojunk=False)
+    for op, b1, b2, s1, s2 in sm.get_opcodes():
+        if op == "equal":
+            for k in range(b2 - b1):
+                at[b1 + k] = ("equal", s1 + k)
+        elif op == "delete":
+            for k in range(b2 - b1):
+                at[b1 + k] = ("del", None)
+        elif op == "insert":
+            for k in range(s2 - s1):
+                inserts_before[b1].append(s1 + k)
+        elif op == "replace":
+            for k in range(b2 - b1):
+                at[b1 + k] = ("del", None)
+            for k in range(s2 - s1):
+                inserts_before[b1].append(s1 + k)
+    return at, inserts_before
+
+
+def _hunk_rows_3way(hunk, state_hunk_index: int) -> list[AlignedRow]:
+    """Emit aligned rows for one 3-way hunk.
+
+    The algorithm walks BASE linearly. At each base position it first drains
+    any inserts (anchored just before that base line) from YOURS and THEIRS,
+    pairing them visually row-by-row. Then it emits the row for ``base[b]``
+    itself: each side's cell is either the kept YOURS/THEIRS line ("equal")
+    or a red "-" showing the deleted base content ("del"). Pure inserts get
+    a tilde placeholder in the BASE pane so the three columns stay aligned.
+    """
+    base = hunk.base_lines
+    yours = hunk.yours_lines
+    theirs = hunk.theirs_lines
+    y_base_ln_start = hunk.yours_start + 1
+    b_base_ln_start = hunk.base_start + 1
+    t_base_ln_start = hunk.theirs_start + 1
+
+    y_at, y_ins = _align_pair_vs_base(base, yours)
+    t_at, t_ins = _align_pair_vs_base(base, theirs)
+
+    rows: list[AlignedRow] = []
+    for b in range(len(base) + 1):
+        # Drain inserts anchored before base[b]. Pair yours vs theirs
+        # row-by-row and pad the shorter side with a blank cell so both
+        # panes scroll in sync.
+        y_list = y_ins[b]
+        t_list = t_ins[b]
+        for k in range(max(len(y_list), len(t_list))):
+            if k < len(y_list):
+                y_i = y_list[k]
+                y_cell = Cell(y_base_ln_start + y_i,
+                              yours[y_i], tag="add")
+            else:
+                y_cell = Cell(None, None, tag="equal")
+            if k < len(t_list):
+                t_i = t_list[k]
+                t_cell = Cell(t_base_ln_start + t_i,
+                              theirs[t_i], tag="add")
+            else:
+                t_cell = Cell(None, None, tag="equal")
+            rows.append(AlignedRow(
+                yours=y_cell,
+                base=Cell(None, None, tag="equal"),
+                theirs=t_cell,
+                hunk_index=state_hunk_index,
+            ))
+
+        if b >= len(base):
+            break
+
+        # Emit the row anchored on base[b].
+        y_tag, y_idx = y_at[b]
+        t_tag, t_idx = t_at[b]
+        if y_tag == "equal":
+            y_cell = Cell(y_base_ln_start + y_idx,
+                          yours[y_idx], tag="equal")
+        else:
+            # yours removed base[b]: show base content in red "-" column.
+            y_cell = Cell(None, base[b], tag="del")
+        if t_tag == "equal":
+            t_cell = Cell(t_base_ln_start + t_idx,
+                          theirs[t_idx], tag="equal")
+        else:
+            t_cell = Cell(None, base[b], tag="del")
+        b_cell = Cell(b_base_ln_start + b, base[b], tag="equal")
+        rows.append(AlignedRow(
+            yours=y_cell, base=b_cell, theirs=t_cell,
+            hunk_index=state_hunk_index,
+        ))
+    return rows
+
+
+def _hunk_rows_2way(hunk, state_hunk_index: int) -> list[AlignedRow]:
+    """Emit aligned rows for one 2-way hunk (no BASE available).
+
+    Uses the same pairwise alignment against YOURS as the implicit base, so
+    "add" rows are lines THEIRS introduced (green "+") and "del" rows are
+    lines THEIRS removed from YOURS (red "-"). YOURS is neutral equal except
+    where the counterpart side marks a row as removed.
+    """
+    yours = hunk.yours_lines
+    theirs = hunk.theirs_lines
+    y_base_ln_start = hunk.yours_start + 1
+    t_base_ln_start = hunk.theirs_start + 1
+
+    # In 2-way we pretend YOURS is the baseline and align THEIRS against it.
+    t_at, t_ins = _align_pair_vs_base(yours, theirs)
+
+    rows: list[AlignedRow] = []
+    for y in range(len(yours) + 1):
+        t_list = t_ins[y]
+        for k in range(len(t_list)):
+            t_i = t_list[k]
+            rows.append(AlignedRow(
+                yours=Cell(None, None, tag="equal"),
+                base=Cell(None, None, tag="equal"),
+                theirs=Cell(t_base_ln_start + t_i,
+                            theirs[t_i], tag="add"),
+                hunk_index=state_hunk_index,
+            ))
+        if y >= len(yours):
+            break
+        t_tag, t_idx = t_at[y]
+        if t_tag == "equal":
+            # YOURS line kept in THEIRS too: both neutral, no marker.
+            y_cell = Cell(y_base_ln_start + y, yours[y], tag="equal")
+            t_cell = Cell(t_base_ln_start + t_idx,
+                          theirs[t_idx], tag="equal")
+        else:
+            # THEIRS deleted this YOURS line: show it red on the THEIRS side.
+            y_cell = Cell(y_base_ln_start + y, yours[y], tag="equal")
+            t_cell = Cell(None, yours[y], tag="del")
+        rows.append(AlignedRow(
+            yours=y_cell,
+            base=Cell(None, None, tag="equal"),
+            theirs=t_cell,
+            hunk_index=state_hunk_index,
+        ))
+    return rows
+
+
+def build_aligned_rows(state: MergeState) -> list[AlignedRow]:
+    """Produce per-row triples that align YOURS/BASE/THEIRS in the viewport.
+
+    For a 3-way merge, equal regions sit at the same (base) line position in
+    all three files, so they emit one row per equal line. Inside a hunk we
+    do proper per-side alignment against BASE (see ``_hunk_rows_3way``):
+    each row's YOURS/THEIRS cell is tagged ``equal``/``add``/``del`` so the
+    renderer can draw git-style green "+" / red "-" per line while the BASE
+    pane stays neutral.
+
+    For a 2-way merge (no BASE), the BASE cell is always blank and we align
+    THEIRS against YOURS inside each hunk the same way.
+    """
+    rows: list[AlignedRow] = []
+    yours = state.yours_lines
+    theirs = state.theirs_lines
+
+    if state.base_content is not None:
+        base = state.base_content
+        cb = cy = ct = 0
+        for i, h in enumerate(state.hunks):
+            # Context preceding the hunk: equal across all three files.
+            n_ctx = h.base_start - cb
+            for j in range(n_ctx):
+                rows.append(AlignedRow(
+                    yours=Cell(cy + j + 1, yours[cy + j], tag="ctx"),
+                    base=Cell(cb + j + 1, base[cb + j], tag="ctx"),
+                    theirs=Cell(ct + j + 1, theirs[ct + j], tag="ctx"),
+                    hunk_index=None,
+                ))
+            cb, cy, ct = h.base_start, h.yours_start, h.theirs_start
+            rows.extend(_hunk_rows_3way(h, i))
+            cb, cy, ct = h.base_end, h.yours_end, h.theirs_end
+
+        # Trailing context.
+        while cb < len(base):
+            rows.append(AlignedRow(
+                yours=Cell(cy + 1, yours[cy], tag="ctx")
+                      if cy < len(yours) else Cell(None, None, tag="ctx"),
+                base=Cell(cb + 1, base[cb], tag="ctx"),
+                theirs=Cell(ct + 1, theirs[ct], tag="ctx")
+                       if ct < len(theirs) else Cell(None, None, tag="ctx"),
+                hunk_index=None,
+            ))
+            cb += 1; cy += 1; ct += 1
+        return rows
+
+    # 2-way.
+    cy = ct = 0
+    for i, h in enumerate(state.hunks):
+        n_ctx = h.yours_start - cy
+        for j in range(n_ctx):
+            rows.append(AlignedRow(
+                yours=Cell(cy + j + 1, yours[cy + j], tag="ctx"),
+                base=Cell(None, None, tag="ctx"),
+                theirs=Cell(ct + j + 1, theirs[ct + j], tag="ctx")
+                       if ct + j < len(theirs) else Cell(None, None, tag="ctx"),
+                hunk_index=None,
+            ))
+        cy, ct = h.yours_start, h.theirs_start
+        rows.extend(_hunk_rows_2way(h, i))
+        cy, ct = h.yours_end, h.theirs_end
+    while cy < len(yours):
+        rows.append(AlignedRow(
+            yours=Cell(cy + 1, yours[cy], tag="ctx"),
+            base=Cell(None, None, tag="ctx"),
+            theirs=Cell(ct + 1, theirs[ct], tag="ctx")
+                   if ct < len(theirs) else Cell(None, None, tag="ctx"),
+            hunk_index=None,
+        ))
+        cy += 1; ct += 1
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Load a merge state for one conflict.
 # ---------------------------------------------------------------------------
 
@@ -1149,9 +1425,13 @@ def _load_textual_ui() -> None:
     #hunk-strip { dock: bottom; height: 1; background: #181825; color: #cdd6f4; padding: 0 1; }
     #hint-bar  { dock: bottom; height: 1; background: #181825; color: #6c7086; padding: 0 1; }
 
-    .pane { border: round #313244; padding: 0 1; }
+    .pane { border: round #313244; padding: 0; width: 1fr; height: 1fr; }
     .pane.focus { border: round #89b4fa; }
     .pane-title { background: #313244; color: #89b4fa; padding: 0 1; }
+    #merge-row { height: 1fr; }
+    .pane-yours  { border-title-color: #a6e3a1; border-title-align: left; }
+    .pane-base   { border-title-color: #f9e2af; border-title-align: left; }
+    .pane-theirs { border-title-color: #f38ba8; border-title-align: left; }
 
     .add { color: #a6e3a1; }
     .del { color: #f38ba8; }
@@ -1171,6 +1451,14 @@ def _load_textual_ui() -> None:
               padding: 1 2; }
     .dialog-title { color: #89b4fa; text-style: bold; }
     .dialog-hint { color: #6c7086; }
+
+    #raw-diff-scroll {
+        border: thick #89b4fa;
+        background: #181825;
+        width: 95%;
+        height: 90%;
+        padding: 1 2;
+    }
     """
 
     class Banner(Static):
@@ -1202,51 +1490,149 @@ def _load_textual_ui() -> None:
             legend = "  (● resolved  ◉ current  ○ pending)"
             self.update(" ".join(chars) + legend)
 
-    # Side-by-side diff renderer. We build line-by-line rows manually to keep
-    # green/red semantics faithful to git.
-    def render_pane(lines: list[str], diff_lines: set[int], kind: str,
-                    cursor_line: Optional[int], width: int) -> Text:
+    # ----- Per-row rendering for the aligned 3-pane viewer -----------------
+    #
+    # The left (YOURS) and right (THEIRS) panes always show their own side's
+    # content. The middle pane is a LIVE RESULT PREVIEW: for every hunk it
+    # reflects the user's current decision (y/t/b/B/x) — its cells mirror
+    # the chosen side so the user sees the merged output take shape as they
+    # make calls. Undecided hunks are marked with a yellow "?" so pending
+    # work is obvious. Outside hunks the middle pane shows base (ancestor)
+    # content unchanged.
+    #
+    # Per-cell ``tag`` (set by ``build_aligned_rows`` or substituted by the
+    # decision logic) drives the color/marker in git-diff fashion:
+    #   equal / ctx    →  neutral text, no marker
+    #   add            →  green "+" + green text   (side introduced this line)
+    #   del            →  red   "-" + red   text   (side deleted this base line)
+    #   und            →  yellow "?" + yellow text (hunk still undecided — only
+    #                                              ever appears in middle pane)
+    #
+    # Padding rows (cells with ``text is None``) draw a dim "~" placeholder
+    # so the three panes stay vertically aligned when one side of a hunk has
+    # fewer lines than another. The current hunk (the one decision keys
+    # affect) gets a surface0 background across every pane so the user always
+    # knows where focus is.
+
+    GUTTER_WIDTH = 4   # columns for line number
+    MARKER_WIDTH = 3   # columns for " + " / " - " / "   "
+
+    def _effective_middle_cell(row: AlignedRow,
+                               decisions: dict[int, Optional[Side]]
+                               ) -> Cell:
+        """Compute what the middle (RESULT) pane should show for this row.
+
+        - Context rows (no hunk): base cell unchanged.
+        - Undecided hunk: base content with tag="und" so user sees yellow "?".
+        - YOURS / SKIP: mirror yours cell.
+        - THEIRS: mirror theirs cell.
+        - BOTH_YT: prefer yours; fall back to theirs when yours is padding.
+        - BOTH_TY: prefer theirs; fall back to yours when theirs is padding.
+
+        The fallback matters on rows where only one side has an insert — we
+        don't want to drop it to padding when the user has said "take both".
+        """
+        if row.hunk_index is None:
+            return row.base
+        decision = decisions.get(row.hunk_index)
+        if decision is None:
+            if row.base.text is None:
+                # Pure insert row with nothing to show from base; leave blank.
+                return Cell(None, None, tag="equal")
+            return Cell(lineno=row.base.lineno, text=row.base.text, tag="und")
+        if decision in (Side.YOURS, Side.SKIP):
+            return row.yours
+        if decision == Side.THEIRS:
+            return row.theirs
+        if decision == Side.BOTH_YT:
+            return row.yours if row.yours.text is not None else row.theirs
+        if decision == Side.BOTH_TY:
+            return row.theirs if row.theirs.text is not None else row.yours
+        return row.base
+
+    def _render_cell(cell: Cell, is_hunk: bool, is_current: bool) -> Text:
+        line = Text()
+        bg = PALETTE["surface0"] if is_current else None
+
+        # Pick foreground + marker by tag.
+        if cell.tag == "add":
+            fg, marker = PALETTE["green"],  " + "
+        elif cell.tag == "del":
+            fg, marker = PALETTE["red"],    " - "
+        elif cell.tag == "und":
+            fg, marker = PALETTE["yellow"], " ? "
+        elif cell.tag == "ctx":
+            fg, marker = PALETTE["overlay0"], "   "
+        else:  # "equal"
+            fg, marker = (PALETTE["text"] if is_hunk else PALETTE["overlay0"]), "   "
+
+        style = f"{fg} on {bg}" if bg else fg
+
+        if cell.text is None:
+            dim_fg = PALETTE["overlay0"]
+            dim_style = f"{dim_fg} on {bg}" if bg else dim_fg
+            line.append(" " * GUTTER_WIDTH, style=dim_style)
+            line.append(" ~ ", style=dim_style)
+            line.append("\n", style=dim_style)
+            return line
+
+        body = cell.text
+        if len(body) > LONG_LINE_HL_CUTOFF:
+            body = body[:LONG_LINE_HL_CUTOFF] + "…"
+
+        gutter = (f"{cell.lineno:>{GUTTER_WIDTH}d}"
+                  if cell.lineno is not None else " " * GUTTER_WIDTH)
+        line.append(gutter, style=style)
+        line.append(marker, style=style)
+        line.append(body + "\n", style=style)
+        return line
+
+    def render_pane_text(rows: list[AlignedRow], side: str,
+                         current_hunk: Optional[int],
+                         decisions: Optional[dict[int, Optional[Side]]] = None
+                         ) -> Text:
         out = Text()
-        for i, raw in enumerate(lines):
-            gutter = f"{i+1:>4} "
-            if kind == "add":
-                style = "on #1e1e2e"
-                line_style = PALETTE["green"]
-                marker = "+"
-            elif kind == "del":
-                style = "on #1e1e2e"
-                line_style = PALETTE["red"]
-                marker = "-"
+        side_attr = side.lower()
+        for row in rows:
+            is_current = (current_hunk is not None
+                          and row.hunk_index == current_hunk)
+            if side == "BASE" and decisions is not None:
+                cell = _effective_middle_cell(row, decisions)
             else:
-                style = "on #1e1e2e"
-                line_style = PALETTE["text"]
-                marker = " "
-            prefix = f"{gutter}{marker} "
-            body = raw
-            if len(body) > LONG_LINE_HL_CUTOFF:
-                body = body[:LONG_LINE_HL_CUTOFF] + "…"
-            if cursor_line == i:
-                out.append(prefix, style=f"bold {line_style}")
-                out.append(body + "\n", style=f"bold on {PALETTE['surface0']} {line_style}")
-            else:
-                out.append(prefix, style=line_style)
-                out.append(body + "\n", style=line_style)
+                cell = getattr(row, side_attr)
+            out.append_text(_render_cell(cell, row.is_hunk, is_current))
         return out
 
-    class DiffPane(Static):
-        """One side of the merge view: YOURS, BASE, or THEIRS."""
+    class DiffPane(VerticalScroll):
+        """One side of the merge view: YOURS, BASE, or THEIRS.
+
+        A scrollable container with a single Static body. Scroll state is
+        driven from the screen (not the pane) so the three panes move in
+        lockstep when the user presses j/k/page-up/page-down/home/end.
+
+        ``can_focus = False`` is critical: ``VerticalScroll`` is focusable
+        by default, and when a pane has focus it intercepts arrow/scroll
+        keys and our decision keys (y/t/b/B/x) before the MergeScreen
+        bindings get a chance to fire. Keeping focus on the screen lets
+        every key route through screen-level BINDINGS.
+        """
+
+        can_focus = False
+        can_focus_children = False
 
         def __init__(self, title: str, *, kind: str) -> None:
             super().__init__(id=f"pane-{kind.lower()}")
-            self._title = title
             self._kind = kind
+            self.border_title = title
             self.add_class("pane")
             self.add_class(f"pane-{kind.lower()}")
-            self._content = Text("(loading)")
+            self.body = Static("(loading)", expand=True)
 
-        def update_content(self, text: Text) -> None:
-            self._content = text
-            self.update(text)
+        def compose(self) -> ComposeResult:
+            yield self.body
+
+        def set_content(self, text: Text) -> None:
+            self.body.update(text)
 
     class HelpScreen(ModalScreen):
         BINDINGS = [Binding("escape,?,q", "app.pop_screen", "close")]
@@ -1263,22 +1649,75 @@ FILE LIST
   r      refresh       |   q   quit
 
 MERGE SCREEN
-  n j ↓   next hunk    |   p k ↑  prev hunk
-  y       take YOURS   |   t       take THEIRS
-  b       take BOTH (Y→T)  |  B    take BOTH (T→Y)
-  x       skip (keeps YOURS at save)
-  u       undo last per-hunk decision
-  A       take-all YOURS  |  T     take-all THEIRS
-  h ←     pan left     |   l →    pan right
-  z       toggle wrap
-  s       save (atomic write, leaves .shedosbak)
-  d       raw unified diff in pager
-  e       open YOURS in $EDITOR
-  E       open merged-so-far in $EDITOR
-  q       cancel & save draft"""
+  j ↓ k ↑   scroll one line
+  PgDn/PgUp (ctrl-d/ctrl-u)   scroll one page
+  g G       top / bottom
+  n p       next / prev hunk (re-centers)
+  y         take YOURS   |   t   take THEIRS
+  b         take BOTH (Y→T)  |  B  take BOTH (T→Y)
+  x         skip (keeps YOURS at save)
+  u         undo last per-hunk decision
+  A         take-all YOURS  |  T  take-all THEIRS
+  s         save (atomic write, leaves .shedosbak)
+  d         raw unified diff in pager
+  e         open YOURS in $EDITOR
+  E         open merged-so-far in $EDITOR
+  q         cancel & save draft"""
 
         def compose(self) -> ComposeResult:
             yield Static(Text.from_markup(self.HELP), classes="dialog")
+
+    class RawDiffScreen(ModalScreen):
+        """Full-screen pager for unified YOURS↔THEIRS diff.
+
+        Kept deliberately simple: scrollable container with a single
+        pre-rendered ``Text`` block. Colors follow the Catppuccin palette
+        (green additions, red deletions, mauve hunk headers) so the view
+        matches the inline merge pane semantics.
+        """
+
+        BINDINGS = [Binding("escape,q,d", "app.pop_screen", "close")]
+
+        def __init__(self, relpath: str, yours_lines: list[str],
+                     theirs_lines: list[str]) -> None:
+            super().__init__()
+            self._relpath = relpath
+            self._yours = yours_lines
+            self._theirs = theirs_lines
+
+        def compose(self) -> ComposeResult:
+            diff = list(unified_diff(self._yours, self._theirs,
+                                     fromfile=f"YOURS/{self._relpath}",
+                                     tofile=f"THEIRS/{self._relpath}",
+                                     lineterm=""))
+            body = Text()
+            if not diff:
+                body.append(
+                    "(no textual difference between YOURS and THEIRS)\n",
+                    style=PALETTE["overlay0"],
+                )
+            for line in diff:
+                if line.startswith("+++") or line.startswith("---"):
+                    style = f"bold {PALETTE['blue']}"
+                elif line.startswith("@@"):
+                    style = f"bold {PALETTE['mauve']}"
+                elif line.startswith("+"):
+                    style = PALETTE["green"]
+                elif line.startswith("-"):
+                    style = PALETTE["red"]
+                else:
+                    style = PALETTE["text"]
+                body.append(line + "\n", style=style)
+            body.append(
+                "\n[esc/q/d to close]\n",
+                style=PALETTE["overlay0"],
+            )
+            scroller = VerticalScroll(
+                Static(body, expand=True),
+                id="raw-diff-scroll",
+            )
+            scroller.can_focus = True
+            yield scroller
 
     class ConfirmScreen(ModalScreen):
         def __init__(self, title: str, body: str, default_yes: bool = False) -> None:
@@ -1305,14 +1744,22 @@ MERGE SCREEN
 
     # ---------- File list screen ----------
     class FileListScreen(Screen):
+        # All bindings set show=True so the Footer widget advertises them.
+        # DataTable eats Enter (emits RowSelected) and the arrow keys before
+        # screen-level bindings fire; j/k are wired to cursor moves here so
+        # vim-style nav still works inside the DataTable.
         BINDINGS = [
-            Binding("q", "quit", "quit"),
-            Binding("enter,l,right", "open", "open"),
-            Binding("a", "accept_all_theirs", "accept-theirs-all"),
-            Binding("K", "keep_all_yours", "keep-yours-all"),
-            Binding("r", "refresh", "refresh"),
-            Binding("question_mark,f1", "help", "help"),
-            Binding("slash", "filter", "filter"),
+            Binding("j",                "cursor_down",      "↓"),
+            Binding("k",                "cursor_up",        "↑"),
+            Binding("g",                "cursor_top",       "top"),
+            Binding("G",                "cursor_bottom",    "bot"),
+            Binding("l,right",          "open",             "open"),
+            Binding("a",                "accept_all_theirs", "take-theirs-all"),
+            Binding("K",                "keep_all_yours",   "keep-yours-all"),
+            Binding("r",                "refresh",          "refresh"),
+            Binding("slash",            "filter",           "filter"),
+            Binding("question_mark,f1", "help",             "help"),
+            Binding("q",                "quit",             "quit"),
         ]
 
         def __init__(self, app_ref: "ReviewApp") -> None:
@@ -1324,8 +1771,7 @@ MERGE SCREEN
             self.table = DataTable(cursor_type="row", zebra_stripes=False)
             self.table.add_columns("#", "path", "kind", "hunks", "size", "base")
             yield self.table
-            yield Static("j/k move · enter open · a take-theirs-all · K keep-yours-all · / filter · ? help · q quit",
-                         id="hint-bar")
+            yield Footer()
 
         def on_mount(self) -> None:
             self.refresh_table()
@@ -1348,6 +1794,31 @@ MERGE SCREEN
 
         def action_quit(self) -> None:
             self.app.exit()
+
+        def action_cursor_down(self) -> None:
+            self.table.action_cursor_down()
+
+        def action_cursor_up(self) -> None:
+            self.table.action_cursor_up()
+
+        def action_cursor_top(self) -> None:
+            if self.table.row_count:
+                self.table.move_cursor(row=0)
+
+        def action_cursor_bottom(self) -> None:
+            if self.table.row_count:
+                self.table.move_cursor(row=self.table.row_count - 1)
+
+        def on_data_table_row_selected(self, event) -> None:
+            # Fired when the user presses Enter (or double-clicks) on a row.
+            # DataTable owns the Enter key — screen-level Enter binding never
+            # fires — so activation has to go through this handler.
+            idx = getattr(event, "cursor_row", None)
+            if idx is None:
+                return
+            if idx < 0 or idx >= len(self._app_ref.conflicts):
+                return
+            self._app_ref.open_conflict(self._app_ref.conflicts[idx])
 
         def action_open(self) -> None:
             if self.table.row_count == 0:
@@ -1394,23 +1865,37 @@ MERGE SCREEN
 
     # ---------- Merge screen ----------
     class MergeScreen(Screen):
+        # Navigation split:
+        #   j/k/↑/↓/PgUp/PgDn/g/G  → scroll all panes in lockstep
+        #   n/p                    → move "current hunk" and re-center
+        #   y/t/b/B/x              → decision on current hunk (advances)
+        # Footer displays every binding with show=True in insertion order.
+        # We surface the scroll keys (even the obvious arrow aliases) so the
+        # user can verify the TUI actually handles them — the previous
+        # hidden-arrow design made it look like scroll was broken.
         BINDINGS = [
-            Binding("n,j,down", "next_hunk", "next"),
-            Binding("p,k,up", "prev_hunk", "prev"),
-            Binding("y", "take_yours", "take YOURS"),
-            Binding("t", "take_theirs", "take THEIRS"),
-            Binding("b", "take_both_yt", "take BOTH Y→T"),
-            Binding("B", "take_both_ty", "take BOTH T→Y"),
-            Binding("x", "skip_hunk", "skip"),
-            Binding("u", "undo", "undo"),
-            Binding("shift+a", "all_yours", "take-all YOURS"),
-            Binding("shift+t", "all_theirs", "take-all THEIRS"),
-            Binding("s", "save", "save"),
-            Binding("d", "raw_diff", "raw diff"),
-            Binding("e", "edit_yours", "$EDITOR yours"),
-            Binding("shift+e", "edit_merged", "$EDITOR merged"),
-            Binding("q", "cancel", "cancel"),
-            Binding("question_mark,f1", "help", "help"),
+            Binding("j,down",       "scroll_down",      "↓ line"),
+            Binding("k,up",         "scroll_up",        "↑ line"),
+            Binding("pagedown,ctrl+d", "scroll_page_down", "PgDn"),
+            Binding("pageup,ctrl+u",   "scroll_page_up",   "PgUp"),
+            Binding("g",            "scroll_home",      "top"),
+            Binding("G",            "scroll_end",       "bot"),
+            Binding("n",            "next_hunk",        "next hunk"),
+            Binding("p",            "prev_hunk",        "prev hunk"),
+            Binding("y",            "take_yours",       "YOURS"),
+            Binding("t",            "take_theirs",      "THEIRS"),
+            Binding("b",            "take_both_yt",     "both Y→T"),
+            Binding("B",            "take_both_ty",     "both T→Y"),
+            Binding("x",            "skip_hunk",        "skip"),
+            Binding("u",            "undo",             "undo"),
+            Binding("shift+a",      "all_yours",        "all-Y"),
+            Binding("shift+t",      "all_theirs",       "all-T"),
+            Binding("s",            "save",             "save"),
+            Binding("d",            "raw_diff",         "raw-diff"),
+            Binding("e",            "edit_yours",       "edit"),
+            Binding("shift+e",      "edit_merged",      "edit merged"),
+            Binding("q",            "cancel",           "cancel"),
+            Binding("question_mark,f1", "help",         "help"),
         ]
 
         def __init__(self, app_ref: "ReviewApp", state: MergeState) -> None:
@@ -1418,23 +1903,32 @@ MERGE SCREEN
             self._app_ref = app_ref
             self.state = state
             self.current = 0
+            self.rows: list[AlignedRow] = build_aligned_rows(state)
+            # row index → index within state.hunks (for n/p + auto-scroll).
+            self._row_of_hunk: dict[int, int] = {}
+            for idx, r in enumerate(self.rows):
+                if r.hunk_index is not None and r.hunk_index not in self._row_of_hunk:
+                    self._row_of_hunk[r.hunk_index] = idx
 
         def compose(self) -> ComposeResult:
             yield Banner("")
             if self.state.is_2way:
-                self.pane_yours = DiffPane("YOURS (live)", kind="YOURS")
+                self.pane_yours  = DiffPane("YOURS (live)",      kind="YOURS")
                 self.pane_theirs = DiffPane("THEIRS (upstream)", kind="THEIRS")
-                self.pane_base = None
-                yield Horizontal(self.pane_yours, self.pane_theirs)
+                self.pane_base: Optional[DiffPane] = None
+                yield Horizontal(self.pane_yours, self.pane_theirs, id="merge-row")
             else:
-                self.pane_yours = DiffPane("YOURS (live)", kind="YOURS")
-                self.pane_base = DiffPane("BASE (last seen)", kind="BASE")
-                self.pane_theirs = DiffPane("THEIRS (upstream)", kind="THEIRS")
-                yield Horizontal(self.pane_yours, self.pane_base, self.pane_theirs)
+                self.pane_yours  = DiffPane("YOURS (live)",        kind="YOURS")
+                self.pane_base   = DiffPane("RESULT (preview)",    kind="BASE")
+                self.pane_theirs = DiffPane("THEIRS (upstream)",   kind="THEIRS")
+                yield Horizontal(self.pane_yours, self.pane_base,
+                                 self.pane_theirs, id="merge-row")
             self.strip = HunkStrip()
             yield self.strip
-            yield Static("y/t/b/B/x  u undo  A/T all  s save  e edit  d raw-diff  q cancel  ? help",
-                         id="hint-bar")
+            # Footer auto-renders every `show=True` binding — it's our source
+            # of truth for "what keys do what", so the user never has to
+            # memorize or hit `?` just to find ctrl-d/pgup/g/G.
+            yield Footer()
 
         def on_mount(self) -> None:
             banner = self.query_one("#banner", Banner)
@@ -1444,77 +1938,67 @@ MERGE SCREEN
                           f"hunk {self.current+1}/{len(self.state.hunks)}   "
                           f"pkg={self.state.pkg}   ? help   s save")
             self._render_all()
+            # Scroll to the first hunk on entry so the user lands on something
+            # actionable, not the top of a 500-line file.
+            self.call_after_refresh(self._focus_current_hunk)
+
+        def _panes(self) -> list["DiffPane"]:
+            return [p for p in (self.pane_yours, self.pane_base, self.pane_theirs)
+                    if p is not None]
 
         def _render_all(self) -> None:
-            # Render all three panes with per-line add/del/ctx styling keyed off
-            # the current hunk. Outside the current hunk range, lines are ctx-dim.
-            self._render_pane_yours()
-            self._render_pane_theirs()
+            cur = self.current if 0 <= self.current < len(self.state.hunks) else None
+            self.pane_yours.set_content(
+                render_pane_text(self.rows, "YOURS", cur))
+            self.pane_theirs.set_content(
+                render_pane_text(self.rows, "THEIRS", cur))
             if self.pane_base is not None:
-                self._render_pane_base()
+                # Middle pane re-renders against the current decision map so
+                # y/t/b/B/x/u/A/T all produce a visible result-preview update.
+                decisions = {h.index: h.decision for h in self.state.hunks}
+                self.pane_base.set_content(
+                    render_pane_text(self.rows, "BASE", cur,
+                                     decisions=decisions))
             self.strip.update_from(self.state, self.current)
             banner = self.query_one("#banner", Banner)
-            banner.update(f"{self.state.relpath}   "
-                          f"{'2-way' if self.state.is_2way else '3-way'}   "
-                          f"hunk {self.current+1}/{len(self.state.hunks)}   "
-                          f"pkg={self.state.pkg}   ? help   s save")
+            banner.update(
+                f"{self.state.relpath}   "
+                f"{'2-way' if self.state.is_2way else '3-way'}   "
+                f"hunk {self.current+1}/{len(self.state.hunks)}   "
+                f"pkg={self.state.pkg}   ? help   s save")
 
-        def _render_pane_yours(self) -> None:
-            txt = self._pane_text(self.state.yours_lines, side="YOURS")
-            self.pane_yours.update_content(txt)
+        # --- Scroll synchronization: all three panes move together. -------
+        def _sync_scroll(self, y: int) -> None:
+            for p in self._panes():
+                p.scroll_to(y=y, animate=False)
 
-        def _render_pane_theirs(self) -> None:
-            txt = self._pane_text(self.state.theirs_lines, side="THEIRS")
-            self.pane_theirs.update_content(txt)
+        def _scroll_by(self, delta: int) -> None:
+            pane = self.pane_yours
+            new_y = max(0, pane.scroll_y + delta)
+            self._sync_scroll(new_y)
 
-        def _render_pane_base(self) -> None:
-            assert self.state.base_content is not None and self.pane_base is not None
-            txt = self._pane_text(self.state.base_content, side="BASE")
-            self.pane_base.update_content(txt)
+        def _center_on_row(self, row_idx: int) -> None:
+            # Place the target row near the top of the viewport (with a little
+            # lead-in so the user sees context above it).
+            pane = self.pane_yours
+            vh = pane.size.height or 10
+            target = max(0, row_idx - max(2, vh // 4))
+            self._sync_scroll(target)
 
-        def _pane_text(self, lines: list[str], side: str) -> Text:
-            if self.current >= len(self.state.hunks):
-                # No hunks — shouldn't happen since scan filters.
-                return Text("\n".join(lines[:200]))
-            h = self.state.hunks[self.current]
-            if side == "YOURS":
-                hunk_lo, hunk_hi = h.yours_start, h.yours_end
-                add_style = PALETTE["green"] if h.yours_lines else PALETTE["overlay0"]
-                change_style = add_style
-            elif side == "THEIRS":
-                hunk_lo, hunk_hi = h.theirs_start, h.theirs_end
-                add_style = PALETTE["red"] if h.theirs_lines else PALETTE["overlay0"]
-                change_style = add_style
-            else:  # BASE
-                hunk_lo, hunk_hi = (h.base_start, h.base_end) if h.base_start >= 0 else (-1, -1)
-                change_style = PALETTE["text"]
-            # Show a context window around the hunk.
-            ctx_before = 3
-            ctx_after = 3
-            lo = max(0, (hunk_lo if hunk_lo >= 0 else 0) - ctx_before)
-            hi = min(len(lines), (hunk_hi if hunk_hi >= 0 else 0) + ctx_after)
-            if hi <= lo:
-                lo, hi = 0, min(len(lines), 20)
-            out = Text()
-            for i in range(lo, hi):
-                raw = lines[i]
-                if len(raw) > LONG_LINE_HL_CUTOFF:
-                    raw = raw[:LONG_LINE_HL_CUTOFF] + "…"
-                gutter = f"{i+1:>4} "
-                in_hunk = hunk_lo <= i < hunk_hi and hunk_lo >= 0
-                if in_hunk and side == "YOURS":
-                    out.append(f"{gutter}- ", style=PALETTE["red"])
-                    out.append(raw + "\n", style=PALETTE["red"])
-                elif in_hunk and side == "THEIRS":
-                    out.append(f"{gutter}+ ", style=PALETTE["green"])
-                    out.append(raw + "\n", style=PALETTE["green"])
-                elif in_hunk and side == "BASE":
-                    out.append(f"{gutter}  ", style=PALETTE["text"])
-                    out.append(raw + "\n", style=PALETTE["text"])
-                else:
-                    out.append(f"{gutter}  ", style=PALETTE["overlay0"])
-                    out.append(raw + "\n", style=PALETTE["overlay0"])
-            return out
+        def action_scroll_down(self) -> None:       self._scroll_by(1)
+        def action_scroll_up(self) -> None:         self._scroll_by(-1)
+        def action_scroll_page_down(self) -> None:
+            self._scroll_by(max(1, (self.pane_yours.size.height or 10) - 2))
+        def action_scroll_page_up(self) -> None:
+            self._scroll_by(-max(1, (self.pane_yours.size.height or 10) - 2))
+        def action_scroll_home(self) -> None:       self._sync_scroll(0)
+        def action_scroll_end(self) -> None:        self._sync_scroll(len(self.rows))
+
+        def _focus_current_hunk(self) -> None:
+            if 0 <= self.current < len(self.state.hunks):
+                row = self._row_of_hunk.get(self.current)
+                if row is not None:
+                    self._center_on_row(row)
 
         def _decision_and_advance(self, side: Side) -> None:
             if not self.state.hunks:
@@ -1528,16 +2012,19 @@ MERGE SCREEN
             if self.current < len(self.state.hunks) - 1:
                 self.current += 1
             self._render_all()
+            self._focus_current_hunk()
 
         def action_next_hunk(self) -> None:
             if self.current < len(self.state.hunks) - 1:
                 self.current += 1
                 self._render_all()
+                self._focus_current_hunk()
 
         def action_prev_hunk(self) -> None:
             if self.current > 0:
                 self.current -= 1
                 self._render_all()
+                self._focus_current_hunk()
 
         def action_take_yours(self) -> None: self._decision_and_advance(Side.YOURS)
         def action_take_theirs(self) -> None: self._decision_and_advance(Side.THEIRS)
@@ -1621,11 +2108,11 @@ MERGE SCREEN
             self.app.pop_screen()
 
         def action_raw_diff(self) -> None:
-            a = self.state.yours_lines
-            b = self.state.theirs_lines
-            diff = list(unified_diff(a, b, "YOURS", "THEIRS", lineterm=""))
-            body = "\n".join(diff[:400]) or "(no diff)"
-            self.app.push_screen(HelpScreen())  # simple reuse; a dedicated pager is a future polish
+            self.app.push_screen(RawDiffScreen(
+                self.state.relpath,
+                self.state.yours_lines,
+                self.state.theirs_lines,
+            ))
 
         def action_edit_yours(self) -> None:
             self._edit_and_reload(self.state.yours_path)
