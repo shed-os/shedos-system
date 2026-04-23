@@ -21,23 +21,32 @@
 set -u
 # Intentionally no `-e`: yad returns non-zero on Cancel, which is normal.
 
-CATALOG="/usr/share/shedos/apps-catalog.tsv"
+# Catalog path — $SHEDOS_APPS_CATALOG lets a dev point at the in-tree copy
+# without needing to install the package first.
+CATALOG="${SHEDOS_APPS_CATALOG:-/usr/share/shedos/apps-catalog.tsv}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/shedos"
 MARKER="$STATE_DIR/apps-installer-done"
 
 FORCE=0
+DRY_RUN=0
 for arg in "$@"; do
     case "$arg" in
         --force|-f) FORCE=1 ;;
+        --dry-run|-n) DRY_RUN=1 ;;
         --help|-h)
             cat <<EOF
-Usage: shedos-apps-installer [--force]
+Usage: shedos-apps-installer [--force] [--dry-run]
 
 Opt-in installer for proprietary apps (VS Code, Chrome, Slack, …) that
 can't be bundled in the default ShedOS image.
 
-  -f, --force   Re-run even if the first-boot step has already completed.
-  -h, --help    Show this message.
+  -f, --force     Re-run even if the first-boot step has already completed.
+  -n, --dry-run   Walk the UI but print the yay command instead of running
+                  it. Writes no marker. Useful for dev testing.
+  -h, --help      Show this message.
+
+Environment:
+  SHEDOS_APPS_CATALOG   Override the catalog path (dev testing).
 EOF
             exit 0
             ;;
@@ -219,7 +228,10 @@ fi
 
 # ---- Install with yay ------------------------------------------------------
 
-if ! command -v yay >/dev/null 2>&1; then
+# In dry-run we don't invoke yay at all — the UI, selection parsing, and
+# final command string are what's under test; the package install is just
+# yay doing yay things.
+if [[ $DRY_RUN -eq 0 ]] && ! command -v yay >/dev/null 2>&1; then
     yad --error --title="ShedOS Apps" --width=400 --center \
         --text="<b>yay is not installed.</b>\n\nInstall it with:\n<tt>sudo pacman -S yay</tt>\n\nThen re-run ShedOS Apps from the launcher." \
         2>/dev/null
@@ -256,7 +268,18 @@ trap 'rm -f "$STATUS_FILE"' EXIT
 # cheap. No --noconfirm: yay's own prompts (PKGBUILD review, sudo) are
 # the user's to answer; silencing them would be rude on code that
 # downloads and builds arbitrary vendor binaries.
-INSTALL_SCRIPT=$(cat <<EOS
+if [[ $DRY_RUN -eq 1 ]]; then
+    INSTALL_SCRIPT=$(cat <<EOS
+echo
+echo "DRY RUN — would execute:"
+echo "    yay -S --needed ${PKGS[*]}"
+echo
+echo "0" > "$STATUS_FILE"
+read -rp "Press Enter to close this window… " _
+EOS
+)
+else
+    INSTALL_SCRIPT=$(cat <<EOS
 set -o pipefail
 echo
 echo "Installing: ${PKGS[*]}"
@@ -275,6 +298,7 @@ fi
 read -rp "Press Enter to close this window… " _
 EOS
 )
+fi
 
 "${TERM_CMD[@]}" bash -c "$INSTALL_SCRIPT"
 
@@ -282,7 +306,9 @@ RC=1
 [[ -r "$STATUS_FILE" ]] && RC=$(cat "$STATUS_FILE" 2>/dev/null || echo 1)
 
 if [[ "$RC" == "0" ]]; then
-    touch "$MARKER"
+    # Dry runs don't persist the marker — keeps the dev UI loop runnable
+    # and leaves a real first-boot user's state untouched.
+    [[ $DRY_RUN -eq 0 ]] && touch "$MARKER"
     yad --info --title="ShedOS Apps" --width=420 --center \
         --window-icon=emblem-default \
         --image=emblem-default \
