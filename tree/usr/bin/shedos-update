@@ -248,7 +248,12 @@ if (( aur_n > 0 )); then
     if (( YES )); then
         echo "Running yay -Sua --noconfirm…"
     else
-        echo "Running yay -Sua (yay will prompt again)…"
+        echo "Running yay -Sua…"
+        echo
+        echo "yay will pause at a 'Packages to exclude:' prompt. This is the"
+        echo "main interactive gate — press ENTER to accept all $aur_n AUR"
+        echo "update(s), or type numbers (e.g. '1 3') to skip specific ones."
+        echo "After that, pacman will ask one more time to confirm the install."
     fi
     _hr
     aur_args=(-Sua)
