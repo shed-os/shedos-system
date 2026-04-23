@@ -86,6 +86,7 @@ post_install() {
     # instance picks it up on next login without any per-user bootstrap.
     systemctl --global enable shedos-update-check.timer || true
     systemctl --global enable shedos-check-health.timer || true
+    systemctl --global enable shedos-doctor.timer || true
 
     _add_shedos_repo
     _bootstrap_snapper
@@ -119,6 +120,9 @@ ShedOS system installed. Notes:
     `shedos-update --rollback`.
   * declarative system state lives at /etc/shedos/system.toml; run
     `shedos-apply --dry-run` to preview how it maps to live state.
+  * shedos-doctor checks for drift every 6 hours (user timer) and pings
+    mako + the waybar doctor pill when /etc/shedos/system.toml falls
+    out of sync with reality. Run `shedos-doctor --diff` any time.
 EOF
 }
 
@@ -127,6 +131,7 @@ post_upgrade() {
     systemctl enable shedos-pg-user-bootstrap.service || true
     systemctl --global enable shedos-update-check.timer || true
     systemctl --global enable shedos-check-health.timer || true
+    systemctl --global enable shedos-doctor.timer || true
 
     _add_shedos_repo
     _bootstrap_snapper

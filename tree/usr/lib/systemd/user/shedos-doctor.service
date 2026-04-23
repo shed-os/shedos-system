@@ -1,0 +1,6 @@
+[Unit]
+Description=Detect drift between /etc/shedos/system.toml and live state, refresh the waybar indicator, and notify when drift appears
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/shedos-doctor --tick

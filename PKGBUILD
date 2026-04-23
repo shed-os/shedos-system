@@ -6,7 +6,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.23
-pkgrel=10
+pkgrel=11
 pkgdesc='ShedOS system utilities, systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -78,6 +78,13 @@ package() {
         "$pkgdir/usr/bin/shedos-rollback"
     install -Dm755 tree/usr/bin/shedos-apply \
         "$pkgdir/usr/bin/shedos-apply"
+    install -Dm755 tree/usr/bin/shedos-doctor \
+        "$pkgdir/usr/bin/shedos-doctor"
+
+    # Shared plan engine — both shedos-apply and shedos-doctor add
+    # /usr/lib/shedos to sys.path and `import apply_core`.
+    install -Dm644 tree/usr/lib/shedos/apply_core.py \
+        "$pkgdir/usr/lib/shedos/apply_core.py"
 
     # Declarative system state. /etc/shedos/system.toml is in backup=() so
     # user edits become .pacnew on upgrade; the example template is a
@@ -119,6 +126,10 @@ package() {
         "$pkgdir/usr/lib/systemd/user/shedos-check-health.service"
     install -Dm644 tree/usr/lib/systemd/user/shedos-check-health.timer \
         "$pkgdir/usr/lib/systemd/user/shedos-check-health.timer"
+    install -Dm644 tree/usr/lib/systemd/user/shedos-doctor.service \
+        "$pkgdir/usr/lib/systemd/user/shedos-doctor.service"
+    install -Dm644 tree/usr/lib/systemd/user/shedos-doctor.timer \
+        "$pkgdir/usr/lib/systemd/user/shedos-doctor.timer"
 
     # /etc drop-ins. These go in backup=() so user edits become .pacnew on
     # upgrade rather than being silently clobbered.

@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic ShedOS drift check (6h)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=6h
+Persistent=true
+Unit=shedos-doctor.service
+
+[Install]
+WantedBy=timers.target
