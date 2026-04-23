@@ -1,0 +1,49 @@
+# /etc/shedos/system.toml — declarative system state for shedos-apply.
+#
+# This file is the default ShedOS ships with. It mirrors the behavior the
+# install scriptlet used to apply imperatively, so `shedos-apply` is a
+# no-op on a freshly-installed system.
+#
+# Edit freely. Run `shedos-apply` afterwards to reconcile. A fully-
+# commented template lives at /usr/share/shedos/system.toml.example.
+#
+# Backed up by pacman (see `backup=` in shedos-system PKGBUILD), so your
+# edits become .pacnew on upgrade instead of being overwritten.
+
+schema = 1
+
+[systemd.system]
+enable = [
+    "snapper-timeline.timer",
+    "snapper-cleanup.timer",
+]
+disable = []
+
+[systemd.user]
+enable = [
+    "shedos-update-check.timer",
+    "shedos-check-health.timer",
+]
+disable = []
+
+[snapper.timeline]
+enabled = true
+hourly  = 5
+daily   = 7
+weekly  = 0
+monthly = 0
+yearly  = 0
+
+[snapper.cleanup.number]
+limit = 50
+
+# [drop-ins] — intentionally empty in the default.
+#
+# The /etc drop-ins that shedos-system already ships (sudoers.d/wheel,
+# sddm.conf.d/theme.conf, NetworkManager/conf.d/*) are managed by pacman
+# via backup=() so user edits become .pacnew on upgrade. If shedos-apply
+# took ownership of those same files there'd be a fight between pacman's
+# .pacnew merge and shedos-apply's reconcile.
+#
+# Only declare drop-ins here that aren't already pacman-managed. See the
+# example template for syntax.

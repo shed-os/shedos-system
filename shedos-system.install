@@ -117,6 +117,8 @@ ShedOS system installed. Notes:
   * snapper is configured for / with a default pre/post policy; every
     shedos-update run snapshots before and after. Roll back with
     `shedos-update --rollback`.
+  * declarative system state lives at /etc/shedos/system.toml; run
+    `shedos-apply --dry-run` to preview how it maps to live state.
 EOF
 }
 

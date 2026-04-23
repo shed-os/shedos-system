@@ -1,0 +1,95 @@
+# system.toml.example — fully-commented template for /etc/shedos/system.toml
+#
+# Copy sections you want to customize into /etc/shedos/system.toml and run
+# `shedos-apply` to reconcile. `shedos-apply --dry-run` prints the plan
+# without touching anything; `shedos-apply --validate` only checks syntax.
+#
+# The schema version is frozen at 1. shedos-apply refuses unknown versions
+# with a pointed error — safer than silent reinterpretation.
+
+schema = 1
+
+# ---------------------------------------------------------------------------
+# [systemd.system] / [systemd.user]
+# ---------------------------------------------------------------------------
+#
+# `enable`  — units that should be enabled (systemctl enable). Missing
+#             ones will be enabled on apply.
+# `disable` — units that should be disabled. Any enabled ones get
+#             disabled on apply.
+#
+# A unit appearing in both enable and disable is rejected at validation
+# time (there is no coherent meaning for "enable and disable").
+#
+# User units are reconciled via `systemctl --user --global` so they apply
+# to every user on this machine. Per-user exceptions are not in v1 scope.
+
+[systemd.system]
+enable = [
+    "snapper-timeline.timer",
+    "snapper-cleanup.timer",
+    # Uncomment if this host runs the ShedOS postgres bootstrap:
+    # "shedos-pg-initdb.service",
+    # Uncomment to enable bluetooth at boot:
+    # "bluetooth.service",
+]
+disable = [
+    # "cups.service",   # if you don't print from this box
+]
+
+[systemd.user]
+enable = [
+    "shedos-update-check.timer",
+    "shedos-check-health.timer",
+    # "shedos-pg-user-bootstrap.service",  # if per-user-db is on
+]
+disable = []
+
+# ---------------------------------------------------------------------------
+# [snapper] — timeline + retention knobs for the `root` config
+# ---------------------------------------------------------------------------
+#
+# Only the TIMELINE_* and NUMBER_LIMIT keys in /etc/snapper/configs/root are
+# managed. Everything else (SUBVOLUME, QGROUP, ACL flags, user cleanup
+# algos) is left untouched so snapper's own tooling stays authoritative.
+#
+# Omitting a subkey means "leave current value alone" — not "reset to
+# zero". The declarative layer is additive over what snapper ships.
+
+[snapper.timeline]
+enabled = true   # TIMELINE_CREATE
+hourly  = 5      # TIMELINE_LIMIT_HOURLY
+daily   = 7      # TIMELINE_LIMIT_DAILY
+weekly  = 0      # TIMELINE_LIMIT_WEEKLY
+monthly = 0      # TIMELINE_LIMIT_MONTHLY
+yearly  = 0      # TIMELINE_LIMIT_YEARLY
+
+[snapper.cleanup.number]
+limit = 50       # NUMBER_LIMIT — max snapshots before oldest get culled
+
+# ---------------------------------------------------------------------------
+# [drop-ins] — file-content entries under /etc/<relpath>
+# ---------------------------------------------------------------------------
+#
+# Keys are paths RELATIVE to /etc — they must contain at least one "/" and
+# end in a known config extension (.conf, .rules, .json, .cfg, ...).
+# Values are the full file content as a literal TOML string.
+#
+# shedos-apply tracks ownership of drop-ins in /var/lib/shedos/apply.state.json.
+# Removing a drop-in from here deletes the file on the next apply.
+#
+# WARNING: do NOT declare drop-ins that are already managed by a package's
+# backup=() entry (sudoers.d/wheel, sddm.conf.d/theme.conf, etc.) —
+# shedos-apply and pacman will fight over ownership. Stick to bespoke
+# drop-ins that no package claims.
+
+# [drop-ins]
+# "systemd/coredump.conf.d/50-shedos.conf" = """\
+# [Coredump]
+# Storage=none
+# ProcessSizeMax=0
+# """
+#
+# "sysctl.d/99-shedos-swappiness.conf" = """\
+# vm.swappiness = 10
+# """

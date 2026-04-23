@@ -6,7 +6,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.23
-pkgrel=9
+pkgrel=10
 pkgdesc='ShedOS system utilities, systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -39,6 +39,7 @@ backup=(
     'etc/NetworkManager/conf.d/20-connection-defaults.conf'
     'etc/NetworkManager/conf.d/wifi_backend.conf'
     'etc/os-release'
+    'etc/shedos/system.toml'
 )
 install=shedos-system.install
 
@@ -75,6 +76,16 @@ package() {
         "$pkgdir/usr/bin/shedos-apps-installer"
     install -Dm755 tree/usr/bin/shedos-rollback \
         "$pkgdir/usr/bin/shedos-rollback"
+    install -Dm755 tree/usr/bin/shedos-apply \
+        "$pkgdir/usr/bin/shedos-apply"
+
+    # Declarative system state. /etc/shedos/system.toml is in backup=() so
+    # user edits become .pacnew on upgrade; the example template is a
+    # read-only reference under /usr/share/shedos/.
+    install -Dm644 tree/etc/shedos/system.toml \
+        "$pkgdir/etc/shedos/system.toml"
+    install -Dm644 tree/usr/share/shedos/system.toml.example \
+        "$pkgdir/usr/share/shedos/system.toml.example"
 
     # Snapper config template — copied to /etc/snapper/configs/root by the
     # install scriptlet on first install. Kept out of /etc itself so we
