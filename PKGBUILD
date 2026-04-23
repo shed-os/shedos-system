@@ -6,7 +6,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.23
-pkgrel=8
+pkgrel=9
 pkgdesc='ShedOS system utilities, systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -67,6 +67,8 @@ package() {
         "$pkgdir/usr/bin/shedos-review-configs"
     install -Dm755 tree/usr/bin/shedos-logs \
         "$pkgdir/usr/bin/shedos-logs"
+    install -Dm755 tree/usr/bin/shedos-upgrade-history \
+        "$pkgdir/usr/bin/shedos-upgrade-history"
     install -Dm755 tree/usr/bin/shedos-pg-user-bootstrap \
         "$pkgdir/usr/bin/shedos-pg-user-bootstrap"
     install -Dm755 tree/usr/bin/shedos-apps-installer \
