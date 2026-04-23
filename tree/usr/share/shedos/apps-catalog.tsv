@@ -1,0 +1,19 @@
+# ShedOS proprietary app catalog — installed on demand via shedos-apps-installer.
+#
+# These are AUR packages whose licenses forbid redistribution through
+# repo.shedos.org, so they are NOT shipped in the default install. The
+# installer surfaces them as an opt-in checklist on first boot and can be
+# re-opened at any time from the app launcher.
+#
+# Format (tab-separated, one row per package):
+#   aur_pkg \t category \t display_name \t description \t icon
+#
+# Categories are grouped verbatim in the picker UI — keep them short.
+# Icon column is a Freedesktop icon name; fallback is "package-x-generic".
+
+visual-studio-code-bin	Editors	Visual Studio Code	Microsoft's cross-platform code editor with IntelliSense and the full marketplace.	visual-studio-code
+google-chrome	Browsers	Google Chrome	Google's browser — sign-in sync, Widevine for streaming services.	google-chrome
+slack-desktop	Communication	Slack	Official Slack desktop client for team chat, huddles, and calls.	slack
+obsidian-bin	Productivity	Obsidian	Local-first markdown knowledge base with graph view and plugins.	obsidian
+postman-bin	Productivity	Postman	API client for building, testing, and documenting HTTP APIs.	postman
+ttf-ms-fonts	Fonts	Microsoft Core Fonts	Arial, Times New Roman, Georgia, Verdana — useful for .docx compatibility.	font-x-generic

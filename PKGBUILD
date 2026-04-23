@@ -6,7 +6,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.23
-pkgrel=1
+pkgrel=2
 pkgdesc='ShedOS system utilities, systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -24,8 +24,11 @@ depends=(
 )
 optdepends=(
     'postgresql: shedos-pg-initdb.service initializes a cluster on first boot'
-    'yay: AUR update checks in shedos-check-updates / shedos-update'
-    'kitty: default terminal the waybar indicator opens for shedos-update'
+    'yay: AUR updates in shedos-update, and the first-boot apps installer'
+    'kitty: default terminal for shedos-update and the apps installer'
+    'yad: GUI dialogs for shedos-welcome and the apps installer'
+    'networkmanager: connectivity check in the apps installer'
+    'nm-connection-editor: launched by the apps installer when offline'
 )
 backup=(
     'etc/sudoers.d/wheel'
@@ -59,6 +62,14 @@ package() {
         "$pkgdir/usr/bin/shedos-review-configs"
     install -Dm755 tree/usr/bin/shedos-pg-user-bootstrap \
         "$pkgdir/usr/bin/shedos-pg-user-bootstrap"
+    install -Dm755 tree/usr/bin/shedos-apps-installer \
+        "$pkgdir/usr/bin/shedos-apps-installer"
+
+    # Shared data + app launcher entry for the apps installer.
+    install -Dm644 tree/usr/share/shedos/apps-catalog.tsv \
+        "$pkgdir/usr/share/shedos/apps-catalog.tsv"
+    install -Dm644 tree/usr/share/applications/shedos-apps.desktop \
+        "$pkgdir/usr/share/applications/shedos-apps.desktop"
 
     # Systemd (system-scope)
     install -Dm644 tree/usr/lib/systemd/system/shedos-pg-initdb.service \

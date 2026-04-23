@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ShedOS Apps
+GenericName=Install proprietary apps
+Comment=Install VS Code, Chrome, Slack, and other vendor apps on demand
+Exec=/usr/bin/shedos-apps-installer --force
+Icon=system-software-install
+Terminal=false
+Categories=System;Settings;PackageManager;
+Keywords=install;apps;proprietary;vscode;chrome;slack;obsidian;postman;
+StartupNotify=true
