@@ -47,3 +47,16 @@ limit = 50
 #
 # Only declare drop-ins here that aren't already pacman-managed. See the
 # example template for syntax.
+
+# The [shedos] repo stanza in /etc/pacman.conf. The install scriptlet
+# writes an initial fence on first install; ongoing edits flow through
+# shedos-apply so you can add extra repos or tweak SigLevel here.
+[pacman.repos.shedos]
+server   = "https://repo.shedos.org/$arch"
+siglevel = "Required DatabaseRequired"
+
+# PostgreSQL bootstrap — mirrors what the install scriptlet enables.
+# Flip either to false to mask the corresponding unit.
+[services.postgresql]
+auto-init   = true   # shedos-pg-initdb.service
+per-user-db = true   # shedos-pg-user-bootstrap.service

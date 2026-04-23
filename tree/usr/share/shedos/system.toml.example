@@ -93,3 +93,49 @@ limit = 50       # NUMBER_LIMIT — max snapshots before oldest get culled
 # "sysctl.d/99-shedos-swappiness.conf" = """\
 # vm.swappiness = 10
 # """
+
+# ---------------------------------------------------------------------------
+# [pacman.repos.<name>] — managed stanzas in /etc/pacman.conf
+# ---------------------------------------------------------------------------
+#
+# shedos-apply owns a fenced block between `# >>> shedos <<<` and
+# `# <<< shedos >>>` in /etc/pacman.conf. The install scriptlet writes the
+# initial fence on first install; ongoing edits flow through shedos-apply.
+#
+# Each repo table below becomes one [<name>] stanza inside the fence.
+# Anything outside the fence (e.g. [core], [extra], [multilib], or the
+# global [options] block) is left strictly alone.
+#
+# Required keys per repo:
+#   server    — the Server URL (supports $arch)
+# Optional:
+#   siglevel  — SigLevel directive (default "Required DatabaseRequired")
+#
+# Dropping the entire [pacman.repos] table removes all managed repos on
+# the next apply (the fence stays empty). Removing a single stanza
+# removes just that repo.
+
+[pacman.repos.shedos]
+server   = "https://repo.shedos.org/$arch"
+siglevel = "Required DatabaseRequired"
+
+# Add your own repo:
+# [pacman.repos.my-mirror]
+# server   = "https://pkgs.example.org/$repo/$arch"
+# siglevel = "Optional TrustAll"
+
+# ---------------------------------------------------------------------------
+# [services.postgresql] — declarative wrapper over the bootstrap units
+# ---------------------------------------------------------------------------
+#
+# Flips below desugar to ordinary systemctl enable/disable on the two
+# shedos-pg-* units. Convenience-named so users who don't run Postgres
+# don't have to think about the underlying service names.
+#
+# Setting `auto-init = false` stops /var/lib/postgres/data from being
+# initialized on next boot. Setting `per-user-db = false` skips the
+# per-Linux-user role+database bootstrap.
+
+[services.postgresql]
+auto-init   = true   # controls shedos-pg-initdb.service
+per-user-db = true   # controls shedos-pg-user-bootstrap.service
