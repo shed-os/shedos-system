@@ -24,12 +24,19 @@
 #   .config/nvim/lazyvim.json
 #   .local/state/**
 #   .cache/**
+#
+# Users can add their own excludes in $HOME/.config/shedos/sync-exclude:
+# one glob per line (matched against the relpath), `#` for full-line
+# comments, blank lines ignored. Example template shipped at
+# /usr/share/shedos/sync-exclude.example.
 
 set -uo pipefail
 
 SHEDOS_DEFAULTS_ROOT=/usr/share/shedos
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/shedos/last-seen"
 CONTENT_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/shedos/last-seen-content"
+USER_EXCLUDE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/shedos/sync-exclude"
+USER_EXCLUDES=()
 
 DRY_RUN=0
 REBUILD_MANIFEST=0
@@ -72,12 +79,30 @@ for arg in "$@"; do
     esac
 done
 
+_load_user_excludes() {
+    [[ -f $USER_EXCLUDE_FILE && -r $USER_EXCLUDE_FILE ]] || return 0
+    local line
+    while IFS= read -r line || [[ -n $line ]]; do
+        # Trim leading/trailing whitespace.
+        line=${line#"${line%%[![:space:]]*}"}
+        line=${line%"${line##*[![:space:]]}"}
+        # Skip blanks and full-line comments (gitignore-style).
+        [[ -z $line || ${line:0:1} == "#" ]] && continue
+        USER_EXCLUDES+=("$line")
+    done < "$USER_EXCLUDE_FILE"
+}
+
 _is_excluded() {
     # $1 = relpath (no leading slash)
     case "$1" in
         .config/nvim/lazy-lock.json|.config/nvim/lazyvim.json) return 0 ;;
         .local/state/*|.cache/*) return 0 ;;
     esac
+    local pat
+    for pat in "${USER_EXCLUDES[@]}"; do
+        # shellcheck disable=SC2053  # deliberate unquoted RHS: pattern match.
+        [[ $1 == $pat ]] && return 0
+    done
     return 1
 }
 
@@ -109,6 +134,39 @@ _write_content() {
     cp --preserve=mode -- "$2" "$dest"
 }
 
+_find_excluded_stale() {
+    # Emit NUL-separated relpaths that are currently excluded (by the hardcoded
+    # list or the user's sync-exclude) but still have manifest state or a
+    # leftover .shedosnew in $HOME. Callers dedup with `sort -uz`.
+    local f relpath
+    if [[ -d $STATE_ROOT ]]; then
+        while IFS= read -r -d '' f; do
+            relpath=${f#"$STATE_ROOT/"}
+            relpath=${relpath%.sha256}
+            _is_excluded "$relpath" && printf '%s\0' "$relpath"
+        done < <(find "$STATE_ROOT" -type f -name '*.sha256' -print0 2>/dev/null)
+    fi
+    while IFS= read -r -d '' f; do
+        relpath=${f#"$HOME/"}
+        relpath=${relpath%.shedosnew}
+        _is_excluded "$relpath" && printf '%s\0' "$relpath"
+    done < <(find "$HOME" -xdev -type f -name '*.shedosnew' -print0 2>/dev/null)
+}
+
+_purge_excluded_stale() {
+    # Delete manifest + BASE + .shedosnew for every path emitted by
+    # _find_excluded_stale. Echoes a count on stdout. Caller decides whether
+    # to invoke (apply mode does; --dry-run only lists).
+    local relpath n=0
+    while IFS= read -r -d '' relpath; do
+        rm -f -- "$STATE_ROOT/$relpath.sha256"
+        rm -f -- "$CONTENT_ROOT/$relpath"
+        rm -f -- "$HOME/$relpath.shedosnew"
+        ((n++))
+    done < <(_find_excluded_stale | sort -zu)
+    printf '%d' "$n"
+}
+
 _pkg_policy() {
     # $1 = pkg name. Print policy line or "".
     local f="$SHEDOS_DEFAULTS_ROOT/$1/sync-policy"
@@ -121,6 +179,8 @@ _pkg_policy() {
 # Each entry: "<case>\t<pkg>\t<relpath>\t<src>\t<dst>\t<last>"
 # case ∈ seed | noop | auto | conflict
 # ---------------------------------------------------------------------------
+_load_user_excludes
+
 plan=()
 
 shopt -s dotglob nullglob
@@ -179,6 +239,14 @@ if (( REBUILD_MANIFEST )); then
         ((n++))
     done
     echo "Rebuilt manifest: $n entries under $STATE_ROOT"
+
+    # Also clean stale state for newly-excluded paths — rebuild-manifest is the
+    # "align my world" command, so dropping leftovers the user has opted out of
+    # fits the contract.
+    purged=$(_purge_excluded_stale)
+    if (( purged > 0 )); then
+        echo "Purged stale state for $purged excluded path(s)."
+    fi
 
     # Scan for stranded conflict/backup artefacts the user may have forgotten
     # about. After --rebuild-manifest the tool's view of the world is "aligned
@@ -241,7 +309,19 @@ done
 echo
 echo "Summary: $seed_n seed, $auto_n auto-update, $conflict_n conflict, $noop_n noop"
 
+# Preview stale state for paths the user has newly excluded (e.g. added a
+# matcher to ~/.config/shedos/sync-exclude after the last sync). Normal apply
+# path purges these below — in dry-run, we only list.
 if (( DRY_RUN )); then
+    stale_any=0
+    while IFS= read -r -d '' relpath; do
+        if (( ! stale_any )); then
+            echo
+            echo "Excluded paths with leftover state (would purge on apply):"
+            stale_any=1
+        fi
+        printf '  %s\n' "$relpath"
+    done < <(_find_excluded_stale | sort -zu)
     exit 0
 fi
 
@@ -300,6 +380,13 @@ done
 echo
 echo "Sync complete. Conflicts (if any) landed as <path>.shedosnew alongside"
 echo "your files — inspect with: find ~ -name '*.shedosnew'"
+
+# Clean up manifest + BASE + .shedosnew droppings for paths the user has newly
+# excluded. Silent unless at least one path was purged.
+purged=$(_purge_excluded_stale)
+if (( purged > 0 )); then
+    echo "Purged stale state for $purged excluded path(s)."
+fi
 
 # Refresh the waybar conflict indicator and notify if the count just went
 # up. Silent when there's nothing to see or no DBus session.

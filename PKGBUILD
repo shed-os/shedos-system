@@ -6,7 +6,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.23
-pkgrel=3
+pkgrel=4
 pkgdesc='ShedOS system utilities, systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -80,6 +80,11 @@ package() {
         "$pkgdir/usr/share/shedos/apps-catalog.tsv"
     install -Dm644 tree/usr/share/applications/shedos-apps.desktop \
         "$pkgdir/usr/share/applications/shedos-apps.desktop"
+
+    # Example user exclude list for shedos-sync-configs. Users copy this to
+    # ~/.config/shedos/sync-exclude to opt out of specific files.
+    install -Dm644 tree/usr/share/shedos/sync-exclude.example \
+        "$pkgdir/usr/share/shedos/sync-exclude.example"
 
     # Systemd (system-scope)
     install -Dm644 tree/usr/lib/systemd/system/shedos-pg-initdb.service \

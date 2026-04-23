@@ -1,0 +1,34 @@
+# ShedOS sync-configs user exclude list
+#
+# Copy this file to ~/.config/shedos/sync-exclude and edit to taste.
+# Paths listed here are excluded from the ShedOS dotfile sync — ShedOS
+# will never seed, auto-update, or drop a .shedosnew for them.
+#
+# If a path already has manifest state or a leftover .shedosnew from
+# before you excluded it, the next `shedos-sync-configs` run auto-purges
+# those droppings. Your live file in $HOME is never touched.
+#
+# Format:
+#   - One glob per line, matched against the relpath under $HOME
+#     (no leading slash).
+#   - `#` at the start of a line is a comment; blank lines are ignored.
+#   - Trailing/leading whitespace is stripped.
+#   - Globs follow bash pattern-matching rules: `*` matches any string
+#     (including `/`), `?` matches one char, `[abc]` matches a char class.
+#
+# The defaults below are always excluded regardless of this file:
+#   .config/nvim/lazy-lock.json
+#   .config/nvim/lazyvim.json
+#   .local/state/*
+#   .cache/*
+#
+# Examples — uncomment or adapt to your setup:
+
+# Keep your own hyprland bindings; don't let upstream drop .shedosnew for them.
+#.config/hypr/hyprland.conf
+
+# Ignore everything under a whole directory.
+#.config/waybar/*
+
+# Ignore a specific file under a nested tree.
+#.config/kitty/current-theme.conf
