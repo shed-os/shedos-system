@@ -6,7 +6,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.23
-pkgrel=2
+pkgrel=3
 pkgdesc='ShedOS system utilities, systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -21,6 +21,8 @@ depends=(
     'python'           # shedos-review-configs
     'python-textual'   # shedos-review-configs TUI framework
     'python-rich'      # transitive dep of textual, declared for clarity
+    'snapper'          # pre/post btrfs snapshots + --rollback (Phase 3 B#1)
+    'btrfs-progs'      # shedos-rollback calls `btrfs subvolume`
 )
 optdepends=(
     'postgresql: shedos-pg-initdb.service initializes a cluster on first boot'
@@ -64,6 +66,14 @@ package() {
         "$pkgdir/usr/bin/shedos-pg-user-bootstrap"
     install -Dm755 tree/usr/bin/shedos-apps-installer \
         "$pkgdir/usr/bin/shedos-apps-installer"
+    install -Dm755 tree/usr/bin/shedos-rollback \
+        "$pkgdir/usr/bin/shedos-rollback"
+
+    # Snapper config template — copied to /etc/snapper/configs/root by the
+    # install scriptlet on first install. Kept out of /etc itself so we
+    # don't collide with the snapper package's ownership of that directory.
+    install -Dm644 tree/usr/share/shedos/snapper/root.conf \
+        "$pkgdir/usr/share/shedos/snapper/root.conf"
 
     # Shared data + app launcher entry for the apps installer.
     install -Dm644 tree/usr/share/shedos/apps-catalog.tsv \

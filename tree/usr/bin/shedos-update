@@ -5,51 +5,158 @@
 # yay re-prompt with their own package lists. No silent paths by default.
 #
 # Flow:
-#   1. checkupdates  → list pacman updates
-#   2. yay -Qua      → list AUR updates (if yay is installed)
-#   3. y/N           → proceed?
-#   4. pacman -Syu   → pacman's own confirmation
-#   5. yay -Sua      → yay's own confirmation (if needed)
-#   6. shedos-sync-configs → 3-way merge for $HOME dotfiles (own prompt)
+#   1. checkupdates        → list pacman updates
+#   2. yay -Qua            → list AUR updates (if yay is installed)
+#   3. y/N                 → proceed?
+#   4. snapper pre         → pre-upgrade btrfs snapshot (tagged "shedos-update")
+#   5. pacman -Syu         → pacman's own confirmation
+#   6. yay -Sua            → yay's own confirmation (if needed)
+#   7. snapper post        → post-upgrade snapshot paired to the pre-snapshot
+#   8. shedos-sync-configs → 3-way merge for $HOME dotfiles (own prompt)
 #
 # --yes flips every prompt to auto-accept (noconfirm across the chain).
 # NOTE: --yes does NOT auto-resolve config conflicts — a "conflict" means
 # you AND upstream edited the same file, and silently picking a side is
 # exactly the data loss shedos-sync-configs exists to prevent. Conflicts
 # still land as <file>.shedosnew for you to reconcile by hand later.
+#
+# --rollback delegates to shedos-rollback (reboot required after).
+# --list-snapshots shows the snapper log so you can pick a rollback target.
 
 set -uo pipefail
 
 YES=0
+ACTION=upgrade      # upgrade | rollback | list-snapshots
+ROLLBACK_TARGET=""
 
 usage() {
     cat <<'EOF'
 Usage: shedos-update [--yes] [--help]
+       shedos-update --list-snapshots
+       shedos-update --rollback [N]
 
 Interactive upgrade wrapper for ShedOS: pacman -Syu → yay -Sua → shedos-sync-configs.
+Every upgrade is bracketed by a snapper pre/post btrfs snapshot pair so you
+can roll back to the pre-upgrade state if something breaks.
 
 Options:
-  -y, --yes    Unattended mode. Skip prompts, pass --noconfirm to pacman/yay,
-               and --yes to shedos-sync-configs. Conflicts still drop
-               .shedosnew files instead of overwriting your edits — no
-               silent data loss. Intended for cron/systemd-timer driven
-               upgrades on trusted systems.
-  -h, --help   This message.
+  -y, --yes         Unattended mode. Skip prompts, pass --noconfirm to pacman/yay,
+                    and --yes to shedos-sync-configs. Conflicts still drop
+                    .shedosnew files instead of overwriting your edits — no
+                    silent data loss. Intended for cron/systemd-timer driven
+                    upgrades on trusted systems.
+  --list-snapshots  Print recent snapper snapshots. Use this to find a
+                    pre-upgrade snapshot number to pass to --rollback.
+  --rollback [N]    Roll back to snapshot N (or prompt interactively if N is
+                    omitted). Delegates to shedos-rollback; requires root.
+                    Reboot is required before the rollback takes effect.
+  -h, --help        This message.
 
 Run without flags for the normal interactive flow (default answer is N
 at every prompt).
 EOF
 }
 
-for arg in "$@"; do
-    case "$arg" in
+# Parse args. Support `--rollback <N>` (two tokens) and `--rollback=N`.
+while (( $# )); do
+    case "$1" in
         -y|--yes) YES=1 ;;
         -h|--help) usage; exit 0 ;;
-        *) echo "unknown option: $arg" >&2; usage >&2; exit 2 ;;
+        --list-snapshots) ACTION=list-snapshots ;;
+        --rollback)
+            ACTION=rollback
+            # An optional positional number may follow.
+            if [[ ${2:-} =~ ^[0-9]+$ ]]; then
+                ROLLBACK_TARGET=$2
+                shift
+            fi
+            ;;
+        --rollback=*)
+            ACTION=rollback
+            ROLLBACK_TARGET=${1#--rollback=}
+            ;;
+        *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
+    shift
 done
 
 _hr() { printf '%s\n' "------------------------------------------------------------"; }
+
+# ----- helpers for snapper integration -----------------------------------
+
+_snapper_available() {
+    command -v snapper >/dev/null 2>&1 \
+        && snapper -c root list >/dev/null 2>&1
+}
+
+# Create a pre-snapshot. Emits the snapshot number on stdout; empty string
+# on failure or when snapper isn't configured.
+_snap_pre() {
+    local n
+    n=$(sudo snapper -c root create \
+            --type pre --cleanup-algorithm number \
+            --description 'shedos-update' \
+            --userdata 'source=shedos-update,kind=pre' \
+            --print-number 2>/dev/null) || return 0
+    printf '%s' "$n"
+}
+
+# Create the matching post-snapshot. $1 = pre-number (may be empty).
+_snap_post() {
+    local pre=$1
+    [[ -n $pre ]] || return 0
+    sudo snapper -c root create \
+        --type post --pre-number "$pre" \
+        --cleanup-algorithm number \
+        --description 'shedos-update' \
+        --userdata 'source=shedos-update,kind=post' >/dev/null 2>&1 || true
+}
+
+# ----- --list-snapshots --------------------------------------------------
+
+if [[ $ACTION == list-snapshots ]]; then
+    if ! _snapper_available; then
+        echo "snapper is not configured. Install/reinstall shedos-system to set it up." >&2
+        exit 1
+    fi
+    sudo snapper -c root list --columns number,type,pre-number,date,description,userdata
+    exit 0
+fi
+
+# ----- --rollback --------------------------------------------------------
+
+if [[ $ACTION == rollback ]]; then
+    if ! command -v shedos-rollback >/dev/null 2>&1; then
+        echo "shedos-rollback helper missing (reinstall shedos-system)." >&2
+        exit 1
+    fi
+    if ! _snapper_available; then
+        echo "snapper is not configured — nothing to roll back to." >&2
+        echo "Install/reinstall shedos-system and run at least one upgrade first." >&2
+        exit 1
+    fi
+
+    # If the user didn't pass a number, show the list and prompt.
+    if [[ -z $ROLLBACK_TARGET ]]; then
+        echo "Recent snapshots (pick a pre-upgrade number to roll back to):"
+        echo
+        sudo snapper -c root list --columns number,type,pre-number,date,description \
+            | tail -n 20
+        echo
+        read -rp "Snapshot number to restore: " ROLLBACK_TARGET
+    fi
+
+    [[ $ROLLBACK_TARGET =~ ^[0-9]+$ ]] || {
+        echo "rollback target must be numeric." >&2
+        exit 2
+    }
+
+    args=("$ROLLBACK_TARGET")
+    (( YES )) && args+=(--yes)
+    exec sudo shedos-rollback "${args[@]}"
+fi
+
+# ----- upgrade flow ------------------------------------------------------
 
 _hr
 if (( YES )); then
@@ -101,6 +208,19 @@ if ! (( YES )); then
     esac
 fi
 
+# Pre-upgrade btrfs snapshot — only on machines where snapper is configured
+# (which, on a standard ShedOS install, is everywhere after shedos-system is
+# installed). Skip silently in live/ISO environments where snapper may not be
+# usable against a live root.
+pre_snap=""
+if _snapper_available; then
+    pre_snap=$(_snap_pre)
+    if [[ -n $pre_snap ]]; then
+        echo
+        echo "Pre-upgrade snapshot created: #$pre_snap"
+    fi
+fi
+
 if (( pac_n > 0 )); then
     echo
     _hr
@@ -114,6 +234,10 @@ if (( pac_n > 0 )); then
     (( YES )) && pacman_args+=(--noconfirm)
     sudo pacman "${pacman_args[@]}" || {
         echo "pacman exited non-zero; aborting before config sync." >&2
+        # Still create the post-snapshot so the pre/post pair is complete —
+        # snapper's cleanup will collapse empty pairs on its next run. Leaving
+        # an unpaired pre-snapshot around makes rollback listings confusing.
+        _snap_post "$pre_snap"
         exit 1
     }
 fi
@@ -135,6 +259,10 @@ if (( aur_n > 0 )); then
         paru "${aur_args[@]}" || echo "paru exited non-zero; continuing." >&2
     fi
 fi
+
+# Post-upgrade snapshot pairs to the pre-snapshot so `snapper status <pre>..<post>`
+# shows exactly what the upgrade changed.
+_snap_post "$pre_snap"
 
 echo
 _hr
@@ -173,6 +301,9 @@ fi
 
 echo
 echo "Update complete."
+if [[ -n $pre_snap ]]; then
+    echo "Rollback to pre-upgrade state: shedos-update --rollback $pre_snap"
+fi
 
 if (( conflict_n > 0 )); then
     if (( YES )); then

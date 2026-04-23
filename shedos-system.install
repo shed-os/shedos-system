@@ -30,6 +30,49 @@ _remove_shedos_repo() {
     fi
 }
 
+_bootstrap_snapper() {
+    # Install the default snapper config for `/` on first install only. A
+    # subsequent upgrade finds /etc/snapper/configs/root already present and
+    # leaves it alone so user tuning sticks (retention limits, timeline
+    # cadence, etc.). The template lives under /usr/share/shedos/snapper/
+    # so we don't collide with the snapper package's ownership of
+    # /etc/snapper/configs/.
+    local tpl=/usr/share/shedos/snapper/root.conf
+    local dst=/etc/snapper/configs/root
+    [[ -f $tpl ]] || return 0
+
+    if [[ ! -f $dst ]]; then
+        install -Dm640 "$tpl" "$dst"
+        chown root:root "$dst"
+    fi
+
+    # Point snapper at the root config. /etc/conf.d/snapper is shipped by
+    # the snapper package with SNAPPER_CONFIGS="" by default.
+    if [[ -f /etc/conf.d/snapper ]]; then
+        if grep -q '^SNAPPER_CONFIGS=' /etc/conf.d/snapper; then
+            # Merge 'root' into any existing list, preserving other entries.
+            if ! grep -qE '^SNAPPER_CONFIGS="[^"]*\broot\b' /etc/conf.d/snapper; then
+                sed -i -E \
+                    's/^SNAPPER_CONFIGS="([^"]*)"/SNAPPER_CONFIGS="\1 root"/' \
+                    /etc/conf.d/snapper
+                # Squash leading space if the previous list was empty.
+                sed -i -E 's/^SNAPPER_CONFIGS=" /SNAPPER_CONFIGS="/' \
+                    /etc/conf.d/snapper
+            fi
+        else
+            printf '\nSNAPPER_CONFIGS="root"\n' >> /etc/conf.d/snapper
+        fi
+    fi
+
+    # /.snapshots exists as @snapshots mounted via fstab — tighten perms so
+    # snapper's own validation is happy. Guarded against live/ISO envs where
+    # /.snapshots may be a plain directory (no mount).
+    if [[ -d /.snapshots ]]; then
+        chmod 750 /.snapshots 2>/dev/null || true
+        chown root:root /.snapshots 2>/dev/null || true
+    fi
+}
+
 post_install() {
     systemctl daemon-reload || true
     systemctl enable shedos-pg-initdb.service || true
@@ -44,6 +87,20 @@ post_install() {
     systemctl --global enable shedos-update-check.timer || true
 
     _add_shedos_repo
+    _bootstrap_snapper
+
+    # Timeline + cleanup timers from the snapper package. Idempotent enable:
+    # re-running is harmless. Guarded against pacstrap (no running systemd)
+    # and rootless containers.
+    if [[ -d /run/systemd/system ]]; then
+        systemctl enable --now snapper-timeline.timer 2>/dev/null || true
+        systemctl enable --now snapper-cleanup.timer 2>/dev/null || true
+    else
+        # In pacstrap / no-systemd contexts, fall back to enable-only so the
+        # units come up on first real boot.
+        systemctl enable snapper-timeline.timer 2>/dev/null || true
+        systemctl enable snapper-cleanup.timer 2>/dev/null || true
+    fi
 
     cat <<'EOF'
 
@@ -56,6 +113,9 @@ ShedOS system installed. Notes:
     on your next user-session login. Click the waybar indicator to run
     shedos-update interactively.
   * [shedos] repo added to /etc/pacman.conf — run `pacman -Sy` to refresh.
+  * snapper is configured for / with a default pre/post policy; every
+    shedos-update run snapshots before and after. Roll back with
+    `shedos-update --rollback`.
 EOF
 }
 
@@ -65,6 +125,12 @@ post_upgrade() {
     systemctl --global enable shedos-update-check.timer || true
 
     _add_shedos_repo
+    _bootstrap_snapper
+
+    if [[ -d /run/systemd/system ]]; then
+        systemctl enable --now snapper-timeline.timer 2>/dev/null || true
+        systemctl enable --now snapper-cleanup.timer 2>/dev/null || true
+    fi
 }
 
 pre_remove() {
