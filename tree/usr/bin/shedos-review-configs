@@ -36,6 +36,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from difflib import SequenceMatcher, unified_diff
@@ -162,6 +163,76 @@ class UnresolvedHunk(Exception):
 # ---------------------------------------------------------------------------
 
 
+def _char_width(ch: str) -> int:
+    """Monospace cell width of a single character.
+
+    East Asian wide and full-width characters occupy 2 cells; combining
+    marks and zero-width formatters occupy 0; everything else is 1.
+    ``unicodedata.east_asian_width`` returns 'W'/'F' for 2-cell and
+    'A' (ambiguous) for characters whose width is terminal-dependent —
+    we conservatively treat 'A' as 1 cell because every common TUI
+    terminal (kitty, foot, alacritty, xterm, tmux) does.
+    """
+    if not ch:
+        return 0
+    if unicodedata.category(ch) in ("Mn", "Me", "Cf"):
+        return 0
+    if unicodedata.east_asian_width(ch) in ("W", "F"):
+        return 2
+    return 1
+
+
+def display_width(s: str) -> int:
+    """Sum of ``_char_width`` across the string. Ignores Rich-markup tags."""
+    # Strip Rich markup [foo] / [/foo] so the caller can pass already-styled
+    # text without double-counting the markup as layout width.
+    out = 0
+    i = 0
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if ch == "[":
+            end = s.find("]", i + 1)
+            if end != -1:
+                i = end + 1
+                continue
+        out += _char_width(ch)
+        i += 1
+    return out
+
+
+def truncate_to_width(s: str, limit: int, ellipsis: str = "…") -> str:
+    """Truncate ``s`` so its display width does not exceed ``limit``.
+
+    Markup-aware: Rich markup tags don't count toward display width. The
+    ellipsis is appended only when truncation actually occurs.
+    """
+    if limit <= 0:
+        return ""
+    if display_width(s) <= limit:
+        return s
+    budget = max(0, limit - _char_width(ellipsis[0]) if ellipsis else 0)
+    out_chars: list[str] = []
+    used = 0
+    i = 0
+    n = len(s)
+    while i < n and used < budget:
+        ch = s[i]
+        if ch == "[":
+            end = s.find("]", i + 1)
+            if end != -1:
+                out_chars.append(s[i:end + 1])
+                i = end + 1
+                continue
+        w = _char_width(ch)
+        if used + w > budget:
+            break
+        out_chars.append(ch)
+        used += w
+        i += 1
+    return "".join(out_chars) + (ellipsis if ellipsis else "")
+
+
 def _log(msg: str) -> None:
     try:
         LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -285,15 +356,29 @@ def find_pkg_and_src(relpath: str) -> tuple[Optional[str], Optional[Path]]:
     return None, None
 
 
-def scan_conflicts() -> list[Conflict]:
-    """Walk $HOME for *.shedosnew files and classify each conflict."""
+def scan_conflicts() -> tuple[list[Conflict], list[str]]:
+    """Walk $HOME for *.shedosnew files and classify each conflict.
+
+    Returns (conflicts, excluded_relpaths). The second list is purely
+    advisory — `.shedosnew` files that live under an excluded tree like
+    ``.cache/`` or ``.local/state/`` are not actionable through the TUI,
+    but the user deserves to know they exist so they can decide to
+    delete them manually.
+    """
     conflicts: list[Conflict] = []
+    excluded: list[str] = []
     if not HOME.is_dir():
-        return conflicts
+        return conflicts, excluded
     for dirpath, dirnames, filenames in os.walk(HOME, followlinks=False):
-        # Prune excluded trees early for speed.
+        # Prune excluded trees early for speed — but first check if they
+        # contain any .shedosnew files so we can surface them.
         rel_dir = os.path.relpath(dirpath, HOME)
         if rel_dir != "." and is_excluded(rel_dir.replace(os.sep, "/") + "/"):
+            for name in filenames:
+                if name.endswith(NEW_SUFFIX):
+                    yours = Path(dirpath) / name[: -len(NEW_SUFFIX)]
+                    rel = os.path.relpath(yours, HOME).replace(os.sep, "/")
+                    excluded.append(rel)
             dirnames[:] = []
             continue
         for name in filenames:
@@ -303,10 +388,12 @@ def scan_conflicts() -> list[Conflict]:
             yours = theirs.with_name(name[: -len(NEW_SUFFIX)])
             rel = os.path.relpath(yours, HOME).replace(os.sep, "/")
             if is_excluded(rel):
+                excluded.append(rel)
                 continue
             conflicts.append(_classify(rel, yours, theirs))
     conflicts.sort(key=lambda c: c.relpath)
-    return conflicts
+    excluded.sort()
+    return conflicts, excluded
 
 
 def _classify(relpath: str, yours: Path, theirs: Path) -> Conflict:
@@ -1087,6 +1174,45 @@ def delete_draft(relpath: str) -> None:
         pass
 
 
+# Module-level reference to the currently-active merge so a signal handler
+# (SIGTERM / SIGHUP) can flush the in-progress decisions to a draft before
+# the process is killed. Populated from MergeScreen.on_mount and cleared in
+# on_unmount. A list is used so subordinate scopes can mutate it without
+# the `global` keyword.
+_active_merge_ref: list = []
+
+
+def _signal_save_and_exit(signum, frame) -> None:  # noqa: ARG001
+    if _active_merge_ref:
+        screen = _active_merge_ref[0]
+        try:
+            # Read state + current live off the screen so the snapshot is
+            # whatever the user had on screen at the moment of the signal.
+            save_draft(screen.state, screen.current)
+        except Exception as e:  # noqa: BLE001
+            _log(f"signal {signum}: draft save failed: {e}")
+    # Conventional exit code for signal-terminated processes.
+    sys.exit(128 + int(signum))
+
+
+def install_signal_handlers() -> None:
+    """Install SIGTERM + SIGHUP handlers that flush a draft on forced exit.
+
+    SIGINT (Ctrl-C) is owned by Textual — its priority binding routes to
+    ``action_quit``, which in turn triggers ``MergeScreen.action_cancel``
+    on the active screen and already saves a draft. This function covers
+    only the non-interactive kills.
+    """
+    for sig_name in ("SIGTERM", "SIGHUP"):
+        sig = getattr(signal, sig_name, None)
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, _signal_save_and_exit)
+        except (OSError, ValueError) as e:
+            _log(f"install {sig_name} handler failed: {e}")
+
+
 def apply_draft(state: MergeState, draft: dict) -> bool:
     """Try to apply decisions from a draft. Returns True if applied."""
     # Only apply if load-time SHAs still match — otherwise the world moved.
@@ -1276,11 +1402,20 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"Cleaned up {swept} stale .shedosmerge.tmp file(s) from a previous run.",
                   file=sys.stderr)
 
-        conflicts = scan_conflicts()
+        conflicts, excluded = scan_conflicts()
         conflicts, auto_n = auto_resolve_identical(conflicts)
         if auto_n and not args.list:
             print(f"Auto-resolved {auto_n} identical-content conflict(s).",
                   file=sys.stderr)
+        if excluded and not args.list:
+            print(f"Note: {len(excluded)} .shedosnew file(s) live under "
+                  f"excluded paths (e.g. ~/.cache, ~/.local/state) and "
+                  f"won't appear in the review list.", file=sys.stderr)
+            for rel in excluded[:5]:
+                print(f"  ~/{rel}.shedosnew", file=sys.stderr)
+            if len(excluded) > 5:
+                print(f"  … and {len(excluded) - 5} more. "
+                      "Delete them manually with `rm`.", file=sys.stderr)
 
         if args.list:
             populate_hunk_counts(conflicts, force_2way=args.two_way)
@@ -1411,7 +1546,7 @@ def _load_textual_ui() -> None:
         from textual.screen import ModalScreen, Screen
         from textual.widget import Widget
         from textual.widgets import (
-            DataTable, Footer, Header, Label, Static,
+            DataTable, Footer, Header, Input, Label, Static,
         )
         from textual.reactive import reactive
         from rich.syntax import Syntax
@@ -1439,7 +1574,9 @@ def _load_textual_ui() -> None:
     #hunk-strip { dock: bottom; height: 1; background: #181825; color: #cdd6f4; padding: 0 1; }
     #hint-bar  { dock: bottom; height: 1; background: #181825; color: #6c7086; padding: 0 1; }
 
-    .pane { border: round #313244; padding: 0; width: 1fr; height: 1fr; }
+    .pane { border: round #313244; padding: 0; width: 1fr; height: 1fr;
+            overflow-x: auto; overflow-y: auto; }
+    .pane.wrap { overflow-x: hidden; }
     .pane.focus { border: round #89b4fa; }
     .pane-title { background: #313244; color: #89b4fa; padding: 0 1; }
     #merge-row { height: 1fr; }
@@ -1501,8 +1638,21 @@ def _load_textual_ui() -> None:
                     chars.append("[#f38ba8]●[/]")
                 else:
                     chars.append("[#6c7086]●[/]")
+            dots = " ".join(chars)
             legend = "  (● resolved  ◉ current  ○ pending)"
-            self.update(" ".join(chars) + legend)
+            # Cap total width to terminal columns using east-asian-aware math
+            # (the dot glyphs render ambiguous-width; spaces + ASCII legend
+            # are single-cell). The widget itself is a one-line Static, so
+            # overflow would silently clip — do it ourselves so the user sees
+            # an ellipsis instead of a mystery cut.
+            term_cols = self.size.width or shutil.get_terminal_size((80, 24)).columns
+            padding = 2
+            dots_budget = max(10, term_cols - display_width(legend) - padding)
+            if display_width(dots) > dots_budget:
+                # Keep the current hunk visible: slice the dot list around it
+                # and truncate the edges of the result.
+                dots = truncate_to_width(dots, dots_budget)
+            self.update(dots + legend)
 
     # ----- Per-row rendering for the aligned 3-pane viewer -----------------
     #
@@ -1603,9 +1753,14 @@ def _load_textual_ui() -> None:
 
     def render_pane_text(rows: list[AlignedRow], side: str,
                          current_hunk: Optional[int],
-                         decisions: Optional[dict[int, Optional[Side]]] = None
+                         decisions: Optional[dict[int, Optional[Side]]] = None,
+                         wrap: bool = False,
                          ) -> Text:
-        out = Text()
+        # Lines are constructed with an explicit '\n'; ``no_wrap`` flips
+        # between "truncate/overflow-x scroll" (default) and "soft-wrap at
+        # container width" (when the user presses z). Aggregate Text owns
+        # the flag so Rich applies it uniformly to every line chunk.
+        out = Text(no_wrap=not wrap, overflow="ignore" if not wrap else "fold")
         side_attr = side.lower()
         for row in rows:
             is_current = (current_hunk is not None
@@ -1664,6 +1819,8 @@ FILE LIST
 
 MERGE SCREEN
   j ↓ k ↑   scroll one line
+  h ← l →   pan horizontally (disabled in wrap mode)
+  z         toggle line wrap / horizontal pan mode
   PgDn/PgUp (ctrl-d/ctrl-u)   scroll one page
   g G       top / bottom
   n p       next / prev hunk (re-centers)
@@ -1756,6 +1913,40 @@ MERGE SCREEN
         def action_answer_no(self) -> None: self.dismiss(False)
         def action_answer_default(self) -> None: self.dismiss(self._default_yes)
 
+    class FilterPromptScreen(ModalScreen):
+        """Modal prompt that asks for a filter string (substring, case-insensitive).
+
+        Returns the entered string on Enter, or None on Escape. An empty
+        string clears any existing filter.
+        """
+
+        BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+        def __init__(self, current: str = "") -> None:
+            super().__init__()
+            self._current = current
+
+        def compose(self) -> ComposeResult:
+            title = Text.from_markup(
+                "[b #89b4fa]Filter conflicts[/]\n"
+                "[#6c7086](substring match on relpath; empty to clear; "
+                "Esc to cancel)[/]\n"
+            )
+            yield Static(title, classes="dialog")
+            self._input = Input(value=self._current,
+                                placeholder="filter…",
+                                id="filter-input")
+            yield self._input
+
+        def on_mount(self) -> None:
+            self._input.focus()
+
+        def action_cancel(self) -> None:
+            self.dismiss(None)
+
+        def on_input_submitted(self, event) -> None:
+            self.dismiss(event.value)
+
     # ---------- File list screen ----------
     class FileListScreen(Screen):
         # All bindings set show=True so the Footer widget advertises them.
@@ -1772,6 +1963,7 @@ MERGE SCREEN
             Binding("K",                "keep_all_yours",   "keep-yours-all"),
             Binding("r",                "refresh",          "refresh"),
             Binding("slash",            "filter",           "filter"),
+            Binding("escape",           "clear_filter",     "clear filter"),
             Binding("question_mark,f1", "help",             "help"),
             Binding("q",                "quit",             "quit"),
         ]
@@ -1779,6 +1971,7 @@ MERGE SCREEN
         def __init__(self, app_ref: "ReviewApp") -> None:
             super().__init__()
             self._app_ref = app_ref
+            self._filter = ""
 
         def compose(self) -> ComposeResult:
             yield Banner("shedos-review-configs")
@@ -1790,9 +1983,16 @@ MERGE SCREEN
         def on_mount(self) -> None:
             self.refresh_table()
 
+        def _visible_conflicts(self) -> list[Conflict]:
+            if not self._filter:
+                return list(self._app_ref.conflicts)
+            q = self._filter.lower()
+            return [c for c in self._app_ref.conflicts if q in c.relpath.lower()]
+
         def refresh_table(self) -> None:
             self.table.clear()
-            for i, c in enumerate(self._app_ref.conflicts, 1):
+            visible = self._visible_conflicts()
+            for i, c in enumerate(visible, 1):
                 kind = c.kind
                 hunks = "-"
                 if c.kind == "text":
@@ -1801,10 +2001,18 @@ MERGE SCREEN
                 self.table.add_row(str(i), c.relpath, kind, hunks,
                                    _human_size(c.size), base)
             banner = self.query_one("#banner", Banner)
-            n = len(self._app_ref.conflicts)
+            total = len(self._app_ref.conflicts)
             bin_n = sum(1 for c in self._app_ref.conflicts if c.kind == "binary")
-            banner.update(f"shedos-review-configs  —  {n} conflict(s) "
-                          f"({bin_n} binary)   ? help   q quit")
+            if self._filter:
+                banner.update(
+                    f"shedos-review-configs  —  {len(visible)}/{total} "
+                    f"conflict(s) ({bin_n} binary)   "
+                    f"filter=[b #f9e2af]{self._filter}[/]   "
+                    f"/ edit  esc clear   ? help   q quit")
+            else:
+                banner.update(
+                    f"shedos-review-configs  —  {total} conflict(s) "
+                    f"({bin_n} binary)   / filter   ? help   q quit")
 
         def action_quit(self) -> None:
             self.app.exit()
@@ -1827,45 +2035,51 @@ MERGE SCREEN
             # Fired when the user presses Enter (or double-clicks) on a row.
             # DataTable owns the Enter key — screen-level Enter binding never
             # fires — so activation has to go through this handler.
+            visible = self._visible_conflicts()
             idx = getattr(event, "cursor_row", None)
-            if idx is None:
+            if idx is None or idx < 0 or idx >= len(visible):
                 return
-            if idx < 0 or idx >= len(self._app_ref.conflicts):
-                return
-            self._app_ref.open_conflict(self._app_ref.conflicts[idx])
+            self._app_ref.open_conflict(visible[idx])
 
         def action_open(self) -> None:
             if self.table.row_count == 0:
                 return
+            visible = self._visible_conflicts()
             idx = self.table.cursor_row
-            if idx is None or idx < 0 or idx >= len(self._app_ref.conflicts):
+            if idx is None or idx < 0 or idx >= len(visible):
                 return
-            c = self._app_ref.conflicts[idx]
-            self._app_ref.open_conflict(c)
+            self._app_ref.open_conflict(visible[idx])
 
         def action_help(self) -> None:
             self.app.push_screen(HelpScreen())
 
         def action_accept_all_theirs(self) -> None:
+            visible = self._visible_conflicts()
+            scope = ("every visible file"
+                     if self._filter else "every file")
             def after(ans: Optional[bool]) -> None:
                 if ans:
-                    self._app_ref.bulk_accept_theirs()
+                    self._app_ref.bulk_accept_theirs(visible)
                     self.refresh_table()
             self.app.push_screen(
                 ConfirmScreen("Accept THEIRS for all files",
-                              "Replace every live file with its upstream version.\n"
-                              "A .shedosbak is written for each."),
+                              f"Replace {scope} ({len(visible)}) with its\n"
+                              f"upstream version. A .shedosbak is written for each."),
                 after,
             )
 
         def action_keep_all_yours(self) -> None:
+            visible = self._visible_conflicts()
+            scope = ("every visible .shedosnew"
+                     if self._filter else "every .shedosnew")
             def after(ans: Optional[bool]) -> None:
                 if ans:
-                    self._app_ref.bulk_keep_yours()
+                    self._app_ref.bulk_keep_yours(visible)
                     self.refresh_table()
             self.app.push_screen(
                 ConfirmScreen("Keep YOURS for all files",
-                              "Delete every .shedosnew and leave your live copies as-is."),
+                              f"Delete {scope} ({len(visible)}) and leave\n"
+                              f"your live copies as-is."),
                 after,
             )
 
@@ -1874,8 +2088,19 @@ MERGE SCREEN
             self.refresh_table()
 
         def action_filter(self) -> None:
-            # Filtering shortcut: re-uses scan + client-side filter. v1: stub.
-            self.app.bell()
+            def after(value: Optional[str]) -> None:
+                if value is None:
+                    return
+                self._filter = value.strip()
+                self.refresh_table()
+                if self.table.row_count:
+                    self.table.move_cursor(row=0)
+            self.app.push_screen(FilterPromptScreen(self._filter), after)
+
+        def action_clear_filter(self) -> None:
+            if self._filter:
+                self._filter = ""
+                self.refresh_table()
 
     # ---------- Merge screen ----------
     class MergeScreen(Screen):
@@ -1890,6 +2115,9 @@ MERGE SCREEN
         BINDINGS = [
             Binding("j,down",       "scroll_down",      "↓ line"),
             Binding("k,up",         "scroll_up",        "↑ line"),
+            Binding("h,left",       "pan_left",         "← pan"),
+            Binding("l,right",      "pan_right",        "→ pan"),
+            Binding("z",            "toggle_wrap",      "wrap"),
             Binding("pagedown,ctrl+d", "scroll_page_down", "PgDn"),
             Binding("pageup,ctrl+u",   "scroll_page_up",   "PgUp"),
             Binding("g",            "scroll_home",      "top"),
@@ -1917,6 +2145,10 @@ MERGE SCREEN
             self._app_ref = app_ref
             self.state = state
             self.current = 0
+            # Soft-wrap off by default: minified JSON / long one-liners look
+            # awful when reflowed. `z` toggles to Rich's wrap-at-pane-width
+            # mode when the user prefers vertical expansion over pan.
+            self._wrap = False
             self.rows: list[AlignedRow] = build_aligned_rows(state)
             # row index → index within state.hunks (for n/p + auto-scroll).
             self._row_of_hunk: dict[int, int] = {}
@@ -1952,9 +2184,18 @@ MERGE SCREEN
                           f"hunk {self.current+1}/{len(self.state.hunks)}   "
                           f"pkg={self.state.pkg}   ? help   s save")
             self._render_all()
+            # Publish this screen so SIGTERM/SIGHUP handlers can snapshot
+            # the live (state, current_hunk) pair to a draft if the process
+            # is killed. Storing the screen (not a tuple) so the handler
+            # reads the current hunk at the moment of the signal, not at
+            # on_mount time.
+            _active_merge_ref[:] = [self]
             # Scroll to the first hunk on entry so the user lands on something
             # actionable, not the top of a 500-line file.
             self.call_after_refresh(self._focus_current_hunk)
+
+        def on_unmount(self) -> None:
+            _active_merge_ref[:] = []
 
         def _panes(self) -> list["DiffPane"]:
             return [p for p in (self.pane_yours, self.pane_base, self.pane_theirs)
@@ -1963,23 +2204,24 @@ MERGE SCREEN
         def _render_all(self) -> None:
             cur = self.current if 0 <= self.current < len(self.state.hunks) else None
             self.pane_yours.set_content(
-                render_pane_text(self.rows, "YOURS", cur))
+                render_pane_text(self.rows, "YOURS", cur, wrap=self._wrap))
             self.pane_theirs.set_content(
-                render_pane_text(self.rows, "THEIRS", cur))
+                render_pane_text(self.rows, "THEIRS", cur, wrap=self._wrap))
             if self.pane_base is not None:
                 # Middle pane re-renders against the current decision map so
                 # y/t/b/B/x/u/A/T all produce a visible result-preview update.
                 decisions = {h.index: h.decision for h in self.state.hunks}
                 self.pane_base.set_content(
                     render_pane_text(self.rows, "BASE", cur,
-                                     decisions=decisions))
+                                     decisions=decisions, wrap=self._wrap))
             self.strip.update_from(self.state, self.current)
             banner = self.query_one("#banner", Banner)
+            wrap_tag = "wrap" if self._wrap else "pan"
             banner.update(
                 f"{self.state.relpath}   "
                 f"{'2-way' if self.state.is_2way else '3-way'}   "
                 f"hunk {self.current+1}/{len(self.state.hunks)}   "
-                f"pkg={self.state.pkg}   ? help   s save")
+                f"pkg={self.state.pkg}   [{wrap_tag}]   ? help   s save")
 
         # --- Scroll synchronization: all three panes move together. -------
         def _sync_scroll(self, y: int) -> None:
@@ -2007,6 +2249,36 @@ MERGE SCREEN
             self._scroll_by(-max(1, (self.pane_yours.size.height or 10) - 2))
         def action_scroll_home(self) -> None:       self._sync_scroll(0)
         def action_scroll_end(self) -> None:        self._sync_scroll(len(self.rows))
+
+        # --- Horizontal pan (no-op when wrap is on; content never overflows) --
+        PAN_STEP = 8
+
+        def _sync_pan(self, x: int) -> None:
+            for p in self._panes():
+                p.scroll_to(x=x, y=p.scroll_y, animate=False)
+
+        def action_pan_left(self) -> None:
+            if self._wrap:
+                return
+            new_x = max(0, (self.pane_yours.scroll_x or 0) - self.PAN_STEP)
+            self._sync_pan(new_x)
+
+        def action_pan_right(self) -> None:
+            if self._wrap:
+                return
+            new_x = (self.pane_yours.scroll_x or 0) + self.PAN_STEP
+            self._sync_pan(new_x)
+
+        def action_toggle_wrap(self) -> None:
+            self._wrap = not self._wrap
+            for p in self._panes():
+                p.set_class(self._wrap, "wrap")
+            if self._wrap:
+                # Turning wrap on: horizontal scroll offset becomes meaningless,
+                # reset so the user doesn't see a phantom scroll state when
+                # they toggle back.
+                self._sync_pan(0)
+            self._render_all()
 
         def _focus_current_hunk(self) -> None:
             if 0 <= self.current < len(self.state.hunks):
@@ -2110,6 +2382,9 @@ MERGE SCREEN
             except UnresolvedHunk:
                 self.app.bell()
                 return
+            except OSError as e:
+                self._show_io_error(e)
+                return
             self._app_ref.mark_resolved(self.state.relpath)
             self.app.pop_screen()
 
@@ -2118,8 +2393,35 @@ MERGE SCREEN
                 save_merged(self.state, force=True)
             except UnresolvedHunk:
                 return
+            except OSError as e:
+                self._show_io_error(e)
+                return
             self._app_ref.mark_resolved(self.state.relpath)
             self.app.pop_screen()
+
+        def _show_io_error(self, e: OSError) -> None:
+            # Surface filesystem-level failures (read-only $HOME, ENOSPC,
+            # permission denied, etc.) as a modal instead of letting the
+            # exception bubble up and take the TUI down.
+            if e.errno == errno.EROFS:
+                title = "$HOME is read-only"
+                body = ("The filesystem holding your home directory is mounted\n"
+                        "read-only. Remount read-write before saving:\n"
+                        "  sudo mount -o remount,rw /home\n"
+                        "Your draft has been preserved; pick up where you left off.")
+            elif e.errno == errno.ENOSPC:
+                title = "No space left on device"
+                body = ("Free up space in $HOME and try again. Your draft is saved.")
+            elif e.errno == errno.EACCES:
+                title = "Permission denied"
+                body = (f"{e.filename or self.state.relpath}\n"
+                        "Check ownership and mode on the file and its parent directory.")
+            else:
+                title = f"I/O error ({e.errno})"
+                body = str(e)
+            _log(f"save I/O error for {self.state.relpath}: {e}")
+            save_draft(self.state, self.current)
+            self.app.push_screen(ConfirmScreen(title, body, default_yes=True))
 
         def action_raw_diff(self) -> None:
             self.app.push_screen(RawDiffScreen(
@@ -2300,12 +2602,13 @@ MERGE SCREEN
                 self.exit()
 
         def rescan(self) -> None:
-            self.conflicts = scan_conflicts()
+            self.conflicts, _ = scan_conflicts()
             self.conflicts, _ = auto_resolve_identical(self.conflicts)
             populate_hunk_counts(self.conflicts, force_2way=self.force_2way)
 
-        def bulk_accept_theirs(self) -> None:
-            for c in list(self.conflicts):
+        def bulk_accept_theirs(self, scope: Optional[list[Conflict]] = None) -> None:
+            targets = list(scope) if scope is not None else list(self.conflicts)
+            for c in targets:
                 if c.kind == "text" and c.yours_path.exists():
                     try:
                         shutil.copy2(c.yours_path,
@@ -2318,15 +2621,20 @@ MERGE SCREEN
                         continue
                     self._resolved.add(c.relpath)
             self.conflicts = [c for c in self.conflicts if c.relpath not in self._resolved]
+            if not self.conflicts:
+                self.exit()
 
-        def bulk_keep_yours(self) -> None:
-            for c in list(self.conflicts):
+        def bulk_keep_yours(self, scope: Optional[list[Conflict]] = None) -> None:
+            targets = list(scope) if scope is not None else list(self.conflicts)
+            for c in targets:
                 try:
                     c.theirs_path.unlink()
                 except OSError:
                     pass
                 self._resolved.add(c.relpath)
-            self.conflicts = []
+            self.conflicts = [c for c in self.conflicts if c.relpath not in self._resolved]
+            if not self.conflicts:
+                self.exit()
 
     # Install the inline runner.
     def _runner(conflicts: list[Conflict], *, start_file: Optional[str],
@@ -2341,6 +2649,7 @@ MERGE SCREEN
                   f"(need {MIN_COLS}×{MIN_ROWS}, have {cols}×{rows}). "
                   f"Resize or run with --list.", file=sys.stderr)
             return 2
+        install_signal_handlers()
         app = ReviewApp(conflicts, start_file=start_file,
                         walk_all=walk_all, force_2way=force_2way)
         app.run()
