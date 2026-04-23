@@ -32,7 +32,9 @@
 
 set -uo pipefail
 
-SHEDOS_DEFAULTS_ROOT=/usr/share/shedos
+# Defaults root is overridable via env for the test harness to point at a
+# synthetic pkg tree. Production systems leave it at /usr/share/shedos.
+SHEDOS_DEFAULTS_ROOT="${SHEDOS_DEFAULTS_ROOT:-/usr/share/shedos}"
 STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/shedos/last-seen"
 CONTENT_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/shedos/last-seen-content"
 USER_EXCLUDE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/shedos/sync-exclude"
@@ -294,6 +296,25 @@ done
 
 if (( seed_n + auto_n + conflict_n == 0 )); then
     echo "Nothing to sync ($noop_n files already in sync)."
+    # Still honour freshly-added excludes even when the defaults walk is a
+    # no-op. Otherwise users running sync solely to clean up after editing
+    # sync-exclude see nothing happen. Dry-run only previews; apply purges.
+    if (( DRY_RUN )); then
+        stale_any=0
+        while IFS= read -r -d '' relpath; do
+            if (( ! stale_any )); then
+                echo
+                echo "Excluded paths with leftover state (would purge on apply):"
+                stale_any=1
+            fi
+            printf '  %s\n' "$relpath"
+        done < <(_find_excluded_stale | sort -zu)
+    else
+        purged=$(_purge_excluded_stale)
+        if (( purged > 0 )); then
+            echo "Purged stale state for $purged excluded path(s)."
+        fi
+    fi
     exit 0
 fi
 
