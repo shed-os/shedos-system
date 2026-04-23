@@ -21,9 +21,25 @@
 set -u
 # Intentionally no `-e`: yad returns non-zero on Cancel, which is normal.
 
-# Catalog path — $SHEDOS_APPS_CATALOG lets a dev point at the in-tree copy
-# without needing to install the package first.
-CATALOG="${SHEDOS_APPS_CATALOG:-/usr/share/shedos/apps-catalog.tsv}"
+# Catalog resolution, in priority order:
+#   1. $SHEDOS_APPS_CATALOG if set (explicit dev override)
+#   2. /usr/share/shedos/apps-catalog.tsv (installed package)
+#   3. ../share/shedos/apps-catalog.tsv relative to this script
+#      (in-tree dev checkout: tree/usr/bin/ -> tree/usr/share/shedos/)
+#
+# The script-relative fallback means `bash path/to/shedos-apps-installer`
+# works from a git checkout with zero env setup.
+_self="$(readlink -f -- "$0" 2>/dev/null || echo "$0")"
+_self_dir="$(dirname -- "$_self")"
+if [[ -n "${SHEDOS_APPS_CATALOG:-}" ]]; then
+    CATALOG="$SHEDOS_APPS_CATALOG"
+elif [[ -r "/usr/share/shedos/apps-catalog.tsv" ]]; then
+    CATALOG="/usr/share/shedos/apps-catalog.tsv"
+elif [[ -r "$_self_dir/../share/shedos/apps-catalog.tsv" ]]; then
+    CATALOG="$_self_dir/../share/shedos/apps-catalog.tsv"
+else
+    CATALOG="/usr/share/shedos/apps-catalog.tsv"   # for the error message
+fi
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/shedos"
 MARKER="$STATE_DIR/apps-installer-done"
 
