@@ -45,10 +45,14 @@ RESULT=$(yad --form \
 
 EXIT_CODE=$?
 
-# User clicked Skip or closed the dialog
+# User clicked Skip or closed the dialog. Mark git-config as complete but
+# still offer the apps installer — they may want the picker even if they
+# configured git elsewhere.
 if [[ $EXIT_CODE -ne 0 ]]; then
-    # Mark as complete even if skipped
     touch "$MARKER_FILE"
+    if [[ -x /usr/bin/shedos-apps-installer ]]; then
+        /usr/bin/shedos-apps-installer || true
+    fi
     exit 0
 fi
 
@@ -101,12 +105,18 @@ touch "$MARKER_FILE"
 # Show success message
 yad --info \
     --title="Setup Complete" \
-    --text="<b>Your development environment is ready\!</b>\n\nGit has been configured with:\n\n<tt>Name:  $NAME\nEmail: $EMAIL</tt>\n\nHappy coding! 🚀" \
+    --text="<b>Your development environment is ready\!</b>\n\nGit has been configured with:\n\n<tt>Name:  $NAME\nEmail: $EMAIL</tt>\n\nNext up: pick any extra apps you want installed." \
     --width=400 \
     --center \
     --window-icon=preferences-system \
     --image=emblem-default \
-    --button="Get Started:0" \
+    --button="Continue:0" \
     2>/dev/null
+
+# Step 2: opt-in proprietary app picker (VS Code, Chrome, Slack, …). The
+# installer is idempotent and has its own marker, so a no-op here is fine.
+if [[ -x /usr/bin/shedos-apps-installer ]]; then
+    /usr/bin/shedos-apps-installer || true
+fi
 
 exit 0
