@@ -85,6 +85,7 @@ post_install() {
     # /etc/systemd/user/timers.target.wants/. Each user's systemd --user
     # instance picks it up on next login without any per-user bootstrap.
     systemctl --global enable shedos-update-check.timer || true
+    systemctl --global enable shedos-check-health.timer || true
 
     _add_shedos_repo
     _bootstrap_snapper
@@ -123,6 +124,7 @@ post_upgrade() {
     systemctl daemon-reload || true
     systemctl enable shedos-pg-user-bootstrap.service || true
     systemctl --global enable shedos-update-check.timer || true
+    systemctl --global enable shedos-check-health.timer || true
 
     _add_shedos_repo
     _bootstrap_snapper

@@ -1,0 +1,6 @@
+[Unit]
+Description=Poll ShedOS hardware health signals, refresh the waybar indicator, and notify on threshold crossings
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/shedos-check-health --tick

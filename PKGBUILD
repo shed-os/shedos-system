@@ -6,7 +6,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.23
-pkgrel=6
+pkgrel=7
 pkgdesc='ShedOS system utilities, systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -23,6 +23,7 @@ depends=(
     'python-rich'      # transitive dep of textual, declared for clarity
     'snapper'          # pre/post btrfs snapshots + --rollback (Phase 3 B#1)
     'btrfs-progs'      # shedos-rollback calls `btrfs subvolume`
+    'lm_sensors'       # shedos-check-health CPU-temp metric (Phase 4 B#1)
 )
 optdepends=(
     'postgresql: shedos-pg-initdb.service initializes a cluster on first boot'
@@ -56,6 +57,8 @@ package() {
         "$pkgdir/usr/bin/shedos-check-updates"
     install -Dm755 tree/usr/bin/shedos-check-conflicts \
         "$pkgdir/usr/bin/shedos-check-conflicts"
+    install -Dm755 tree/usr/bin/shedos-check-health \
+        "$pkgdir/usr/bin/shedos-check-health"
     install -Dm755 tree/usr/bin/shedos-update \
         "$pkgdir/usr/bin/shedos-update"
     install -Dm755 tree/usr/bin/shedos-sync-configs \
@@ -97,6 +100,10 @@ package() {
         "$pkgdir/usr/lib/systemd/user/shedos-update-check.service"
     install -Dm644 tree/usr/lib/systemd/user/shedos-update-check.timer \
         "$pkgdir/usr/lib/systemd/user/shedos-update-check.timer"
+    install -Dm644 tree/usr/lib/systemd/user/shedos-check-health.service \
+        "$pkgdir/usr/lib/systemd/user/shedos-check-health.service"
+    install -Dm644 tree/usr/lib/systemd/user/shedos-check-health.timer \
+        "$pkgdir/usr/lib/systemd/user/shedos-check-health.timer"
 
     # /etc drop-ins. These go in backup=() so user edits become .pacnew on
     # upgrade rather than being silently clobbered.

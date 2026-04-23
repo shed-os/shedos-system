@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic ShedOS hardware health check (5min)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=shedos-check-health.service
+
+[Install]
+WantedBy=timers.target
