@@ -208,3 +208,31 @@ per-user-db = true   # controls shedos-pg-user-bootstrap.service
 # proto     = "tcp"
 # log       = "log"
 # comment   = "lan → postgres"
+
+# ---------------------------------------------------------------------------
+# [security.keyring] — declarative pacman-key trust
+# ---------------------------------------------------------------------------
+#
+# Each fingerprint is a 40-char upper-hex string with no spaces. To
+# trust a key:
+#   1. Import the public key:  sudo pacman-key --add /path/to/key.gpg
+#   2. Add the fingerprint to the array below.
+#   3. Run `shedman apply`.
+#
+# Adoption: keys you locally-sign by hand (`pacman-key --lsign-key
+# <fp>`) get adopted into this array on the next apply.
+#
+# Safety: removing a fingerprint from the array does NOT auto-revoke
+# trust. The reconciler emits a ⚠ warning; revoke by hand with
+# `sudo pacman-key --delete <fingerprint>`. Keyring revocation
+# requires an explicit user gesture, by design.
+#
+# Baseline: every fingerprint trusted on first apply (including
+# shedos's own install-time chain) is permanently invisible to the
+# reconciler — never adopted into TOML, never warned about.
+
+# [security.keyring]
+# trusted = [
+#     "0123456789ABCDEF0123456789ABCDEF01234567",
+#     "FEDCBA9876543210FEDCBA9876543210FEDCBA98",
+# ]
