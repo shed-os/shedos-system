@@ -8,7 +8,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.23
-pkgrel=14
+pkgrel=15
 pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -34,6 +34,8 @@ optdepends=(
     'yad: GUI dialogs for `shedman welcome` and the apps installer'
     'networkmanager: connectivity check in the apps installer'
     'nm-connection-editor: launched by the apps installer when offline'
+    'bash-completion: tab-complete subcommands and flags in bash'
+    'zsh: tab-complete subcommands and flags in zsh (via /usr/share/zsh/site-functions/_shedman)'
 )
 backup=(
     'etc/sudoers.d/wheel'
@@ -146,4 +148,11 @@ package() {
         "$pkgdir/etc/NetworkManager/conf.d/wifi_backend.conf"
     install -Dm644 tree/etc/os-release \
         "$pkgdir/etc/os-release"
+
+    # Shell completions. Dispatcher-level discovery at completion time,
+    # with per-subcommand flag completion via `--complete-{bash,zsh}`.
+    install -Dm644 tree/usr/share/zsh/site-functions/_shedman \
+        "$pkgdir/usr/share/zsh/site-functions/_shedman"
+    install -Dm644 tree/etc/bash_completion.d/shedman \
+        "$pkgdir/etc/bash_completion.d/shedman"
 }
