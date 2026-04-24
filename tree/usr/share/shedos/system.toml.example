@@ -275,3 +275,29 @@ per-user-db = true   # controls shedos-pg-user-bootstrap.service
 # target  = "/mnt/nfs-home"
 # fstype  = "nfs"
 # options = "defaults,_netdev,noauto,x-systemd.automount"
+
+# ---------------------------------------------------------------------------
+# [kernel.cmdline] — declarative Limine kernel parameters
+# ---------------------------------------------------------------------------
+#
+# `append` is a list of tokens to ensure-present in the default Limine
+# entry's cmdline= line. Each token is either a flag (`quiet`) or a
+# `key=value` pair (`nvidia_drm.modeset=1`); whitespace inside a token
+# is rejected.
+#
+# Adoption: tokens added by hand-editing /boot/limine.conf get pulled
+# into `append` on the next `shedman apply`.
+#
+# Baseline: every cmdline token present on first apply (root=,
+# rw, quiet, splash, …) is permanently invisible. Removing a baseline
+# token from `append` is a no-op; baseline tokens stay in the live
+# cmdline forever.
+#
+# Reboot required: every change reaches the kernel only on the next
+# boot. Plan output marks the Change with a "reboot to apply" hint.
+
+# [kernel.cmdline]
+# append = [
+#     "nvidia_drm.modeset=1",
+#     "i915.enable_psr=0",
+# ]
