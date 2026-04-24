@@ -139,3 +139,72 @@ siglevel = "Required DatabaseRequired"
 [services.postgresql]
 auto-init   = true   # controls shedos-pg-initdb.service
 per-user-db = true   # controls shedos-pg-user-bootstrap.service
+
+# ---------------------------------------------------------------------------
+# [network.firewall] — declarative ufw with bidirectional adoption
+# ---------------------------------------------------------------------------
+#
+# UFW ships installed but disabled-by-default on ShedOS — uncomment and
+# set `enabled = true` to opt in. ShedOS never enables the firewall for
+# you.
+#
+# Adoption model: rules added via raw `ufw allow|deny` get adopted into
+# this section on the next `shedman apply`. So the TOML and `ufw`
+# remain a coherent single source of truth — edit either, the file
+# always reflects current intent.
+#
+# Safety: removing a rule from TOML deletes it from ufw on apply.
+# Removing the entire `[network.firewall]` section makes the
+# reconciler invisible (it stops managing the firewall, including
+# adoption). On first apply, any pre-existing ufw rules are silently
+# adopted — preview with `shedman apply --dry-run` if that matters.
+#
+# Defaults & service flag (incoming/outgoing/routed/enabled) are only
+# applied when declared. Omit them to leave any user-set defaults
+# alone.
+#
+# Rule grammar mirrors `man ufw` ("RULE SYNTAX"):
+#
+#   action     allow | deny | reject | limit          (required)
+#   direction  in | out                               (default: in)
+#   interface  on <iface>                              (optional)
+#   log        log | log-all                           (optional)
+#   from       <addr> | <CIDR> | "any"                 (optional)
+#   to         <addr> | <CIDR> | "any"                 (optional)
+#   from-port  <N>                                     (paired with `from`)
+#   to-port    <N>                                     (paired with `to`)
+#   port       <N>                                     (shorthand)
+#   proto      tcp | udp | ah | esp | …                (with `port` or
+#                                                       `from`/`to`)
+#   app        <profile name>                          (mutually exclusive
+#                                                       with port/proto)
+#   comment    <text>                                  (informational)
+#
+# Flag combining note for bash callers: `app` cannot pair with
+# `port`/`proto`/`from-port`/`to-port` — the validator rejects that
+# combination.
+
+# [network.firewall]
+# enabled  = false        # opt-in
+# incoming = "deny"       # default policy: deny | allow | reject
+# outgoing = "allow"
+# routed   = "deny"
+#
+# [[network.firewall.rules]]
+# action  = "allow"
+# port    = 22
+# proto   = "tcp"
+# comment = "ssh"
+#
+# [[network.firewall.rules]]
+# action = "allow"
+# app    = "OpenSSH"
+#
+# [[network.firewall.rules]]
+# action    = "allow"
+# from      = "192.168.1.0/24"
+# to        = "any"
+# to-port   = 5432
+# proto     = "tcp"
+# log       = "log"
+# comment   = "lan → postgres"

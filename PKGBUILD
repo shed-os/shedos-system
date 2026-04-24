@@ -8,7 +8,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.24
-pkgrel=1
+pkgrel=2
 pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -26,6 +26,10 @@ depends=(
     'snapper'          # pre/post btrfs snapshots + --rollback (Phase 3 B#1)
     'btrfs-progs'      # shedman rollback calls `btrfs subvolume`
     'lm_sensors'       # shedman health CPU-temp metric (Phase 4 B#1)
+    'python-tomlkit'   # format-preserving system.toml writes for Phase 6A
+                       # bidirectional adoption (network.firewall, …)
+    'ufw'              # `[network.firewall]` reconciler shells out to it
+                       # (Phase 6A B#1)
 )
 optdepends=(
     'postgresql: shedos-pg-initdb.service initializes a cluster on first boot'
