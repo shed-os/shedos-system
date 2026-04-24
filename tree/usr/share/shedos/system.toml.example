@@ -301,3 +301,45 @@ per-user-db = true   # controls shedos-pg-user-bootstrap.service
 #     "nvidia_drm.modeset=1",
 #     "i915.enable_psr=0",
 # ]
+
+# ---------------------------------------------------------------------------
+# [[groups]] / [[users]] — declarative groups + users
+# ---------------------------------------------------------------------------
+#
+# Strictly additive, by design. ShedOS NEVER deletes a user or group
+# from declarative state — removing a TOML entry only emits a ⚠
+# warning. Use `sudo userdel`/`sudo groupdel` by hand if you really
+# mean it.
+#
+# What's declarative:
+#   - Group existence (`[[groups]] name = "docker"`)
+#   - User existence (`[[users]] name = "shedrack"`)
+#   - User shell (at create-time only — `useradd -s ...`)
+#   - Group memberships (additive — never `gpasswd -d`)
+#
+# What's NOT declarative (deferred):
+#   - User UID, primary GID, home directory path, password — install-
+#     time properties, owned by Calamares.
+#   - User deletion / home cleanup.
+#   - Re-adding-with-different-shell on existing users.
+#
+# Adoption: `sudo usermod -aG <group> <user>` typed at the shell
+# gets pulled into the user's `groups` list on the next apply.
+# `sudo groupadd <name>` is adopted into [[groups]]. Hand-created
+# users are adopted into [[users]].
+#
+# Baseline: every user/group/membership present on first apply
+# (Calamares-created primary user, packages' install-scriptlet
+# groups like `docker` / `libvirt`, the `wheel` membership) is
+# permanently invisible to the reconciler.
+
+# [[groups]]
+# name   = "docker"
+#
+# [[groups]]
+# name   = "libvirt"
+#
+# [[users]]
+# name   = "shedrack"
+# shell  = "/usr/bin/zsh"
+# groups = ["wheel", "docker", "libvirt"]
