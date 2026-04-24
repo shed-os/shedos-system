@@ -3,4 +3,4 @@ Description=Poll ShedOS hardware health signals, refresh the waybar indicator, a
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/shedos-check-health --tick
+ExecStart=/usr/bin/shedman health --tick

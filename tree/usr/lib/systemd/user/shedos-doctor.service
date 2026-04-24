@@ -3,4 +3,4 @@ Description=Detect drift between /etc/shedos/system.toml and live state, refresh
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/shedos-doctor --tick
+ExecStart=/usr/bin/shedman doctor --tick

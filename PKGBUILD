@@ -1,13 +1,15 @@
 # Maintainer: ShedOS <https://github.com/theshedman/shedos>
 #
-# Root-owned system payload: /usr/bin/shedos-* utilities, systemd units, and
-# /etc drop-ins. Anything DE-specific (hyprland bindings, waybar launchers)
+# Root-owned system payload: the unified `shedman` CLI (plus Git-style
+# subcommand binaries under /usr/libexec/shedman/), systemd units, and /etc
+# drop-ins. Legacy `shedos-*` names survive as silent back-compat shims in
+# /usr/bin/. Anything DE-specific (hyprland bindings, waybar launchers)
 # lives in shedos-hyprland, not here.
 
 pkgname=shedos-system
 pkgver=2026.04.23
-pkgrel=12
-pkgdesc='ShedOS system utilities, systemd units, and /etc drop-ins'
+pkgrel=13
+pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
 license=('GPL-3.0-or-later')
@@ -16,20 +18,20 @@ depends=(
     'systemd'
     'pacman-contrib'   # checkupdates
     'coreutils'        # sha256sum, install
-    'diffutils'        # diff for shedos-sync-configs --list-diffs
+    'diffutils'        # diff for `shedman config --sync --list-diffs`
     'sudo'
-    'python'           # shedos-review-configs
-    'python-textual'   # shedos-review-configs TUI framework
+    'python'           # shedman config --review, shedman doctor
+    'python-textual'   # merge TUI framework
     'python-rich'      # transitive dep of textual, declared for clarity
     'snapper'          # pre/post btrfs snapshots + --rollback (Phase 3 B#1)
-    'btrfs-progs'      # shedos-rollback calls `btrfs subvolume`
-    'lm_sensors'       # shedos-check-health CPU-temp metric (Phase 4 B#1)
+    'btrfs-progs'      # shedman rollback calls `btrfs subvolume`
+    'lm_sensors'       # shedman health CPU-temp metric (Phase 4 B#1)
 )
 optdepends=(
     'postgresql: shedos-pg-initdb.service initializes a cluster on first boot'
-    'yay: AUR updates in shedos-update, and the first-boot apps installer'
-    'kitty: default terminal for shedos-update and the apps installer'
-    'yad: GUI dialogs for shedos-welcome and the apps installer'
+    'yay: AUR updates in `shedman update` and the first-boot apps installer'
+    'kitty: default terminal for `shedman update` and the apps installer'
+    'yad: GUI dialogs for `shedman welcome` and the apps installer'
     'networkmanager: connectivity check in the apps installer'
     'nm-connection-editor: launched by the apps installer when offline'
 )
@@ -46,42 +48,43 @@ install=shedos-system.install
 package() {
     cd "$startdir"
 
-    # Scripts
-    install -d "$pkgdir/usr/bin"
-    install -Dm755 tree/usr/bin/shedos-check-services \
-        "$pkgdir/usr/bin/shedos-check-services"
-    install -Dm755 tree/usr/bin/shedos-welcome \
-        "$pkgdir/usr/bin/shedos-welcome"
+    # Unified dispatcher + Git-style subcommand binaries. Users type
+    # `shedman <cmd>`; the dispatcher execs /usr/libexec/shedman/<cmd>.
+    install -Dm755 tree/usr/bin/shedman \
+        "$pkgdir/usr/bin/shedman"
+
+    install -d "$pkgdir/usr/libexec/shedman"
+    local _libexec_shedman=(
+        apply config conflicts db doctor health install logs rollback
+        services update updates upgrade-history welcome
+        _config-sync _config-review
+    )
+    local _name
+    for _name in "${_libexec_shedman[@]}"; do
+        install -Dm755 "tree/usr/libexec/shedman/$_name" \
+            "$pkgdir/usr/libexec/shedman/$_name"
+    done
+
+    # Silent back-compat shims at the legacy /usr/bin/shedos-* paths.
+    # Pre-built in tree/; just copy with +x so `shedos-update` etc. keep
+    # working indefinitely for muscle memory and third-party scripts.
+    local _shims=(
+        shedos-apply shedos-apps-installer shedos-check-conflicts
+        shedos-check-health shedos-check-services shedos-check-updates
+        shedos-doctor shedos-logs shedos-pg-user-bootstrap
+        shedos-review-configs shedos-rollback shedos-sync-configs
+        shedos-update shedos-upgrade-history shedos-welcome
+    )
+    for _name in "${_shims[@]}"; do
+        install -Dm755 "tree/usr/bin/$_name" "$pkgdir/usr/bin/$_name"
+    done
+
+    # shedos-user-session isn't shedman-dispatched (internal hyprland
+    # autostart helper), so it stays as a plain /usr/bin/ binary.
     install -Dm755 tree/usr/bin/shedos-user-session \
         "$pkgdir/usr/bin/shedos-user-session"
-    install -Dm755 tree/usr/bin/shedos-check-updates \
-        "$pkgdir/usr/bin/shedos-check-updates"
-    install -Dm755 tree/usr/bin/shedos-check-conflicts \
-        "$pkgdir/usr/bin/shedos-check-conflicts"
-    install -Dm755 tree/usr/bin/shedos-check-health \
-        "$pkgdir/usr/bin/shedos-check-health"
-    install -Dm755 tree/usr/bin/shedos-update \
-        "$pkgdir/usr/bin/shedos-update"
-    install -Dm755 tree/usr/bin/shedos-sync-configs \
-        "$pkgdir/usr/bin/shedos-sync-configs"
-    install -Dm755 tree/usr/bin/shedos-review-configs \
-        "$pkgdir/usr/bin/shedos-review-configs"
-    install -Dm755 tree/usr/bin/shedos-logs \
-        "$pkgdir/usr/bin/shedos-logs"
-    install -Dm755 tree/usr/bin/shedos-upgrade-history \
-        "$pkgdir/usr/bin/shedos-upgrade-history"
-    install -Dm755 tree/usr/bin/shedos-pg-user-bootstrap \
-        "$pkgdir/usr/bin/shedos-pg-user-bootstrap"
-    install -Dm755 tree/usr/bin/shedos-apps-installer \
-        "$pkgdir/usr/bin/shedos-apps-installer"
-    install -Dm755 tree/usr/bin/shedos-rollback \
-        "$pkgdir/usr/bin/shedos-rollback"
-    install -Dm755 tree/usr/bin/shedos-apply \
-        "$pkgdir/usr/bin/shedos-apply"
-    install -Dm755 tree/usr/bin/shedos-doctor \
-        "$pkgdir/usr/bin/shedos-doctor"
 
-    # Shared plan engine — both shedos-apply and shedos-doctor add
+    # Shared plan engine — both `shedman apply` and `shedman doctor` add
     # /usr/lib/shedos to sys.path and `import apply_core`.
     install -Dm644 tree/usr/lib/shedos/apply_core.py \
         "$pkgdir/usr/lib/shedos/apply_core.py"
@@ -106,8 +109,8 @@ package() {
     install -Dm644 tree/usr/share/applications/shedos-apps.desktop \
         "$pkgdir/usr/share/applications/shedos-apps.desktop"
 
-    # Example user exclude list for shedos-sync-configs. Users copy this to
-    # ~/.config/shedos/sync-exclude to opt out of specific files.
+    # Example user exclude list for `shedman config --sync`. Users copy
+    # this to ~/.config/shedos/sync-exclude to opt out of specific files.
     install -Dm644 tree/usr/share/shedos/sync-exclude.example \
         "$pkgdir/usr/share/shedos/sync-exclude.example"
 

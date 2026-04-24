@@ -11,7 +11,7 @@ ConditionPathExists=/var/lib/postgres/data/PG_VERSION
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/shedos-pg-user-bootstrap
+ExecStart=/usr/bin/shedman db --pg-bootstrap
 StandardOutput=journal
 StandardError=journal
 

@@ -113,16 +113,18 @@ ShedOS system installed. Notes:
     matching postgres role + database on every boot (idempotent).
   * shedos-update-check.timer is enabled system-wide; it starts automatically
     on your next user-session login. Click the waybar indicator to run
-    shedos-update interactively.
+    `shedman update` interactively.
   * [shedos] repo added to /etc/pacman.conf — run `pacman -Sy` to refresh.
   * snapper is configured for / with a default pre/post policy; every
-    shedos-update run snapshots before and after. Roll back with
-    `shedos-update --rollback`.
+    `shedman update` run snapshots before and after. Roll back with
+    `shedman update --rollback` or `shedman rollback`.
   * declarative system state lives at /etc/shedos/system.toml; run
-    `shedos-apply --dry-run` to preview how it maps to live state.
-  * shedos-doctor checks for drift every 6 hours (user timer) and pings
+    `shedman apply --dry-run` to preview how it maps to live state.
+  * `shedman doctor` checks for drift every 6 hours (user timer) and pings
     mako + the waybar doctor pill when /etc/shedos/system.toml falls
-    out of sync with reality. Run `shedos-doctor --diff` any time.
+    out of sync with reality. Run `shedman doctor --diff` any time.
+  * All commands are discoverable via `shedman help`. Legacy `shedos-*`
+    names still work via silent back-compat shims.
 EOF
 }
 
