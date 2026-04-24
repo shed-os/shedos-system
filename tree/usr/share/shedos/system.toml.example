@@ -236,3 +236,42 @@ per-user-db = true   # controls shedos-pg-user-bootstrap.service
 #     "0123456789ABCDEF0123456789ABCDEF01234567",
 #     "FEDCBA9876543210FEDCBA9876543210FEDCBA98",
 # ]
+
+# ---------------------------------------------------------------------------
+# [[fs.mounts]] — declarative /etc/fstab entries
+# ---------------------------------------------------------------------------
+#
+# Each table below becomes one fstab line inside a marker fence at the
+# tail of /etc/fstab. Calamares-shipped entries (root, home, boot,
+# swap) are baseline-protected: they live OUTSIDE the fence and are
+# never touched, never adopted into TOML, never removed when TOML
+# shrinks.
+#
+# Adoption: hand-edited fstab entries (`vi /etc/fstab`, save) are
+# adopted into [[fs.mounts]] on the next `shedman apply`. The `name`
+# is auto-derived from the target's last path component; collisions
+# get a numeric suffix.
+#
+# Identity tuple: (device, target). Changing options/fstype/dump/pass
+# is an in-place update.
+#
+# Required: name, device, target, fstype.
+# Optional: options (default "defaults"), dump (0), pass (0).
+#
+# v1: no automatic mount activation. Reboot or `mount -a` to activate
+# new entries.
+
+# [[fs.mounts]]
+# name    = "data"
+# device  = "UUID=DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF"
+# target  = "/mnt/data"
+# fstype  = "btrfs"
+# options = "noatime,compress=zstd:3,subvol=@data"
+# pass    = 2
+
+# [[fs.mounts]]
+# name    = "nfs-home"
+# device  = "10.0.0.5:/export/home"
+# target  = "/mnt/nfs-home"
+# fstype  = "nfs"
+# options = "defaults,_netdev,noauto,x-systemd.automount"
