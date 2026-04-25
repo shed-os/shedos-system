@@ -1,6 +1,6 @@
 # Maintainer: ShedOS <https://github.com/theshedman/shedos>
 #
-# Root-owned system payload: the unified `shedman` CLI (plus Git-style
+# Root-owned system payload: the unified `shedman` CLI (plus its
 # subcommand binaries under /usr/libexec/shedman/), systemd units, and /etc
 # drop-ins. Legacy `shedos-*` names survive as silent back-compat shims in
 # /usr/bin/. Anything DE-specific (hyprland bindings, waybar launchers)
@@ -8,7 +8,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.24
-pkgrel=11
+pkgrel=12
 pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -72,7 +72,7 @@ prepare() {
 package() {
     cd "$startdir"
 
-    # Unified dispatcher + Git-style subcommand binaries. Users type
+    # The shedman dispatcher and its subcommand binaries. Users type
     # `shedman <cmd>`; the dispatcher execs /usr/libexec/shedman/<cmd>.
     install -Dm755 tree/usr/bin/shedman \
         "$pkgdir/usr/bin/shedman"
