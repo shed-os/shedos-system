@@ -119,6 +119,15 @@ limit = 50       # NUMBER_LIMIT — max snapshots before oldest get culled
 server   = "https://repo.shedos.org/$arch"
 siglevel = "Required DatabaseRequired"
 
+# Opt in to the canary (testing) channel by uncommenting the block
+# below. RC packages land here before reaching [shedos]. Stable cuts
+# also publish to /x86_64-testing/, so opting in only changes
+# behavior during RC windows.
+#
+# [pacman.repos.shedos-testing]
+# server   = "https://repo.shedos.org/$arch-testing"
+# siglevel = "Required DatabaseRequired"
+
 # Add your own repo:
 # [pacman.repos.my-mirror]
 # server   = "https://pkgs.example.org/$repo/$arch"

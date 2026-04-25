@@ -19,14 +19,34 @@ Server = https://repo.shedos.org/$arch
 # <<< shedos >>>
 EOF
     fi
+    # Also append a *commented-out* [shedos-testing] block so users who
+    # want to opt into the canary channel can do so by uncommenting,
+    # without having to remember the URL or SigLevel. Phase 6B.
+    if ! grep -q '^# >>> shedos-testing <<<' /etc/pacman.conf; then
+        cat >>/etc/pacman.conf <<'EOF'
+
+# >>> shedos-testing <<<
+# ShedOS canary channel — RC packages land here before reaching
+# [shedos]. Uncomment the four lines below to opt in. Stable cuts
+# also publish to /x86_64-testing/, so opting in only changes
+# behavior during RC windows.
+#[shedos-testing]
+#SigLevel = Required DatabaseRequired
+#Server = https://repo.shedos.org/$arch-testing
+# <<< shedos-testing >>>
+EOF
+    fi
 }
 
 _remove_shedos_repo() {
-    # Strip the fenced block on uninstall. sed operates on an exact marker
-    # range so a user who scribbles outside the block keeps their edits.
-    # May leave one trailing blank line in /etc/pacman.conf — cosmetic only.
+    # Strip the fenced block(s) on uninstall. sed operates on exact marker
+    # ranges so a user who scribbles outside the blocks keeps their edits.
+    # May leave a trailing blank line in /etc/pacman.conf — cosmetic only.
     if grep -q '^# >>> shedos <<<' /etc/pacman.conf; then
         sed -i '/^# >>> shedos <<<$/,/^# <<< shedos >>>$/d' /etc/pacman.conf
+    fi
+    if grep -q '^# >>> shedos-testing <<<' /etc/pacman.conf; then
+        sed -i '/^# >>> shedos-testing <<<$/,/^# <<< shedos-testing >>>$/d' /etc/pacman.conf
     fi
 }
 
