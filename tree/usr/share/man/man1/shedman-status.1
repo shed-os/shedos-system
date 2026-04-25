@@ -1,0 +1,73 @@
+.TH SHEDMAN-STATUS 1 "2026-04-25" "ShedOS" "User Commands"
+.SH NAME
+shedman-status \- aggregated dashboard across the four waybar signals
+.SH SYNOPSIS
+.B shedman status
+.br
+.B shedman status
+.RB { -j | --json }
+.br
+.B shedman status
+.RB { -w | --watch }
+.RB [ --interval
+.IR N ]
+.SH DESCRIPTION
+.B shedman status
+runs all four waybar-backed signal binaries
+.RB ( shedman " " updates ", "
+.BR shedman " " conflicts ", "
+.BR shedman " " health ", "
+.BR shedman " " doctor )
+in
+.B --waybar
+mode and prints a single-screen summary plus a verdict line. Each
+signal is run with a 2-second timeout; failures degrade gracefully
+to
+.IB unavailable ( error )
+on that row only.
+.SH OPTIONS
+.TP
+default (no flag)
+Render a one-line-per-signal text dashboard plus a Summary line
+(OK / Attention needed / N unavailable).
+.TP
+.BR -j , " --json"
+Emit an aggregated JSON document
+.RI ( schema:1 )
+that passes each underlying
+.B --waybar
+payload through verbatim under its signal key, plus a top-level
+summary section. Suitable for monitoring scripts.
+.TP
+.BR -w , " --watch"
+Spawn a Textual TUI that re-runs the four probes on a timer and
+re-renders. Press
+.B q
+to quit.
+.TP
+.BI --interval " N"
+Refresh interval in seconds for
+.BR --watch .
+Default 5; minimum 1. Also overridable via
+.BR SHEDOS_STATUS_INTERVAL .
+.SH ENVIRONMENT
+.TP
+.B SHEDOS_STATUS_LIBEXEC
+Override
+.IR /usr/libexec/shedman .
+Used by tests; rarely set by end users.
+.TP
+.B SHEDOS_STATUS_INTERVAL
+Default refresh interval for
+.BR --watch .
+.SH EXIT STATUS
+.TP
+.B 0
+Always (the verdict is in the output, not the exit code).
+.TP
+.B 2
+.I /usr/libexec/shedman
+isn't a directory \(em the env override is wrong, or shedos-system
+is broken.
+.SH SEE ALSO
+.BR shedman (1).

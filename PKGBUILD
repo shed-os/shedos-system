@@ -8,7 +8,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.24
-pkgrel=8
+pkgrel=9
 pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -163,4 +163,14 @@ package() {
         "$pkgdir/etc/bash_completion.d/shedman"
     install -Dm644 tree/usr/share/fish/vendor_completions.d/shedman.fish \
         "$pkgdir/usr/share/fish/vendor_completions.d/shedman.fish"
+
+    # Man pages — hand-written groff (.1) sources, installed verbatim.
+    # `shedman help` is the primary discovery surface; man pages are
+    # the secondary path for users who reach for `man <cmd>`.
+    install -d "$pkgdir/usr/share/man/man1"
+    for _name in shedman shedman-update shedman-apply shedman-doctor \
+                 shedman-rollback shedman-config shedman-status; do
+        install -Dm644 "tree/usr/share/man/man1/${_name}.1" \
+            "$pkgdir/usr/share/man/man1/${_name}.1"
+    done
 }

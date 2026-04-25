@@ -1,0 +1,88 @@
+.TH SHEDMAN-UPDATE 1 "2026-04-25" "ShedOS" "User Commands"
+.SH NAME
+shedman-update \- interactive ShedOS upgrade flow
+.SH SYNOPSIS
+.B shedman update
+.RB [ -y | --yes ]
+.RB [ -h | --help ]
+.br
+.B shedman update
+.RB { -l | --list-snapshots }
+.br
+.B shedman update
+.RB { -r | --rollback }
+.RI [ N ]
+.br
+.B shedman update --history
+.SH DESCRIPTION
+.B shedman update
+is the primary upgrade command on ShedOS. It wraps three steps in
+one interactive flow, bracketed by a snapper pre/post btrfs
+snapshot pair:
+.IP \(bu 2
+.B pacman -Syu
+\(em official repo updates.
+.IP \(bu 2
+.B yay -Sua
+\(em AUR updates (if
+.B yay
+is installed).
+.IP \(bu 2
+.B shedman config --sync
+\(em 3-way merge of dotfiles in $HOME against packaged defaults.
+.PP
+Every step is gated by an explicit y/N prompt; nothing destructive
+runs without confirmation. The snapper snapshots make every upgrade
+reversible via
+.B shedman rollback
+or
+.BR "shedman update --rollback" .
+.SH OPTIONS
+.TP
+.BR -y , " --yes"
+Unattended mode. Pass
+.B --noconfirm
+to pacman/yay and
+.B --yes
+to
+.BR "shedman config --sync" .
+Conflicts still drop
+.I .shedosnew
+files instead of overwriting your edits — there is no silent data
+loss path.
+.TP
+.BR -l , " --list-snapshots"
+Print the recent snapper snapshot list and exit. Use this to find a
+pre-upgrade snapshot number for
+.B --rollback.
+.TP
+.BR -r " " \fIN\fR ", " --rollback " " \fIN\fR
+Roll back the root subvolume to snapshot
+.IR N .
+If
+.I N
+is omitted, you'll be prompted from the recent list. Reboot is
+required after the call returns.
+.TP
+.B --history
+Open the upgrade-history TUI (delegates to
+.BR shedman-upgrade-history (1)
+\(em an internal helper).
+.TP
+.BR -h , " --help"
+Print usage and exit.
+.SH FILES
+.TP
+.I /etc/shedos/system.toml
+Read by
+.B shedman config --sync
+during the post-upgrade dotfile pass.
+.TP
+.I /var/lib/shedos/
+Last-seen + baseline state for the dotfile sync.
+.SH SEE ALSO
+.BR shedman (1),
+.BR shedman-config (1),
+.BR shedman-rollback (1),
+.BR pacman (8),
+.BR yay (8).

@@ -1,0 +1,126 @@
+.TH SHEDMAN 1 "2026-04-25" "ShedOS" "User Commands"
+.SH NAME
+shedman \- unified ShedOS utility CLI
+.SH SYNOPSIS
+.B shedman
+.RI [ command ]
+.RI [ args ...]
+.br
+.B shedman
+.B help
+.RI [ command ]
+.br
+.B shedman
+.B version
+.SH DESCRIPTION
+.B shedman
+is a Git-style dispatcher for every utility shipped by ShedOS. It
+discovers subcommands at runtime by globbing
+.IR /usr/libexec/shedman/* :
+each executable file in that directory is exposed as
+.B shedman <name>.
+Files prefixed with
+.RB \(oq _ \(cq
+are internal helpers, hidden from
+.B shedman help
+but still reachable.
+.PP
+The dispatcher itself only does argv preservation, name resolution,
+and \(oqdid you mean\(cq suggestions on unknown commands. All
+substantive logic lives in the per-subcommand binaries.
+.SH SUBCOMMANDS
+The headline set:
+.TP
+.B shedman update
+Interactive system upgrade (pacman + yay + config sync), bracketed
+by a snapper pre/post snapshot pair. See
+.BR shedman-update (1).
+.TP
+.B shedman apply
+Reconcile
+.I /etc/shedos/system.toml
+against live state. See
+.BR shedman-apply (1).
+.TP
+.B shedman doctor
+Detect drift between
+.I /etc/shedos/system.toml
+and live state. Read-only. See
+.BR shedman-doctor (1).
+.TP
+.B shedman rollback
+Restore the root subvolume from a snapper snapshot. See
+.BR shedman-rollback (1).
+.TP
+.B shedman config
+Synchronise dotfiles and review merge conflicts. See
+.BR shedman-config (1).
+.TP
+.B shedman status
+Aggregated dashboard across the four waybar signals (updates,
+conflicts, health, doctor). See
+.BR shedman-status (1).
+.TP
+.B shedman updates / conflicts / health
+The waybar-backed signal binaries. Each prints a JSON payload with
+.B --waybar
+and a human-readable summary by default.
+.TP
+.B shedman logs
+Textual journalctl browser TUI.
+.TP
+.B shedman install
+First-boot proprietary apps installer.
+.TP
+.B shedman migrate
+One-shot retrofit for installs dated before the April 2026
+packaging cut-over. Idempotent — runs on a packaged install are a
+fast no-op.
+.SH BUILT-INS
+.TP
+.B shedman
+.RB \(oq help \(cq " | " --help " | " -h
+List installed subcommands with one-line summaries.
+.TP
+.B shedman help <cmd>
+Forward to
+.B shedman <cmd> --help.
+.TP
+.B shedman version
+Print the installed
+.I shedos-system
+version.
+.SH FILES
+.TP
+.I /etc/shedos/system.toml
+Declarative source of truth (applied via
+.B shedman apply
+).
+.TP
+.I /usr/libexec/shedman/
+Subcommand binaries (Git-style discovery).
+.TP
+.I /usr/bin/shedos-*
+Silent back-compat shims for legacy
+.I shedos-*
+names.
+.TP
+.I /var/lib/shedos/
+Per-section last-applied + baseline state files.
+.SH ENVIRONMENT
+Many subcommands honour environment variables for testing — see the
+per-command man pages.
+.SH SEE ALSO
+.BR shedman-update (1),
+.BR shedman-apply (1),
+.BR shedman-doctor (1),
+.BR shedman-rollback (1),
+.BR shedman-config (1),
+.BR shedman-status (1),
+.BR pacman (8),
+.BR yay (8).
+.PP
+The web reference at
+.UR https://shedos.org/docs/commands
+.UE
+covers every subcommand and flag with examples.

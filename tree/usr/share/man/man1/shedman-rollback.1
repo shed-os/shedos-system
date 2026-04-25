@@ -1,0 +1,85 @@
+.TH SHEDMAN-ROLLBACK 1 "2026-04-25" "ShedOS" "User Commands"
+.SH NAME
+shedman-rollback \- restore root subvolume from a snapper snapshot
+.SH SYNOPSIS
+.B sudo shedman rollback
+.RB [ -y | --yes ]
+.RB [ -k | --keep-current ]
+.I N
+.br
+.B sudo shedman rollback
+.RB { -l | --list }
+.br
+.B sudo shedman rollback
+.RB { -u | --undo }
+.SH DESCRIPTION
+.B shedman rollback
+restores the
+.B @
+btrfs subvolume from a snapper snapshot. Requires root. Reboot is
+required for the rollback to take effect.
+.PP
+The model:
+.IP 1. 4
+The current
+.B @
+is renamed to
+.BI @.rollback- <timestamp>
+(safety net; nothing is deleted).
+.IP 2. 4
+A new
+.B @
+is snapshotted from the chosen snapper snapshot.
+.IP 3. 4
+On reboot, the new
+.B @
+is mounted at
+.IR / .
+.PP
+.B @home,
+.B @log,
+.B @cache,
+.B @pkg,
+and the other data-carrying subvolumes are intentionally
+.B not
+rolled back. This is a system-state rollback only.
+.SH OPTIONS
+.TP
+.I N
+Snapper snapshot number to roll back to. Required unless
+.B --list
+or
+.B --undo
+is given.
+.TP
+.BR -l , " --list"
+Show recent snapper snapshots and exit. Use this to find the right
+.IR N .
+.TP
+.BR -u , " --undo"
+Promote the most recent
+.BI @.rollback- <ts>
+backup back to
+.BR @ .
+Reboot to apply.
+.TP
+.BR -k , " --keep-current"
+Pair with
+.BR --undo :
+keep the prior backup around even after the undo.
+.TP
+.BR -y , " --yes"
+Skip the \(oqare you sure\(cq prompt.
+.SH FILES
+.TP
+.I /
+The
+.B @
+subvolume.
+.TP
+.I /.snapshots/
+Where snapper keeps its snapshots.
+.SH SEE ALSO
+.BR shedman (1),
+.BR shedman-update (1),
+.BR snapper (8).
