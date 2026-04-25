@@ -8,11 +8,14 @@
 
 pkgname=shedos-system
 pkgver=2026.04.24
-pkgrel=10
+pkgrel=11
 pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
 license=('GPL-3.0-or-later')
+makedepends=(
+    'scdoc'            # renders man/*.scd → /usr/share/man/man1/*.1
+)
 depends=(
     'bash'
     'systemd'
@@ -51,6 +54,20 @@ backup=(
     'etc/shedos/system.toml'
 )
 install=shedos-system.install
+
+prepare() {
+    # Render scdoc-format man-page sources to groff (.1) files. Source
+    # of truth lives at man/*.scd; the rendered .1 files land in
+    # man/build/ and are installed by package() below. Keeping the
+    # render step out of package() means a malformed .scd surfaces
+    # before the real install happens.
+    cd "$startdir"
+    install -d man/build
+    for src in man/*.scd; do
+        out=man/build/$(basename "${src%.scd}")
+        scdoc < "$src" > "$out"
+    done
+}
 
 package() {
     cd "$startdir"
@@ -164,13 +181,13 @@ package() {
     install -Dm644 tree/usr/share/fish/vendor_completions.d/shedman.fish \
         "$pkgdir/usr/share/fish/vendor_completions.d/shedman.fish"
 
-    # Man pages — hand-written groff (.1) sources, installed verbatim.
-    # `shedman help` is the primary discovery surface; man pages are
-    # the secondary path for users who reach for `man <cmd>`.
+    # Man pages — rendered from man/*.scd by prepare() above; install
+    # the rendered .1 files. `shedman help` is the primary discovery
+    # surface; man pages are the secondary path for `man <cmd>`.
     install -d "$pkgdir/usr/share/man/man1"
     for _name in shedman shedman-update shedman-apply shedman-doctor \
                  shedman-rollback shedman-config shedman-status; do
-        install -Dm644 "tree/usr/share/man/man1/${_name}.1" \
+        install -Dm644 "man/build/${_name}.1" \
             "$pkgdir/usr/share/man/man1/${_name}.1"
     done
 }
