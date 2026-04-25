@@ -8,7 +8,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.24
-pkgrel=7
+pkgrel=8
 pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -40,6 +40,7 @@ optdepends=(
     'nm-connection-editor: launched by the apps installer when offline'
     'bash-completion: tab-complete subcommands and flags in bash'
     'zsh: tab-complete subcommands and flags in zsh (via /usr/share/zsh/site-functions/_shedman)'
+    'fish: tab-complete subcommands and flags in fish (via /usr/share/fish/vendor_completions.d/shedman.fish)'
 )
 backup=(
     'etc/sudoers.d/wheel'
@@ -154,9 +155,12 @@ package() {
         "$pkgdir/etc/os-release"
 
     # Shell completions. Dispatcher-level discovery at completion time,
-    # with per-subcommand flag completion via `--complete-{bash,zsh}`.
+    # with per-subcommand flag completion via
+    # `--complete-{bash,zsh,fish}`.
     install -Dm644 tree/usr/share/zsh/site-functions/_shedman \
         "$pkgdir/usr/share/zsh/site-functions/_shedman"
     install -Dm644 tree/etc/bash_completion.d/shedman \
         "$pkgdir/etc/bash_completion.d/shedman"
+    install -Dm644 tree/usr/share/fish/vendor_completions.d/shedman.fish \
+        "$pkgdir/usr/share/fish/vendor_completions.d/shedman.fish"
 }
