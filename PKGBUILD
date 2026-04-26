@@ -8,7 +8,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.25
-pkgrel=7
+pkgrel=8
 pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -205,6 +205,8 @@ package() {
         "$pkgdir/etc/udev/rules.d/61-shedos-hdd-readahead.rules"
     install -Dm644 tree/etc/modprobe.d/shedos-blacklist.conf \
         "$pkgdir/etc/modprobe.d/shedos-blacklist.conf"
+    install -Dm644 tree/etc/modules-load.d/shedos-net.conf \
+        "$pkgdir/etc/modules-load.d/shedos-net.conf"
     install -Dm644 tree/etc/systemd/zram-generator.conf \
         "$pkgdir/etc/systemd/zram-generator.conf"
     install -Dm644 tree/etc/systemd/oomd.conf.d/shedos.conf \

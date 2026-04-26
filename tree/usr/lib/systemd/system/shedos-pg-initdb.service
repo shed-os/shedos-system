@@ -10,6 +10,18 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStartPre=/usr/bin/install -d -o postgres -g postgres -m 0700 /var/lib/postgres/data
 ExecStart=/usr/bin/runuser -u postgres -- /usr/bin/initdb --locale=en_US.UTF-8 --encoding=UTF8 --data-checksums -D /var/lib/postgres/data
+# Sandboxing — conservative posture. NoNewPrivileges blocks acquisition
+# of new privileges via setuid binaries; runuser drops privileges (a
+# reduction), so this doesn't fight it. PrivateTmp gives the unit its
+# own /tmp namespace. ProtectHome is safe because postgres never reads
+# /home. ProtectSystem=strict + a tight ReadWritePaths is intentionally
+# left off — initdb writes to /var/lib/postgres/data plus a few other
+# /var paths during first-cluster bootstrap, and an over-tight
+# allowlist would break first-boot install in ways that are hard to
+# test in CI.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target
