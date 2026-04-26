@@ -8,4 +8,5 @@ Target = usr/lib/modules/*/vmlinuz
 [Action]
 Description = Updating /boot/limine.conf for installed kernels...
 When = PostTransaction
+NeedsTargets
 Exec = /usr/lib/shedos/render-limine-config.sh
