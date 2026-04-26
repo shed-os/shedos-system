@@ -16,6 +16,9 @@ schema = 1
 enable = [
     "snapper-timeline.timer",
     "snapper-cleanup.timer",
+    "systemd-oomd.service",
+    "tlp.service",
+    "ananicy-cpp.service",
 ]
 disable = []
 
@@ -60,6 +63,13 @@ siglevel = "Required DatabaseRequired"
 [services.postgresql]
 auto-init   = true   # shedos-pg-initdb.service
 per-user-db = true   # shedos-pg-user-bootstrap.service
+
+# Realtime audio group. Empty by default — users opt in by adding
+# themselves under [[users]].groups (or with `sudo gpasswd -a $USER
+# realtime`). The /etc/security/limits.d/30-shedos-realtime.conf file
+# grants rtprio + memlock once a user is a member.
+[[groups]]
+name = "realtime"
 
 # Limine kernel cmdline tokens.
 #

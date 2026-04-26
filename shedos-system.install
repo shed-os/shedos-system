@@ -117,11 +117,17 @@ post_install() {
     if [[ -d /run/systemd/system ]]; then
         systemctl enable --now snapper-timeline.timer 2>/dev/null || true
         systemctl enable --now snapper-cleanup.timer 2>/dev/null || true
+        systemctl enable --now systemd-oomd.service 2>/dev/null || true
+        systemctl enable --now tlp.service 2>/dev/null || true
+        systemctl enable --now ananicy-cpp.service 2>/dev/null || true
     else
         # In pacstrap / no-systemd contexts, fall back to enable-only so the
         # units come up on first real boot.
         systemctl enable snapper-timeline.timer 2>/dev/null || true
         systemctl enable snapper-cleanup.timer 2>/dev/null || true
+        systemctl enable systemd-oomd.service 2>/dev/null || true
+        systemctl enable tlp.service 2>/dev/null || true
+        systemctl enable ananicy-cpp.service 2>/dev/null || true
     fi
 
     cat <<'EOF'
@@ -161,6 +167,9 @@ post_upgrade() {
     if [[ -d /run/systemd/system ]]; then
         systemctl enable --now snapper-timeline.timer 2>/dev/null || true
         systemctl enable --now snapper-cleanup.timer 2>/dev/null || true
+        systemctl enable --now systemd-oomd.service 2>/dev/null || true
+        systemctl enable --now tlp.service 2>/dev/null || true
+        systemctl enable --now ananicy-cpp.service 2>/dev/null || true
     fi
 }
 

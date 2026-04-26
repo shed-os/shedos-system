@@ -8,7 +8,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.25
-pkgrel=3
+pkgrel=4
 pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -34,7 +34,18 @@ depends=(
     'ufw'              # `[network.firewall]` reconciler shells out to it
     'zram-generator'   # compressed swap-in-RAM via
                        # /etc/systemd/zram-generator.conf
+    'tlp'              # canonical power manager (CPU + disk + radio +
+                       # charge thresholds); install scriptlet enables
+                       # tlp.service
+    'ananicy-cpp'      # auto-renicer; install scriptlet enables
+                       # ananicy-cpp.service
 )
+# Hard conflict with power-profiles-daemon: it competes with tlp for
+# CPU governor ownership. `replaces=` lets pacman do a transactional
+# swap on existing systems instead of erroring with "conflicting
+# packages" on every upgrade.
+conflicts=('power-profiles-daemon')
+replaces=('power-profiles-daemon')
 optdepends=(
     'postgresql: shedos-pg-initdb.service initializes a cluster on first boot'
     'yay: AUR updates in `shedman update` and the first-boot apps installer'
@@ -189,6 +200,10 @@ package() {
         "$pkgdir/etc/modprobe.d/shedos-blacklist.conf"
     install -Dm644 tree/etc/systemd/zram-generator.conf \
         "$pkgdir/etc/systemd/zram-generator.conf"
+    install -Dm644 tree/etc/systemd/oomd.conf.d/shedos.conf \
+        "$pkgdir/etc/systemd/oomd.conf.d/shedos.conf"
+    install -Dm644 tree/etc/security/limits.d/30-shedos-realtime.conf \
+        "$pkgdir/etc/security/limits.d/30-shedos-realtime.conf"
 
     # Shell completions. Dispatcher-level discovery at completion time,
     # with per-subcommand flag completion via
