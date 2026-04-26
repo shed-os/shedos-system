@@ -8,7 +8,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.25
-pkgrel=4
+pkgrel=5
 pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -91,7 +91,7 @@ package() {
 
     install -d "$pkgdir/usr/libexec/shedman"
     local _libexec_shedman=(
-        apply config conflicts db doctor health install logs rollback
+        apply config conflicts db doctor health install kernel logs rollback
         services status update updates upgrade-history welcome
         _config-sync _config-review
     )
@@ -124,6 +124,13 @@ package() {
     # /usr/lib/shedos to sys.path and `import apply_core`.
     install -Dm644 tree/usr/lib/shedos/apply_core.py \
         "$pkgdir/usr/lib/shedos/apply_core.py"
+
+    # Limine multi-kernel renderer + the pacman hook that fires it on
+    # every kernel install/upgrade/remove.
+    install -Dm755 tree/usr/lib/shedos/render-limine-config.sh \
+        "$pkgdir/usr/lib/shedos/render-limine-config.sh"
+    install -Dm644 tree/usr/share/libalpm/hooks/95-shedos-limine-update.hook \
+        "$pkgdir/usr/share/libalpm/hooks/95-shedos-limine-update.hook"
 
     # Declarative system state. /etc/shedos/system.toml is in backup=() so
     # user edits become .pacnew on upgrade; the example template is a

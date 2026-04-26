@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# shedman kernel — list installed kernels and set the default Limine entry.
+
+set -uo pipefail
+
+PROG="shedman kernel"
+MODULES_DIR=${SHEDOS_MODULES_DIR:-/usr/lib/modules}
+DEFAULT_FILE=${SHEDOS_KERNEL_DEFAULT_FILE:-/var/lib/shedos/kernel-default}
+RENDERER=${SHEDOS_LIMINE_RENDERER:-/usr/lib/shedos/render-limine-config.sh}
+
+case "${1:-}" in
+    --help-summary)
+        echo "list installed kernels and set the default Limine boot entry"
+        exit 0
+        ;;
+    --complete-bash|--complete-zsh)
+        printf '%s\n' --list -l --set-default --help -h
+        exit 0
+        ;;
+    --complete-fish)
+        cat <<'EOF'
+--list	list installed kernels
+-l	list installed kernels
+--set-default	set the default Limine boot entry
+--help	show usage
+-h	show usage
+EOF
+        exit 0
+        ;;
+    --help|-h|"")
+        cat <<EOF
+Usage: $PROG --list
+       sudo $PROG --set-default <pkgbase>
+
+Lists the kernels installed on the system (by reading
+$MODULES_DIR/*/pkgbase) and manages which one Limine boots by default.
+
+  -l, --list                   show every installed kernel; * marks the configured default
+  --set-default <pkgbase>      make <pkgbase> the first Limine entry (needs root, regenerates /boot/limine.conf)
+  -h, --help                   show this help
+EOF
+        exit 0
+        ;;
+esac
+
+_list_kernels() {
+    local f
+    for f in "$MODULES_DIR"/*/pkgbase; do
+        [[ -r $f ]] && cat "$f"
+    done | sort -u
+}
+
+_current_default() {
+    [[ -r $DEFAULT_FILE ]] && cat "$DEFAULT_FILE"
+}
+
+case "$1" in
+    --list|-l)
+        cur=$(_current_default)
+        while read -r k; do
+            [[ -z $k ]] && continue
+            if [[ $k == "$cur" ]]; then
+                printf '* %s\n' "$k"
+            else
+                printf '  %s\n' "$k"
+            fi
+        done < <(_list_kernels)
+        if [[ -n $cur ]]; then
+            echo
+            echo "* = configured default (set via shedman kernel --set-default)"
+        fi
+        ;;
+    --set-default)
+        if (( ${EUID:-$(id -u)} != 0 )); then
+            echo "$PROG: --set-default requires root" >&2
+            exit 1
+        fi
+        target=${2:-}
+        if [[ -z $target ]]; then
+            echo "$PROG: --set-default requires a pkgbase argument" >&2
+            exit 2
+        fi
+        if ! _list_kernels | grep -qx "$target"; then
+            {
+                echo "$PROG: '$target' is not installed (no $MODULES_DIR/*/pkgbase matches)"
+                echo "Installed kernels:"
+                _list_kernels | sed 's/^/  /'
+            } >&2
+            exit 1
+        fi
+        install -d "$(dirname "$DEFAULT_FILE")"
+        printf '%s\n' "$target" > "$DEFAULT_FILE"
+        echo "$PROG: default set to $target; regenerating /boot/limine.conf"
+        exec "$RENDERER"
+        ;;
+    *)
+        echo "$PROG: unknown option: $1" >&2
+        echo "Try: $PROG --help" >&2
+        exit 2
+        ;;
+esac

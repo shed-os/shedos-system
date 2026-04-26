@@ -1,0 +1,11 @@
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Target = usr/lib/modules/*/vmlinuz
+
+[Action]
+Description = Updating /boot/limine.conf for installed kernels...
+When = PostTransaction
+Exec = /usr/lib/shedos/render-limine-config.sh
