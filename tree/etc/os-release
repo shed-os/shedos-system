@@ -1,5 +1,5 @@
-NAME="shedOS"
-PRETTY_NAME="shedOS"
+NAME="ShedOS"
+PRETTY_NAME="ShedOS"
 ID=shedos
 ID_LIKE=arch
 BUILD_ID=rolling
