@@ -60,3 +60,31 @@ siglevel = "Required DatabaseRequired"
 [services.postgresql]
 auto-init   = true   # shedos-pg-initdb.service
 per-user-db = true   # shedos-pg-user-bootstrap.service
+
+# Limine kernel cmdline tokens.
+#
+# These tokens are user-managed: applied on first `shedman apply` after
+# install, and removable by deleting any entry below + running apply
+# again. They are NOT part of the install-time baseline — the installer
+# never writes them into /boot/limine.conf, so the [kernel.cmdline]
+# reconciler doesn't snapshot them as protected baseline state.
+#
+# What each does:
+#   nowatchdog                         disable kernel watchdog timers
+#                                      (drops timer interrupts on idle CPUs)
+#   split_lock_detect=off              don't trap on cross-cacheline atomics
+#                                      (some games / legacy workloads need this)
+#   loglevel=3                         only WARN+ to console (quiet boot)
+#   rd.udev.log_level=3                same for the initramfs udev pass
+#   nvme_core.default_ps_max_latency_us=5500
+#                                      cap NVMe deepest power state to one
+#                                      that wakes within 5.5 ms; some drives
+#                                      otherwise stall I/O for 50+ ms
+[kernel.cmdline]
+append = [
+    "nowatchdog",
+    "split_lock_detect=off",
+    "loglevel=3",
+    "rd.udev.log_level=3",
+    "nvme_core.default_ps_max_latency_us=5500",
+]

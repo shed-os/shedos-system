@@ -21,7 +21,7 @@ EOF
     fi
     # Also append a *commented-out* [shedos-testing] block so users who
     # want to opt into the canary channel can do so by uncommenting,
-    # without having to remember the URL or SigLevel. Phase 6B.
+    # without having to remember the URL or SigLevel.
     if ! grep -q '^# >>> shedos-testing <<<' /etc/pacman.conf; then
         cat >>/etc/pacman.conf <<'EOF'
 

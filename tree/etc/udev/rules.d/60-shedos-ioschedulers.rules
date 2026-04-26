@@ -1,0 +1,24 @@
+# I/O scheduler selection per device class.
+#
+# Default kernel scheduler choice is suboptimal for desktop: every block
+# device gets the same scheduler, but NVMe / SATA SSD / rotational HDD
+# have very different performance characteristics.
+#
+# Matchers fire on `add` and `change` so hot-plugged USB drives also get
+# the right scheduler when they appear.
+
+# NVMe — the device's own internal queue is the one that matters.
+# Adding a Linux mq scheduler on top just costs latency.
+ACTION=="add|change", KERNEL=="nvme[0-9]*n[0-9]*", ATTR{queue/scheduler}="none"
+
+# Non-rotational SATA / SAS / USB block devices (SSDs, USB sticks) →
+# mq-deadline. Lower CPU overhead than BFQ on flash, and respects the
+# device's own internal parallelism better than BFQ's per-app fairness.
+ACTION=="add|change", KERNEL=="sd[a-z]*|sr[0-9]*", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="mq-deadline"
+
+# Rotational SATA / SAS / USB (HDDs) → BFQ. BFQ's seek-time-aware
+# heuristics are the reason it exists; on a spinning disk under
+# concurrent load (backup + browse + IDE compile) it keeps the desktop
+# responsive instead of letting whichever request lands first dominate
+# the head.
+ACTION=="add|change", KERNEL=="sd[a-z]*", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"

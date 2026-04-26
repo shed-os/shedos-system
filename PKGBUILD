@@ -8,7 +8,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.25
-pkgrel=1
+pkgrel=2
 pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -26,13 +26,14 @@ depends=(
     'python'           # shedman config --review, shedman doctor
     'python-textual'   # merge TUI framework
     'python-rich'      # transitive dep of textual, declared for clarity
-    'snapper'          # pre/post btrfs snapshots + --rollback (Phase 3 B#1)
+    'snapper'          # pre/post btrfs snapshots + shedman rollback
     'btrfs-progs'      # shedman rollback calls `btrfs subvolume`
-    'lm_sensors'       # shedman health CPU-temp metric (Phase 4 B#1)
-    'python-tomlkit'   # format-preserving system.toml writes for Phase 6A
+    'lm_sensors'       # shedman health CPU-temp metric
+    'python-tomlkit'   # format-preserving system.toml writes for
                        # bidirectional adoption (network.firewall, …)
     'ufw'              # `[network.firewall]` reconciler shells out to it
-                       # (Phase 6A B#1)
+    'zram-generator'   # compressed swap-in-RAM via
+                       # /etc/systemd/zram-generator.conf
 )
 optdepends=(
     'postgresql: shedos-pg-initdb.service initializes a cluster on first boot'
@@ -170,6 +171,24 @@ package() {
         "$pkgdir/etc/NetworkManager/conf.d/wifi_backend.conf"
     install -Dm644 tree/etc/os-release \
         "$pkgdir/etc/os-release"
+
+    # System tuning drop-ins. Not in backup=() because they're
+    # ShedOS policy: editing them in /etc isn't supported, the canonical
+    # surface is `[kernel.cmdline]` / future `[sysctl]` reconcilers in
+    # /etc/shedos/system.toml. Users who need a one-off override drop
+    # their own file with a higher number under /etc/sysctl.d/ etc.
+    install -Dm644 tree/etc/sysctl.d/99-shedos-tuning.conf \
+        "$pkgdir/etc/sysctl.d/99-shedos-tuning.conf"
+    install -Dm644 tree/etc/udev/rules.d/50-shedos-usb-autosuspend.rules \
+        "$pkgdir/etc/udev/rules.d/50-shedos-usb-autosuspend.rules"
+    install -Dm644 tree/etc/udev/rules.d/60-shedos-ioschedulers.rules \
+        "$pkgdir/etc/udev/rules.d/60-shedos-ioschedulers.rules"
+    install -Dm644 tree/etc/udev/rules.d/61-shedos-hdd-readahead.rules \
+        "$pkgdir/etc/udev/rules.d/61-shedos-hdd-readahead.rules"
+    install -Dm644 tree/etc/modprobe.d/shedos-blacklist.conf \
+        "$pkgdir/etc/modprobe.d/shedos-blacklist.conf"
+    install -Dm644 tree/etc/systemd/zram-generator.conf \
+        "$pkgdir/etc/systemd/zram-generator.conf"
 
     # Shell completions. Dispatcher-level discovery at completion time,
     # with per-subcommand flag completion via
