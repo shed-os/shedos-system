@@ -1,34 +1,144 @@
 #!/bin/bash
-# ShedOS First-Boot Developer Setup Wizard
-# Collects developer information and configures git
+# ShedOS first-boot developer setup wizard.
+#
+# Asks for the user's full name, email, and optional GitHub username, then
+# writes those three identity fields into ~/.gitconfig. The system-wide
+# git defaults (init.defaultBranch, core.editor, color.ui, pull.*, push.*,
+# alias.*) are already written by the Calamares shedos_finalize +
+# shedos_gitconfig modules at install time — this script only owns the
+# three identity fields its form asks for.
+#
+# After git is configured, hands off to /usr/libexec/shedman/install which
+# offers the proprietary AUR apps picker.
+#
+# State:
+#   ~/.config/shedos-setup-complete   marker; presence skips the wizard
+#   ~/.local/state/shedos/welcome.log append-only diagnostic log
+#
+# Failure modes that DO NOT write the marker (so the wizard retries on
+# next login):
+#   - yad not installed
+#   - yad fails to launch (GTK init failure, WM not ready)
+#   - $HOME unwritable
+# Only a confirmed user interaction (Configure or Skip button) writes the
+# marker. The previous version unconditionally wrote on any non-zero yad
+# exit, which made a single silent failure permanent.
 
-if [[ "${1:-}" == "--help-summary" ]]; then
-    echo "first-boot developer setup wizard"
-    exit 0
-fi
+set -u
 
-# Skip in live environment
-if [[ -f /run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux ]] || \
-   [[ -d /run/archiso ]] || \
-   [[ "$USER" == "shedos" && -f /etc/calamares/settings.conf ]]; then
-    exit 0
-fi
-
+LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/shedos"
+LOG="$LOG_DIR/welcome.log"
 MARKER_FILE="$HOME/.config/shedos-setup-complete"
 
-# Check if already completed
-if [[ -f "$MARKER_FILE" ]]; then
+log() {
+    # Lazy-init the log dir on first write; HOME may not exist yet on
+    # truly minimal accounts. Errors here are non-fatal — we never fail
+    # the wizard because we couldn't write a log line.
+    mkdir -p "$LOG_DIR" 2>/dev/null || return 0
+    printf '%s [%d] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$*" \
+        >> "$LOG" 2>/dev/null || true
+}
+
+notify_user_yad_missing() {
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -u critical -i preferences-system \
+            "ShedOS welcome" \
+            "yad is not installed; the first-boot wizard can't run. Install yad and log in again." \
+            >/dev/null 2>&1 || true
+    fi
+}
+
+# ── Argument handling ───────────────────────────────────────────────
+FORCE=0
+for arg in "$@"; do
+    case "$arg" in
+        --help-summary)
+            echo "first-boot developer setup wizard"
+            exit 0
+            ;;
+        --help|-h)
+            cat <<'EOF'
+Usage: shedman welcome [--force]
+
+First-boot developer setup wizard. Collects full name, email, and an
+optional GitHub username, then writes them to ~/.gitconfig. Hands off
+to `shedman install` afterwards for the proprietary apps picker.
+
+  -f, --force, --redo   Re-run the wizard even if the completion marker
+                        already exists. Removes the marker first.
+  -h, --help            Show this message.
+
+Files:
+  ~/.config/shedos-setup-complete   marker; presence skips the wizard
+  ~/.local/state/shedos/welcome.log diagnostic log (append-only)
+EOF
+            exit 0
+            ;;
+        --force|-f|--redo)
+            FORCE=1
+            ;;
+        *)
+            echo "shedman welcome: unknown argument: $arg" >&2
+            echo "Try 'shedman welcome --help'." >&2
+            exit 2
+            ;;
+    esac
+done
+
+# ── Guard rails ─────────────────────────────────────────────────────
+
+# Skip in the live ISO and during Calamares — the installer owns first-
+# install setup; this wizard is for the *installed* system's first login.
+if [[ -f /run/archiso/bootmnt/arch/boot/x86_64/vmlinuz-linux ]] || \
+   [[ -d /run/archiso ]] || \
+   { [[ "${USER:-}" == "shedos" ]] && [[ -f /etc/calamares/settings.conf ]]; }; then
+    log "skip: running inside live ISO / calamares"
     exit 0
 fi
 
-# Ensure config directory exists
-mkdir -p "$HOME/.config"
-
-# Get the user's full name from system
-FULL_NAME=$(getent passwd "$USER" | cut -d: -f5 | cut -d, -f1)
-if [[ -z "$FULL_NAME" ]]; then
-    FULL_NAME="$USER"
+if [[ $FORCE -eq 1 ]]; then
+    log "--force: removing marker $MARKER_FILE"
+    rm -f "$MARKER_FILE"
 fi
+
+# Already completed → silent skip.
+if [[ -f "$MARKER_FILE" ]]; then
+    log "skip: marker already present"
+    exit 0
+fi
+
+# Ensure the log dir exists before any `2>>"$LOG"` redirect — bash
+# treats a redirection failure as command failure, which would make
+# the next mkdir bail spuriously when LOG_DIR doesn't exist yet.
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+
+if ! mkdir -p "$HOME/.config" 2>>"$LOG"; then
+    log "error: cannot create \$HOME/.config — bailing without marker"
+    exit 0
+fi
+
+# yad preflight. If yad is missing, log + notify, and exit 0 WITHOUT
+# writing the marker so that next login retries. The previous version
+# silently wrote the marker on this branch.
+if ! command -v yad >/dev/null 2>&1; then
+    log "yad not installed — exiting without marker; next login will retry"
+    notify_user_yad_missing
+    exit 0
+fi
+
+# ── Collect identity from the user via yad ──────────────────────────
+
+FULL_NAME=$(getent passwd "$USER" 2>/dev/null | cut -d: -f5 | cut -d, -f1)
+[[ -z "$FULL_NAME" ]] && FULL_NAME="$USER"
+
+# Try to seed the email field from any existing ~/.gitconfig (Calamares
+# doesn't set user.email, so this is usually empty on first boot).
+EXISTING_EMAIL=""
+if command -v git >/dev/null 2>&1; then
+    EXISTING_EMAIL=$(git config --global --get user.email 2>/dev/null || true)
+fi
+
+log "launching yad form (name=$FULL_NAME existing_email=$EXISTING_EMAIL)"
 
 RESULT=$(yad --form \
     --title="Welcome to ShedOS" \
@@ -40,75 +150,94 @@ RESULT=$(yad --form \
     --field="Let's set up your development environment.:LBL" "" \
     --field="This information will be used to configure git.:LBL" "" \
     --field="Full Name:":TEXT "$FULL_NAME" \
-    --field="Email Address:":TEXT "" \
+    --field="Email Address:":TEXT "$EXISTING_EMAIL" \
     --field="GitHub Username (optional):":TEXT "" \
     --field=":LBL" "" \
     --field="You can change these settings later with 'git config':LBL" "" \
     --button="Skip:1" \
     --button="Configure:0" \
-    2>/dev/null)
-
+    2>>"$LOG")
 EXIT_CODE=$?
 
-# User clicked Skip or closed the dialog. Mark git-config as complete but
-# still offer the apps installer — they may want the picker even if they
-# configured git elsewhere.
-if [[ $EXIT_CODE -ne 0 ]]; then
-    touch "$MARKER_FILE"
-    if [[ -x /usr/libexec/shedman/install ]]; then
-        /usr/libexec/shedman/install || true
-    fi
-    exit 0
-fi
+log "yad form exit_code=$EXIT_CODE"
 
-# Parse the result (fields separated by |)
-# Note: LBL fields are output as empty strings, so we must consume them
+# Exit-code triage. yad emits:
+#   0   — Configure (or first non-Skip button)
+#   1   — Skip (the second button we declared)
+#   70  — GTK init failure (no display, permissions, etc.)
+#   127 — yad binary not found (we already preflight, but defense in depth)
+#   252 — window closed via WM (X button on titlebar)
+#   any other non-zero — uncategorised yad failure
+#
+# Only 0 and 1 are confirmed user interactions; everything else is a
+# yad-side failure that should NOT permanently mark the wizard done.
+case "$EXIT_CODE" in
+    0)
+        # Configure: parse fields and proceed.
+        : # fallthrough below
+        ;;
+    1)
+        # Skip: the user actively declined. Mark done, then offer
+        # the apps installer (they may still want the picker).
+        log "user clicked Skip — marker set, handing off to install"
+        touch "$MARKER_FILE" 2>>"$LOG" || true
+        if [[ -x /usr/libexec/shedman/install ]]; then
+            /usr/libexec/shedman/install || true
+        fi
+        exit 0
+        ;;
+    *)
+        # yad failed to launch / render. Do NOT set the marker; do NOT
+        # call into install (which depends on yad too). Notify + exit.
+        log "yad failed (exit $EXIT_CODE) — exiting without marker; next login will retry"
+        notify_user_yad_missing
+        exit 0
+        ;;
+esac
+
+# Parse the result (fields separated by |). LBL fields are output as
+# empty strings, so we must consume them.
 IFS='|' read -r _ _ _ NAME EMAIL GITHUB _ <<< "$RESULT"
 
-# Validate email
+# Validate email. yad doesn't enforce field shape; do it here.
 if [[ -z "$EMAIL" || ! "$EMAIL" =~ "@" ]]; then
+    log "invalid email entered: ${EMAIL@Q}"
     yad --error \
         --title="Invalid Email" \
         --text="Please enter a valid email address." \
         --width=300 \
         --center \
         --button="OK!gtk-ok:0" \
-        2>/dev/null
-
-    # Re-run the wizard
-    exec "$0"
+        2>>"$LOG"
+    # Re-run the wizard so the user can correct.
+    exec "$0" "$@"
 fi
 
-# Configure git
-echo "Configuring git..."
+# ── Write the three identity fields ─────────────────────────────────
+#
+# Calamares already wrote the system defaults (init.defaultBranch,
+# core.editor, color.ui, pull.*, push.*, all aliases) — see
+# installer/calamares/modules-src/shedos_finalize/main.py section 9.
+# This script only owns the three identity fields its form asks for.
 
-git config --global user.name "$NAME"
-git config --global user.email "$EMAIL"
-git config --global init.defaultBranch main
-git config --global core.editor nvim
-git config --global color.ui auto
-git config --global pull.rebase false
-git config --global push.default current
-git config --global push.autoSetupRemote true
+log "configuring git: name=${NAME@Q} email=${EMAIL@Q} github=${GITHUB@Q}"
 
-# Add useful aliases
-git config --global alias.st status
-git config --global alias.co checkout
-git config --global alias.br branch
-git config --global alias.ci commit
-git config --global alias.lg "log --oneline --graph --decorate"
-git config --global alias.last "log -1 HEAD"
-git config --global alias.unstage "reset HEAD --"
-
-# Configure GitHub if provided
-if [[ -n "$GITHUB" ]]; then
-    git config --global github.user "$GITHUB"
+if ! git config --global user.name "$NAME" 2>>"$LOG"; then
+    log "warn: git config user.name failed"
+fi
+if ! git config --global user.email "$EMAIL" 2>>"$LOG"; then
+    log "warn: git config user.email failed"
+fi
+if [[ -n "${GITHUB:-}" ]]; then
+    if ! git config --global github.user "$GITHUB" 2>>"$LOG"; then
+        log "warn: git config github.user failed"
+    fi
 fi
 
-# Mark setup as complete
-touch "$MARKER_FILE"
+# Mark setup as complete.
+touch "$MARKER_FILE" 2>>"$LOG" || log "warn: could not touch marker"
 
-# Show success message
+# Show success message.
 yad --info \
     --title="Setup Complete" \
     --text="<b>Your development environment is ready\!</b>\n\nGit has been configured with:\n\n<tt>Name:  $NAME\nEmail: $EMAIL</tt>\n\nNext up: pick any extra apps you want installed." \
@@ -117,12 +246,14 @@ yad --info \
     --window-icon=preferences-system \
     --image=emblem-default \
     --button="Continue:0" \
-    2>/dev/null
+    2>>"$LOG"
 
-# Step 2: opt-in proprietary app picker (VS Code, Chrome, Slack, …). The
-# installer is idempotent and has its own marker, so a no-op here is fine.
+# Step 2: opt-in proprietary app picker. The installer is idempotent
+# and has its own marker, so a no-op here is fine.
 if [[ -x /usr/libexec/shedman/install ]]; then
+    log "handing off to /usr/libexec/shedman/install"
     /usr/libexec/shedman/install || true
 fi
 
+log "welcome flow complete"
 exit 0

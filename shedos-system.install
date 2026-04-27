@@ -154,6 +154,38 @@ ShedOS system installed. Notes:
 EOF
 }
 
+_self_heal_welcome_marker() {
+    # Detect users who got stuck behind a stale shedos-setup-complete
+    # marker on v2026.04.27-rc1 or earlier. The bug: welcome silently
+    # wrote the marker on any non-zero yad exit (yad missing, GTK init
+    # failure, etc.), so a single first-boot UX hiccup permanently
+    # suppressed the wizard. Since v2026.04.27-rc2 (this upgrade) the
+    # marker is only written on confirmed user interaction.
+    #
+    # Heuristic for "stuck": marker present AND ~/.gitconfig lacks
+    # user.email (welcome's defining write). Calamares pre-fills name +
+    # aliases via shedos_finalize, so a partial config with no email is
+    # the unambiguous fingerprint of a welcome that never showed.
+    #
+    # Bounded scan: only /home/<user> entries with UID ≥ 1000. Skips
+    # system accounts, skips users whose home is elsewhere.
+    local user uid home marker gitconfig
+    while IFS=: read -r user _ uid _ _ home _; do
+        [[ "$uid" -ge 1000 ]] || continue
+        [[ "$home" == /home/* ]] || continue
+        [[ -d "$home" ]] || continue
+        marker="$home/.config/shedos-setup-complete"
+        gitconfig="$home/.gitconfig"
+        [[ -f "$marker" ]] || continue
+        if [[ -f "$gitconfig" ]] && \
+           grep -qE '^\s*email\s*=' "$gitconfig" 2>/dev/null; then
+            continue
+        fi
+        rm -f "$marker"
+        echo "  → cleared stale welcome marker for $user (no user.email in ~/.gitconfig)"
+    done < <(getent passwd 2>/dev/null)
+}
+
 post_upgrade() {
     systemctl daemon-reload || true
     systemctl enable shedos-pg-user-bootstrap.service || true
@@ -163,6 +195,7 @@ post_upgrade() {
 
     _add_shedos_repo
     _bootstrap_snapper
+    _self_heal_welcome_marker
 
     if [[ -d /run/systemd/system ]]; then
         systemctl enable --now snapper-timeline.timer 2>/dev/null || true

@@ -8,7 +8,7 @@
 
 pkgname=shedos-system
 pkgver=2026.04.27
-pkgrel=1
+pkgrel=2
 pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -39,6 +39,14 @@ depends=(
                        # tlp.service
     'ananicy-cpp'      # auto-renicer; install scriptlet enables
                        # ananicy-cpp.service
+    'yad'              # GUI dialogs for `shedman welcome` and the
+                       # first-boot apps installer — hard dep so a
+                       # silent first-boot UX failure isn't possible
+    'yay'              # AUR helper used by `shedman update` and the
+                       # first-boot apps installer
+    'kitty'            # `shedman update` runs interactively here
+    'libnotify'        # notify-send used by welcome/install for
+                       # diagnostic toasts when yad is unavailable
 )
 # Hard conflict with power-profiles-daemon: it competes with tlp for
 # CPU governor ownership. `replaces=` lets pacman do a transactional
@@ -48,9 +56,6 @@ conflicts=('power-profiles-daemon')
 replaces=('power-profiles-daemon')
 optdepends=(
     'postgresql: shedos-pg-initdb.service initializes a cluster on first boot'
-    'yay: AUR updates in `shedman update` and the first-boot apps installer'
-    'kitty: default terminal for `shedman update` and the apps installer'
-    'yad: GUI dialogs for `shedman welcome` and the apps installer'
     'networkmanager: connectivity check in the apps installer'
     'nm-connection-editor: launched by the apps installer when offline'
     'bash-completion: tab-complete subcommands and flags in bash'
