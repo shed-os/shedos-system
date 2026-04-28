@@ -39,14 +39,10 @@ depends=(
                        # tlp.service
     'ananicy-cpp'      # auto-renicer; install scriptlet enables
                        # ananicy-cpp.service
-    'yad'              # GUI dialogs for `shedman welcome` and the
-                       # first-boot apps installer — hard dep so a
-                       # silent first-boot UX failure isn't possible
-    'yay'              # AUR helper used by `shedman update` and the
-                       # first-boot apps installer
-    'kitty'            # `shedman update` runs interactively here
-    'libnotify'        # notify-send used by welcome/install for
-                       # diagnostic toasts when yad is unavailable
+    'yad'              # shedman welcome + apps installer GUI
+    'yay'               # shedman update + apps installer
+    'kitty'             # shedman update runs interactively
+    'libnotify'         # notify-send fallbacks
 )
 # Hard conflict with power-profiles-daemon: it competes with tlp for
 # CPU governor ownership. `replaces=` lets pacman do a transactional
