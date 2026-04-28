@@ -133,6 +133,14 @@ package() {
     install -Dm644 tree/usr/share/libalpm/hooks/95-shedos-limine-update.hook \
         "$pkgdir/usr/share/libalpm/hooks/95-shedos-limine-update.hook"
 
+    # mkinitcpio preset that enables both default and fallback images for
+    # shedos-kernel. Without this, mkinitcpio's pacman hook auto-generates
+    # a default-only preset and the renderer's "Fallback" entries have no
+    # initramfs to load. Stock linux ships its own preset with both
+    # presets enabled.
+    install -Dm644 tree/etc/mkinitcpio.d/shedos-kernel.preset \
+        "$pkgdir/etc/mkinitcpio.d/shedos-kernel.preset"
+
     # Declarative system state. /etc/shedos/system.toml is in backup=() so
     # user edits become .pacnew on upgrade; the example template is a
     # read-only reference under /usr/share/shedos/.

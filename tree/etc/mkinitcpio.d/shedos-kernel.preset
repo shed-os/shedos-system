@@ -1,0 +1,11 @@
+# mkinitcpio preset file for the 'shedos-kernel' package
+
+ALL_config="/etc/mkinitcpio.conf"
+ALL_kver="/boot/vmlinuz-shedos-kernel"
+
+PRESETS=('default' 'fallback')
+
+default_image="/boot/initramfs-shedos-kernel.img"
+
+fallback_image="/boot/initramfs-shedos-kernel-fallback.img"
+fallback_options="-S autodetect"
