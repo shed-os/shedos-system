@@ -70,6 +70,16 @@ _bootstrap_greetd() {
     if [[ -f $src ]]; then
         install -Dm644 "$src" "$dst"
     fi
+
+    # The `greeter` system user (created by greetd's sysusers.d) needs:
+    #   - `seat`  — talk to seatd, acquire a Wayland seat for cage
+    #   - `video` — open /dev/dri/cardX for EGL/GBM
+    #   - `input` — read /dev/input/event* for keyboard/touchpad
+    # Without these the cage compositor fails with EGL_BAD_ALLOC and
+    # libseat connect errors during boot.
+    if id greeter &>/dev/null; then
+        usermod -aG seat,video,input greeter 2>/dev/null || true
+    fi
 }
 
 _bootstrap_snapper() {

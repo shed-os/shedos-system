@@ -15,5 +15,9 @@
 vt = 1
 
 [default_session]
-command = "cage -s -- /usr/bin/shedos-greeter"
+# Wrap cage in `env HOME=...` because pam_systemd may not set HOME for
+# the kiosk session before cage's EGL pipeline tries to write Mesa's
+# shader cache to $HOME/.cache (`Failed to create //.cache for shader
+# cache (Permission denied)` is the symptom of an empty HOME).
+command = "env HOME=/var/lib/greetd cage -s -- /usr/bin/shedos-greeter"
 user = "greeter"
