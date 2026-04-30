@@ -60,8 +60,6 @@ optdepends=(
 )
 backup=(
     'etc/sudoers.d/wheel'
-    'etc/greetd/config.toml'
-    'etc/greetd/regreet.toml'
     'etc/greetd/regreet.css'
     'etc/NetworkManager/conf.d/20-connection-defaults.conf'
     'etc/NetworkManager/conf.d/wifi_backend.conf'
@@ -192,16 +190,16 @@ package() {
     # upgrade rather than being silently clobbered.
     install -Dm440 tree/etc/sudoers.d/wheel \
         "$pkgdir/etc/sudoers.d/wheel"
-    install -Dm644 tree/etc/greetd/config.toml \
-        "$pkgdir/etc/greetd/config.toml"
     install -Dm644 tree/etc/greetd/hyprland.conf \
         "$pkgdir/etc/greetd/hyprland.conf"
     install -Dm644 tree/etc/greetd/hyprpaper.conf \
         "$pkgdir/etc/greetd/hyprpaper.conf"
-    install -Dm644 tree/etc/greetd/regreet.toml \
-        "$pkgdir/etc/greetd/regreet.toml"
     install -Dm644 tree/etc/greetd/regreet.css \
         "$pkgdir/etc/greetd/regreet.css"
+    install -Dm644 tree/usr/share/shedos/greetd/config.toml \
+        "$pkgdir/usr/share/shedos/greetd/config.toml"
+    install -Dm644 tree/usr/share/shedos/greetd/regreet.toml \
+        "$pkgdir/usr/share/shedos/greetd/regreet.toml"
     install -Dm644 tree/etc/NetworkManager/conf.d/20-connection-defaults.conf \
         "$pkgdir/etc/NetworkManager/conf.d/20-connection-defaults.conf"
     install -Dm644 tree/etc/NetworkManager/conf.d/wifi_backend.conf \

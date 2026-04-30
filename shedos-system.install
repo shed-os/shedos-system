@@ -50,6 +50,22 @@ _remove_shedos_repo() {
     fi
 }
 
+_bootstrap_greetd() {
+    # /etc/greetd/{config,regreet}.toml are shipped by the greetd and
+    # greetd-regreet packages, so we can't ship our own at those paths
+    # (pacman file conflict). Templates live under /usr/share/shedos/greetd/
+    # and we copy them into place every install + upgrade so a stray
+    # .pacnew from an upstream greetd update doesn't drift our defaults.
+    local f
+    for f in config.toml regreet.toml; do
+        local src=/usr/share/shedos/greetd/$f
+        local dst=/etc/greetd/$f
+        if [[ -f $src ]]; then
+            install -Dm644 "$src" "$dst"
+        fi
+    done
+}
+
 _bootstrap_snapper() {
     # Install the default snapper config for `/` on first install only. A
     # subsequent upgrade finds /etc/snapper/configs/root already present and
@@ -109,6 +125,7 @@ post_install() {
     systemctl --global enable shedos-doctor.timer || true
 
     _add_shedos_repo
+    _bootstrap_greetd
     _bootstrap_snapper
 
     # Timeline + cleanup timers from the snapper package. Idempotent enable:
@@ -183,6 +200,7 @@ post_upgrade() {
     systemctl --global enable shedos-doctor.timer || true
 
     _add_shedos_repo
+    _bootstrap_greetd
     _bootstrap_snapper
     _self_heal_welcome_marker
 
