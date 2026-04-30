@@ -12,6 +12,16 @@
 
 schema = 1
 
+# Theme — wallpaper + Catppuccin palette + fonts. Edit and run
+# `shedman theme apply` (or `shedman apply`) to push the change
+# into hyprlock, hyprland, waybar, walker, GTK, and the greeter.
+# Available palettes: see /etc/shedos/themes/palettes/*.toml.
+[theme]
+wallpaper = "/usr/share/shedos/wallpapers/dusk.png"
+palette   = "catppuccin-mocha-blue"
+font_ui   = "Inter 11"
+font_mono = "JetBrainsMono Nerd Font"
+
 [systemd.system]
 enable = [
     "snapper-timeline.timer",

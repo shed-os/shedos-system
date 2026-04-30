@@ -50,6 +50,15 @@ _remove_shedos_repo() {
     fi
 }
 
+_render_theme() {
+    # Rebuild /etc/shedos/themes/current/ from system.toml [theme] +
+    # the named palette. Best-effort: a missing python3 or theme module
+    # just leaves the previous render in place.
+    if [[ -x /usr/bin/python3 && -f /usr/lib/shedos/theme_renderer.py ]]; then
+        /usr/bin/python3 /usr/lib/shedos/theme_renderer.py >/dev/null 2>&1 || true
+    fi
+}
+
 _bootstrap_greetd() {
     # /etc/greetd/{config,regreet}.toml are shipped by the greetd and
     # greetd-regreet packages, so we can't ship our own at those paths
@@ -127,6 +136,7 @@ post_install() {
     _add_shedos_repo
     _bootstrap_greetd
     _bootstrap_snapper
+    _render_theme
 
     # Timeline + cleanup timers from the snapper package. Idempotent enable:
     # re-running is harmless. Guarded against pacstrap (no running systemd)
@@ -202,6 +212,7 @@ post_upgrade() {
     _add_shedos_repo
     _bootstrap_greetd
     _bootstrap_snapper
+    _render_theme
     _self_heal_welcome_marker
 
     if [[ -d /run/systemd/system ]]; then

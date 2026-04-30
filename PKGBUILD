@@ -126,6 +126,18 @@ package() {
     install -Dm644 tree/usr/lib/shedos/apply_core.py \
         "$pkgdir/usr/lib/shedos/apply_core.py"
 
+    # Theme reconciler: reads /etc/shedos/system.toml [theme] + the
+    # named palette under /etc/shedos/themes/palettes/, renders into
+    # /etc/shedos/themes/current/ (palette.conf, palette.css,
+    # greeter.toml, gsettings.sh, wallpaper.png symlink). Re-rendered
+    # on every shedman apply / theme apply / install scriptlet run.
+    install -Dm755 tree/usr/lib/shedos/theme_renderer.py \
+        "$pkgdir/usr/lib/shedos/theme_renderer.py"
+    for _palette in tree/etc/shedos/themes/palettes/*.toml; do
+        install -Dm644 "$_palette" \
+            "$pkgdir/etc/shedos/themes/palettes/$(basename "$_palette")"
+    done
+
     # Limine multi-kernel renderer + the pacman hook that fires it on
     # every kernel install/upgrade/remove.
     install -Dm755 tree/usr/lib/shedos/render-limine-config.sh \
