@@ -93,7 +93,7 @@ package() {
     install -d "$pkgdir/usr/libexec/shedman"
     local _libexec_shedman=(
         apply config conflicts db doctor health install kernel logs rollback
-        services status update updates upgrade-history welcome
+        services status theme update updates upgrade-history welcome
         _config-sync _config-review
     )
     local _name
