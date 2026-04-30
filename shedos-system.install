@@ -15,7 +15,7 @@ _add_shedos_repo() {
 # Run `pacman -R shedos-system` to remove automatically.
 [shedos]
 SigLevel = Required DatabaseRequired
-Server = https://repo.shedos.org/$arch
+Server = https://repo.shedos.org/stable/$arch
 # <<< shedos >>>
 EOF
     fi
@@ -28,14 +28,22 @@ EOF
 # >>> shedos-testing <<<
 # ShedOS canary channel — RC packages land here before reaching
 # [shedos]. Uncomment the four lines below to opt in. Stable cuts
-# also publish to /x86_64-testing/, so opting in only changes
+# also publish to /test/x86_64/, so opting in only changes
 # behavior during RC windows.
 #[shedos-testing]
 #SigLevel = Required DatabaseRequired
-#Server = https://repo.shedos.org/$arch-testing
+#Server = https://repo.shedos.org/test/$arch
 # <<< shedos-testing >>>
 EOF
     fi
+}
+
+_migrate_repo_url() {
+    sed -i \
+        -e '/^# >>> shedos <<<$/,/^# <<< shedos >>>$/ s|^Server = https://repo\.shedos\.org/\$arch$|Server = https://repo.shedos.org/stable/$arch|' \
+        -e '/^# >>> shedos-testing <<<$/,/^# <<< shedos-testing >>>$/ s|^#Server = https://repo\.shedos\.org/\$arch-testing$|#Server = https://repo.shedos.org/test/$arch|' \
+        -e '/^# >>> shedos-testing <<<$/,/^# <<< shedos-testing >>>$/ s|/x86_64-testing/|/test/x86_64/|' \
+        /etc/pacman.conf
 }
 
 _remove_shedos_repo() {
@@ -216,6 +224,7 @@ post_upgrade() {
     systemctl --global enable shedos-check-health.timer || true
     systemctl --global enable shedos-doctor.timer || true
 
+    _migrate_repo_url
     _add_shedos_repo
     _bootstrap_greetd
     _bootstrap_snapper
