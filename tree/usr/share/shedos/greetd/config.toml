@@ -1,10 +1,19 @@
-# ReGreet renders inside an ephemeral Hyprland so the greeter shares the
-# same blur, wallpaper, and theme as the user's desktop. greetd execs the
-# chosen session as the user once ReGreet submits.
+# Greeter: cage runs shedos-greeter on tty1.
+#
+# cage is a minimal Wayland kiosk compositor. shedos-greeter draws
+# its own wallpaper + clock + password input via wlr-layer-shell and
+# authenticates against greetd's IPC socket. PAM runs server-side as
+# root, before any user environment exists.
+#
+# Live-ISO installs append [initial_session] in customize_airootfs.sh
+# to autologin the live `shedos` user; shedos_finalize strips that on
+# install. /etc/greetd/config.toml is owned by upstream `greetd`, so
+# this template lives in /usr/share/shedos/greetd/ and the install
+# scriptlet copies it to /etc/greetd/ on every install/upgrade.
 
 [terminal]
 vt = 1
 
 [default_session]
-command = "Hyprland --config /etc/greetd/hyprland.conf"
+command = "cage -s -- /usr/bin/shedos-greeter"
 user = "greeter"

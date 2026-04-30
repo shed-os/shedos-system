@@ -60,19 +60,16 @@ _render_theme() {
 }
 
 _bootstrap_greetd() {
-    # /etc/greetd/{config,regreet}.toml are shipped by the greetd and
-    # greetd-regreet packages, so we can't ship our own at those paths
-    # (pacman file conflict). Templates live under /usr/share/shedos/greetd/
-    # and we copy them into place every install + upgrade so a stray
-    # .pacnew from an upstream greetd update doesn't drift our defaults.
-    local f
-    for f in config.toml regreet.toml; do
-        local src=/usr/share/shedos/greetd/$f
-        local dst=/etc/greetd/$f
-        if [[ -f $src ]]; then
-            install -Dm644 "$src" "$dst"
-        fi
-    done
+    # /etc/greetd/config.toml is shipped by the greetd package, so we
+    # can't ship our own at that path (pacman file conflict). Template
+    # lives under /usr/share/shedos/greetd/ and we copy it into place
+    # on every install + upgrade so a stray .pacnew from an upstream
+    # greetd update doesn't drift our defaults.
+    local src=/usr/share/shedos/greetd/config.toml
+    local dst=/etc/greetd/config.toml
+    if [[ -f $src ]]; then
+        install -Dm644 "$src" "$dst"
+    fi
 }
 
 _bootstrap_snapper() {
