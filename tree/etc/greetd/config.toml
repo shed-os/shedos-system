@@ -1,0 +1,10 @@
+# ReGreet renders inside an ephemeral Hyprland so the greeter shares the
+# same blur, wallpaper, and theme as the user's desktop. greetd execs the
+# chosen session as the user once ReGreet submits.
+
+[terminal]
+vt = 1
+
+[default_session]
+command = "Hyprland --config /etc/greetd/hyprland.conf"
+user = "greeter"

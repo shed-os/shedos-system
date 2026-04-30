@@ -1,0 +1,144 @@
+/* Catppuccin Mocha overrides for ReGreet — mirror hyprlock's input box
+   accent (#89b4fa border, #1e1e2e@90% fill, 10px rounding) so the
+   greeter and the lock screen feel like the same surface. */
+
+@define-color base       #1e1e2e;
+@define-color mantle     #181825;
+@define-color crust      #11111b;
+@define-color text       #cdd6f4;
+@define-color subtext0   #a6adc8;
+@define-color surface0   #313244;
+@define-color surface1   #45475a;
+@define-color surface2   #585b70;
+@define-color overlay0   #6c7086;
+@define-color blue       #89b4fa;
+@define-color mauve      #cba6f7;
+@define-color red        #f38ba8;
+@define-color yellow     #f9e2af;
+@define-color green      #a6e3a1;
+
+window {
+    background: transparent;
+    color: @text;
+}
+
+label {
+    color: @text;
+    font-family: "Inter";
+}
+
+#greeting-label,
+label.title-1,
+label.title-2 {
+    color: @text;
+    font-size: 22px;
+    font-weight: bold;
+    margin-bottom: 16px;
+}
+
+label.clock,
+#clock {
+    color: @text;
+    font-family: "JetBrainsMono Nerd Font";
+    font-size: 64px;
+    font-weight: bold;
+}
+
+box.frame,
+.greeter-box,
+#main-box {
+    background-color: alpha(@base, 0.85);
+    border: 1px solid alpha(@surface1, 0.8);
+    border-radius: 16px;
+    padding: 32px;
+}
+
+entry,
+entry.flat,
+#username-entry,
+#password-entry {
+    background-color: alpha(@base, 0.9);
+    color: @text;
+    border: 2px solid @blue;
+    border-radius: 10px;
+    padding: 10px 14px;
+    min-width: 300px;
+    min-height: 50px;
+    font-size: 14px;
+    caret-color: @blue;
+}
+
+entry:focus,
+entry:focus-within {
+    border-color: @mauve;
+    outline: none;
+}
+
+entry.error,
+entry:invalid {
+    border-color: @red;
+    color: @red;
+}
+
+dropdown,
+combobox,
+combobox > box > button {
+    background-color: alpha(@base, 0.9);
+    color: @text;
+    border: 1px solid @surface1;
+    border-radius: 10px;
+    padding: 8px 12px;
+    min-width: 200px;
+}
+
+dropdown:hover,
+combobox:hover {
+    border-color: @blue;
+}
+
+popover,
+popover.menu,
+popover > contents {
+    background-color: @base;
+    color: @text;
+    border: 1px solid @surface1;
+    border-radius: 12px;
+    padding: 6px;
+}
+
+button {
+    background-color: alpha(@surface0, 0.85);
+    color: @text;
+    border: 1px solid @surface1;
+    border-radius: 10px;
+    padding: 8px 18px;
+    transition: all 200ms ease;
+}
+
+button:hover {
+    background-color: @surface1;
+    color: @blue;
+    border-color: @blue;
+}
+
+button:active {
+    background-color: @blue;
+    color: @base;
+}
+
+button.suggested-action {
+    background-color: alpha(@blue, 0.2);
+    color: @blue;
+    border-color: @blue;
+}
+
+button.destructive-action {
+    background-color: alpha(@red, 0.2);
+    color: @red;
+    border-color: @red;
+}
+
+button.destructive-action:hover {
+    background-color: @red;
+    color: @base;
+}

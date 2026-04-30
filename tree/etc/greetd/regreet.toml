@@ -1,0 +1,23 @@
+[background]
+path = "/usr/share/shedos/wallpapers/dusk.png"
+fit = "Cover"
+
+[GTK]
+application_prefer_dark_theme = true
+cursor_theme_name = "Adwaita"
+cursor_blink = true
+font_name = "Inter 11"
+icon_theme_name = "Papirus-Dark"
+theme_name = "Catppuccin-Mocha-Standard-Blue-Dark"
+
+[appearance]
+greeting_msg = "Welcome to ShedOS"
+
+[widget.clock]
+format = "%H:%M"
+resolution = "1s"
+label_width = 240
+
+[commands]
+reboot = ["systemctl", "reboot"]
+poweroff = ["systemctl", "poweroff"]
