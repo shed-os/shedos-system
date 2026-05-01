@@ -166,11 +166,8 @@ package() {
     install -Dm644 tree/usr/share/shedos/snapper/root.conf \
         "$pkgdir/usr/share/shedos/snapper/root.conf"
 
-    # Shared data + app launcher entry for the apps installer.
     install -Dm644 tree/usr/share/shedos/apps-catalog.tsv \
         "$pkgdir/usr/share/shedos/apps-catalog.tsv"
-    install -Dm644 tree/usr/share/applications/shedos-apps.desktop \
-        "$pkgdir/usr/share/applications/shedos-apps.desktop"
 
     # Example user exclude list for `shedman config --sync`. Users copy
     # this to ~/.config/shedos/sync-exclude to opt out of specific files.

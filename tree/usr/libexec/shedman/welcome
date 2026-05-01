@@ -1,8 +1,7 @@
 #!/bin/bash
 # First-boot wizard. Collects name/email/github, writes them to
-# ~/.gitconfig, then hands off to `shedman install`.
-# The marker only gets written on confirmed user interaction —
-# yad-launch failures leave it off so next login retries.
+# ~/.gitconfig. The marker only gets written on confirmed user
+# interaction — yad-launch failures leave it off so next login retries.
 
 set -u
 
@@ -38,8 +37,7 @@ for arg in "$@"; do
 Usage: shedman welcome [--force]
 
 First-boot developer setup wizard. Collects full name, email, and an
-optional GitHub username, then writes them to ~/.gitconfig. Hands off
-to `shedman install` afterwards for the proprietary apps picker.
+optional GitHub username, then writes them to ~/.gitconfig.
 
   -f, --force, --redo   Re-run the wizard even if the completion marker
                         already exists. Removes the marker first.
@@ -133,11 +131,8 @@ case "$EXIT_CODE" in
         : # fall through to parse fields
         ;;
     1)
-        log "user clicked Skip — marker set, handing off to install"
+        log "user clicked Skip — marker set"
         touch "$MARKER_FILE" 2>>"$LOG" || true
-        if [[ -x /usr/libexec/shedman/install ]]; then
-            /usr/libexec/shedman/install || true
-        fi
         exit 0
         ;;
     *)
@@ -180,18 +175,13 @@ touch "$MARKER_FILE" 2>>"$LOG" || log "warn: could not touch marker"
 
 yad --info \
     --title="Setup Complete" \
-    --text="<b>Your development environment is ready\!</b>\n\nGit has been configured with:\n\n<tt>Name:  $NAME\nEmail: $EMAIL</tt>\n\nNext up: pick any extra apps you want installed." \
+    --text="<b>Your development environment is ready\!</b>\n\nGit has been configured with:\n\n<tt>Name:  $NAME\nEmail: $EMAIL</tt>\n\nUse <tt>shedman install &lt;pkg&gt;</tt> to install any additional packages." \
     --width=400 \
     --center \
     --window-icon=preferences-system \
     --image=emblem-default \
     --button="Continue:0" \
     2>>"$LOG"
-
-if [[ -x /usr/libexec/shedman/install ]]; then
-    log "handing off to /usr/libexec/shedman/install"
-    /usr/libexec/shedman/install || true
-fi
 
 log "welcome flow complete"
 exit 0
