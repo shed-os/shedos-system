@@ -8,7 +8,7 @@
 
 pkgname=shedos-system
 pkgver=2026.05.01
-pkgrel=7
+pkgrel=9
 pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -91,7 +91,7 @@ package() {
 
     install -d "$pkgdir/usr/libexec/shedman"
     local _libexec_shedman=(
-        apply config conflicts db doctor health install kernel logs rollback
+        apply config conflicts db doctor health install kernel lock logs rollback
         services status theme update updates upgrade-history welcome
         _config-sync _config-review
     )

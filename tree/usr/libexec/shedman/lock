@@ -1,0 +1,16 @@
+#!/bin/bash
+# Wrap hyprlock with screensaver start/stop so the transparent lock
+# surface always has the screensaver rendering underneath it.
+
+if [[ "${1:-}" == "--help-summary" ]]; then
+    echo "lock the session"
+    exit 0
+fi
+
+if pidof hyprlock >/dev/null; then
+    exit 0
+fi
+
+systemctl --user start shedos-screensaver.service 2>/dev/null
+hyprlock
+systemctl --user stop shedos-screensaver.service 2>/dev/null
