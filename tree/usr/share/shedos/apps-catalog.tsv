@@ -4,7 +4,6 @@
 # Format (tab-separated):
 #   pkg \t category \t display_name \t description \t icon
 
-code	Editors	Visual Studio Code	The open-source build of Microsoft's code editor.	visual-studio-code
 google-chrome	Browsers	Google Chrome	Google's web browser. Sign-in sync, Widevine.	google-chrome
 postman-bin	Productivity	Postman	API client for HTTP/REST development.	postman
 claude-code-bin	Editors	Claude Code	Anthropic's agentic coding tool for the terminal.	terminal

@@ -8,7 +8,7 @@
 
 pkgname=shedos-system
 pkgver=2026.05.01
-pkgrel=9
+pkgrel=10
 pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
