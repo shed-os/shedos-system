@@ -7,8 +7,8 @@
 # lives in shedos-hyprland, not here.
 
 pkgname=shedos-system
-pkgver=2026.05.01
-pkgrel=10
+pkgver=2026.05.02
+pkgrel=1
 pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -37,8 +37,10 @@ depends=(
     'tlp'              # canonical power manager (CPU + disk + radio +
                        # charge thresholds); install scriptlet enables
                        # tlp.service
-    'ananicy-cpp'      # auto-renicer; install scriptlet enables
-                       # ananicy-cpp.service
+    'ananicy-cpp-git'  # auto-renicer; install scriptlet enables
+                       # ananicy-cpp.service. -git tracks post-1.2.0
+                       # — tagged 1.1.1 fails on glibc 2.41+. See
+                       # packages/aur.txt for the upstream context.
     'yad'              # shedman welcome + apps installer GUI
     'yay'               # shedman update + apps installer
     'kitty'             # shedman update runs interactively
