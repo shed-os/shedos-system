@@ -85,6 +85,13 @@ _bootstrap_greetd() {
     #   - `input` — read /dev/input/event* for keyboard/touchpad
     # Without these the cage compositor fails with EGL_BAD_ALLOC and
     # libseat connect errors during boot.
+    # `groupadd -r -f` ensures the groups exist before usermod runs;
+    # seatd's sysusers.d may install the seat group AFTER shedos-system
+    # in some pacman orderings, leaving usermod silently failing with
+    # "group seat does not exist" and the greeter unable to acquire seat0.
+    groupadd -r -f seat
+    groupadd -r -f input
+    groupadd -r -f video
     if id greeter &>/dev/null; then
         usermod -aG seat,video,input greeter 2>/dev/null || true
     fi

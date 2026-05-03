@@ -3,4 +3,9 @@ Description=Poll ShedOS hardware health signals, refresh the waybar indicator, a
 
 [Service]
 Type=oneshot
+# %h expands to the user's home dir. Systemd user units don't always
+# inherit HOME (env may be empty if the user manager started before
+# logind populated it), and the health script falls back to
+# $HOME/.local/state/shedos — empty HOME makes that "/.local/state".
+Environment=HOME=%h
 ExecStart=/usr/bin/shedman health --tick

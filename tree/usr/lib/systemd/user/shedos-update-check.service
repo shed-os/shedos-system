@@ -4,4 +4,5 @@ Documentation=man:checkupdates(8)
 
 [Service]
 Type=oneshot
+Environment=HOME=%h
 ExecStart=/usr/bin/shedman updates --tick
