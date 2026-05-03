@@ -4,11 +4,27 @@
 # the live system; during pacstrap it's the install target.
 
 _add_shedos_repo() {
-    # /etc/pacman.conf is owned by the `pacman` package, so we can't ship a
-    # replacement. Instead, append a fenced block between markers. Idempotent:
-    # the grep guard skips the append if the block is already there.
-    if ! grep -q '^# >>> shedos <<<' /etc/pacman.conf; then
-        cat >>/etc/pacman.conf <<'EOF'
+    # /etc/pacman.conf is owned by `pacman`. We append a fenced block.
+    # The strip-then-append flow is idempotent AND handles bare [shedos]
+    # blocks left behind by older airootfs templates (rc16 and earlier
+    # baked one in, which collided with this hook's marker-fenced append
+    # and produced `database already registered` from pacman -Sy).
+    local pacman_conf=/etc/pacman.conf
+    [[ -f $pacman_conf ]] || return 0
+    local tmp
+    tmp=$(mktemp)
+
+    # Drop every existing [shedos] block — fenced or bare — so we end
+    # up with at most one canonical block after appending below.
+    awk '
+        /^# >>> shedos <<<$/                  { skip=1; next }
+        /^# <<< shedos >>>$/                  { skip=0; next }
+        /^\[shedos\][[:space:]]*$/            { skip=2; next }
+        skip==2 && (/^\[/ || /^[[:space:]]*$/) { skip=0 }
+        !skip                                 { print }
+    ' "$pacman_conf" > "$tmp"
+
+    cat >> "$tmp" <<'EOF'
 
 # >>> shedos <<<
 # Managed by shedos-system — do not edit between these markers.
@@ -18,12 +34,14 @@ SigLevel = Required DatabaseRequired
 Server = https://repo.shedos.org/stable/$arch
 # <<< shedos >>>
 EOF
-    fi
+    install -Dm644 "$tmp" "$pacman_conf"
+    rm -f "$tmp"
+
     # Also append a *commented-out* [shedos-testing] block so users who
     # want to opt into the canary channel can do so by uncommenting,
     # without having to remember the URL or SigLevel.
-    if ! grep -q '^# >>> shedos-testing <<<' /etc/pacman.conf; then
-        cat >>/etc/pacman.conf <<'EOF'
+    if ! grep -q '^# >>> shedos-testing <<<' "$pacman_conf"; then
+        cat >>"$pacman_conf" <<'EOF'
 
 # >>> shedos-testing <<<
 # ShedOS canary channel — RC packages land here before reaching
