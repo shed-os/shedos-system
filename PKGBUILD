@@ -207,6 +207,8 @@ package() {
         "$pkgdir/etc/sudoers.d/wheel"
     install -Dm644 tree/usr/share/shedos/greetd/config.toml \
         "$pkgdir/usr/share/shedos/greetd/config.toml"
+    install -Dm644 tree/usr/share/shedos/greetd/greetd.pam \
+        "$pkgdir/usr/share/shedos/greetd/greetd.pam"
     install -Dm644 tree/etc/NetworkManager/conf.d/20-connection-defaults.conf \
         "$pkgdir/etc/NetworkManager/conf.d/20-connection-defaults.conf"
     install -Dm644 tree/etc/NetworkManager/conf.d/wifi_backend.conf \

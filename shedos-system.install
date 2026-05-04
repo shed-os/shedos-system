@@ -97,6 +97,16 @@ _bootstrap_greetd() {
         install -Dm644 "$src" "$dst"
     fi
 
+    # Same pattern for the PAM stack: ship our own /etc/pam.d/greetd
+    # with pam_gnome_keyring so the user's keyring auto-unlocks at login
+    # (otherwise Chrome/libsecret prompts for the keyring password on
+    # every launch).
+    local pam_src=/usr/share/shedos/greetd/greetd.pam
+    local pam_dst=/etc/pam.d/greetd
+    if [[ -f $pam_src ]]; then
+        install -Dm644 "$pam_src" "$pam_dst"
+    fi
+
     # The `greeter` system user (created by greetd's sysusers.d) needs:
     #   - `seat`  — talk to seatd, acquire a Wayland seat for cage
     #   - `video` — open /dev/dri/cardX for EGL/GBM
