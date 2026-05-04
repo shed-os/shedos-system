@@ -100,6 +100,9 @@ name = "realtime"
 #                                      cap NVMe deepest power state to one
 #                                      that wakes within 5.5 ms; some drives
 #                                      otherwise stall I/O for 50+ ms
+#   console=tty1                       restrict /dev/console broadcasts to
+#                                      tty1 so they don't leak onto the
+#                                      greeter VT (greetd uses vt="next")
 [kernel.cmdline]
 append = [
     "nowatchdog",
@@ -107,4 +110,5 @@ append = [
     "loglevel=3",
     "rd.udev.log_level=3",
     "nvme_core.default_ps_max_latency_us=5500",
+    "console=tty1",
 ]
