@@ -102,51 +102,57 @@ fi
 
 log "launching yad form (name=$FULL_NAME existing_email=$EXISTING_EMAIL)"
 
-RESULT=$(yad --form \
-    --title="Welcome to ShedOS" \
-    --width=400 \
-    --center \
-    --window-icon=preferences-system \
-    --image=preferences-desktop-personal \
-    --field="Welcome to ShedOS\!:LBL" "" \
-    --field="Let's set up your development environment.:LBL" "" \
-    --field="This information will be used to configure git.:LBL" "" \
-    --field="Full Name:":TEXT "$FULL_NAME" \
-    --field="Email Address:":TEXT "$EXISTING_EMAIL" \
-    --field="GitHub Username (optional):":TEXT "" \
-    --field=":LBL" "" \
-    --field="You can change these settings later with 'git config':LBL" "" \
-    --button="Skip:1" \
-    --button="Configure:0" \
-    2>>"$LOG")
-EXIT_CODE=$?
+# Loop the form until either the user clicks Skip / closes the dialog,
+# or they submit valid data. Earlier versions exec'd $0 on validation
+# failure, which spawned a second welcome window — avoid that.
+NAME="$FULL_NAME"
+EMAIL="$EXISTING_EMAIL"
+GITHUB=""
+while true; do
+    RESULT=$(yad --form \
+        --title="Welcome to ShedOS" \
+        --width=400 \
+        --center \
+        --window-icon=preferences-system \
+        --image=preferences-desktop-personal \
+        --field="Welcome to ShedOS\!:LBL" "" \
+        --field="Let's set up your development environment.:LBL" "" \
+        --field="This information will be used to configure git.:LBL" "" \
+        --field="Full Name:":TEXT "$NAME" \
+        --field="Email Address:":TEXT "$EMAIL" \
+        --field="GitHub Username (optional):":TEXT "$GITHUB" \
+        --field=":LBL" "" \
+        --field="You can change these settings later with 'git config':LBL" "" \
+        --button="Skip:1" \
+        --button="Configure:0" \
+        2>>"$LOG")
+    EXIT_CODE=$?
 
-log "yad form exit_code=$EXIT_CODE"
+    log "yad form exit_code=$EXIT_CODE"
 
-# Only 0 (Configure) and 1 (Skip) count as user interactions. Anything
-# else (70 GTK init, 127 not-found, 252 WM-close) is a yad failure
-# and must NOT mark the wizard done.
-case "$EXIT_CODE" in
-    0)
-        : # fall through to parse fields
-        ;;
-    1)
-        log "user clicked Skip — marker set"
-        touch "$MARKER_FILE" 2>>"$LOG" || true
-        exit 0
-        ;;
-    *)
-        log "yad failed (exit $EXIT_CODE) — exiting without marker; next login will retry"
-        notify_user_yad_missing
-        exit 0
-        ;;
-esac
+    case "$EXIT_CODE" in
+        0)
+            ;;
+        1)
+            log "user clicked Skip — marker set"
+            touch "$MARKER_FILE" 2>>"$LOG" || true
+            exit 0
+            ;;
+        *)
+            log "yad failed (exit $EXIT_CODE) — exiting without marker; next login will retry"
+            notify_user_yad_missing
+            exit 0
+            ;;
+    esac
 
-# Fields are |-separated; LBL fields are empty strings we have to consume.
-IFS='|' read -r _ _ _ NAME EMAIL GITHUB _ <<< "$RESULT"
+    # Fields are |-separated; LBL fields are empty strings we have to consume.
+    IFS='|' read -r _ _ _ NAME EMAIL GITHUB _ <<< "$RESULT"
 
-if [[ -z "$EMAIL" || ! "$EMAIL" =~ "@" ]]; then
-    log "invalid email entered: ${EMAIL@Q}"
+    if [[ -n "$EMAIL" && "$EMAIL" =~ "@" ]]; then
+        break
+    fi
+
+    log "invalid email entered: ${EMAIL@Q} — re-prompting"
     yad --error \
         --title="Invalid Email" \
         --text="Please enter a valid email address." \
@@ -154,8 +160,7 @@ if [[ -z "$EMAIL" || ! "$EMAIL" =~ "@" ]]; then
         --center \
         --button="OK!gtk-ok:0" \
         2>>"$LOG"
-    exec "$0" "$@"
-fi
+done
 
 log "configuring git: name=${NAME@Q} email=${EMAIL@Q} github=${GITHUB@Q}"
 
