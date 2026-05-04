@@ -45,6 +45,7 @@ depends=(
     'yay'               # shedman update + apps installer
     'kitty'             # shedman update runs interactively
     'libnotify'         # notify-send fallbacks
+    'reflector'        # shedos-reflector.{service,timer} refresh mirrorlist
 )
 # Hard conflict with power-profiles-daemon: it competes with tlp for
 # CPU governor ownership. `replaces=` lets pacman do a transactional
@@ -181,6 +182,10 @@ package() {
         "$pkgdir/usr/lib/systemd/system/shedos-pg-initdb.service"
     install -Dm644 tree/usr/lib/systemd/system/shedos-pg-user-bootstrap.service \
         "$pkgdir/usr/lib/systemd/system/shedos-pg-user-bootstrap.service"
+    install -Dm644 tree/usr/lib/systemd/system/shedos-reflector.service \
+        "$pkgdir/usr/lib/systemd/system/shedos-reflector.service"
+    install -Dm644 tree/usr/lib/systemd/system/shedos-reflector.timer \
+        "$pkgdir/usr/lib/systemd/system/shedos-reflector.timer"
 
     # Systemd (user-scope): update-check timer
     install -Dm644 tree/usr/lib/systemd/user/shedos-update-check.service \

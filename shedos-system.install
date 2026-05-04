@@ -187,6 +187,7 @@ post_install() {
         systemctl enable --now systemd-oomd.service 2>/dev/null || true
         systemctl enable --now tlp.service 2>/dev/null || true
         systemctl enable --now ananicy-cpp.service 2>/dev/null || true
+        systemctl enable --now shedos-reflector.timer 2>/dev/null || true
     else
         # In pacstrap / no-systemd contexts, fall back to enable-only so the
         # units come up on first real boot.
@@ -195,6 +196,7 @@ post_install() {
         systemctl enable systemd-oomd.service 2>/dev/null || true
         systemctl enable tlp.service 2>/dev/null || true
         systemctl enable ananicy-cpp.service 2>/dev/null || true
+        systemctl enable shedos-reflector.timer 2>/dev/null || true
     fi
 
     cat <<'EOF'
@@ -262,6 +264,7 @@ post_upgrade() {
         systemctl enable --now systemd-oomd.service 2>/dev/null || true
         systemctl enable --now tlp.service 2>/dev/null || true
         systemctl enable --now ananicy-cpp.service 2>/dev/null || true
+        systemctl enable --now shedos-reflector.timer 2>/dev/null || true
     fi
 }
 

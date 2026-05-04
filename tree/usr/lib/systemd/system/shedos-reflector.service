@@ -1,0 +1,9 @@
+[Unit]
+Description=Refresh /etc/pacman.d/mirrorlist via reflector
+After=network-online.target NetworkManager-wait-online.service
+Wants=network-online.target
+ConditionPathExists=/usr/bin/reflector
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/reflector --save /etc/pacman.d/mirrorlist --sort rate --latest 20 --protocol https --age 12 --threads 5
