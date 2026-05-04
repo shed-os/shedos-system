@@ -186,6 +186,10 @@ package() {
         "$pkgdir/usr/lib/systemd/system/shedos-reflector.service"
     install -Dm644 tree/usr/lib/systemd/system/shedos-reflector.timer \
         "$pkgdir/usr/lib/systemd/system/shedos-reflector.timer"
+    install -Dm644 tree/usr/lib/systemd/system/plymouth-quit.service.d/shedos-bridge.conf \
+        "$pkgdir/usr/lib/systemd/system/plymouth-quit.service.d/shedos-bridge.conf"
+    install -Dm755 tree/usr/lib/shedos/plymouth-bridge \
+        "$pkgdir/usr/lib/shedos/plymouth-bridge"
 
     # Systemd (user-scope): update-check timer
     install -Dm644 tree/usr/lib/systemd/user/shedos-update-check.service \
