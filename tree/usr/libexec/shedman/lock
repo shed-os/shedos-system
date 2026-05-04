@@ -1,8 +1,4 @@
 #!/bin/bash
-# Spawn hyprlock with the screensaver overlay above it. The screensaver
-# self-dismisses on first keypress (via its Exclusive keyboard grab);
-# hypridle's on-resume also stops it on activity. We don't stop it
-# after hyprlock exits — both teardown paths above already cover it.
 
 if [[ "${1:-}" == "--help-summary" ]]; then
     echo "lock the session"
@@ -14,4 +10,5 @@ if pidof hyprlock >/dev/null; then
 fi
 
 systemctl --user start shedos-screensaver.service 2>/dev/null
-exec hyprlock
+hyprlock
+systemctl --user stop shedos-screensaver.service 2>/dev/null
