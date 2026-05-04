@@ -12,7 +12,7 @@
 # scriptlet copies it to /etc/greetd/ on every install/upgrade.
 
 [terminal]
-vt = 1
+vt = "next"
 
 [default_session]
 # Wrap cage in `env HOME=...` because pam_systemd may not set HOME for
