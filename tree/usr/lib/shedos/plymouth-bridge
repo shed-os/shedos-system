@@ -1,0 +1,13 @@
+#!/bin/bash
+# Wait up to 60s for Hyprland session-ready sentinel, then quit plymouth.
+# Bounded so a missing sentinel never deadlocks boot. The sentinel is
+# touched by an exec-once line in /etc/skel/.config/hypr/autostart.conf
+# once Hyprland has its first frame on screen. plymouth quits with
+# --retain-splash so the splash texture stays painted into DRM until
+# Hyprland's first commit replaces it (no flash on handoff).
+deadline=$(($(date +%s) + 60))
+while [[ $(date +%s) -lt $deadline ]]; do
+    [[ -e /tmp/shedos-hyprland-ready ]] && break
+    sleep 0.1
+done
+exec /usr/bin/plymouth quit --retain-splash
