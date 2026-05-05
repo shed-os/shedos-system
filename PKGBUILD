@@ -8,7 +8,7 @@
 
 pkgname=shedos-system
 pkgver=2026.05.05
-pkgrel=1
+pkgrel=2
 pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/theshedman/shedos'
@@ -176,6 +176,9 @@ package() {
     # this to ~/.config/shedos/sync-exclude to opt out of specific files.
     install -Dm644 tree/usr/share/shedos/sync-exclude.example \
         "$pkgdir/usr/share/shedos/sync-exclude.example"
+
+    install -Dm644 tree/etc/skel/.local/share/keyrings/default \
+        "$pkgdir/etc/skel/.local/share/keyrings/default"
 
     # Systemd (system-scope)
     install -Dm644 tree/usr/lib/systemd/system/shedos-pg-initdb.service \
