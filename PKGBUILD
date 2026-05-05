@@ -223,6 +223,10 @@ package() {
     # their own file with a higher number under /etc/sysctl.d/ etc.
     install -Dm644 tree/etc/sysctl.d/99-shedos-tuning.conf \
         "$pkgdir/etc/sysctl.d/99-shedos-tuning.conf"
+    install -Dm644 tree/etc/sysctl.d/95-shedos-dev.conf \
+        "$pkgdir/etc/sysctl.d/95-shedos-dev.conf"
+    install -Dm644 tree/etc/makepkg.conf.d/shedos-parallel.conf \
+        "$pkgdir/etc/makepkg.conf.d/shedos-parallel.conf"
     install -Dm644 tree/etc/udev/rules.d/50-shedos-usb-autosuspend.rules \
         "$pkgdir/etc/udev/rules.d/50-shedos-usb-autosuspend.rules"
     install -Dm644 tree/etc/udev/rules.d/60-shedos-ioschedulers.rules \
