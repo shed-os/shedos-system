@@ -229,6 +229,10 @@ package() {
         "$pkgdir/etc/udev/rules.d/60-shedos-ioschedulers.rules"
     install -Dm644 tree/etc/udev/rules.d/61-shedos-hdd-readahead.rules \
         "$pkgdir/etc/udev/rules.d/61-shedos-hdd-readahead.rules"
+    install -Dm644 tree/etc/udev/rules.d/99-shedos-pcie-runtime-pm.rules \
+        "$pkgdir/etc/udev/rules.d/99-shedos-pcie-runtime-pm.rules"
+    install -Dm644 tree/etc/tlp.d/00-shedos.conf \
+        "$pkgdir/etc/tlp.d/00-shedos.conf"
     install -Dm644 tree/etc/modprobe.d/shedos-blacklist.conf \
         "$pkgdir/etc/modprobe.d/shedos-blacklist.conf"
     install -Dm644 tree/etc/modules-load.d/shedos-net.conf \
