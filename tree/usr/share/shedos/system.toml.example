@@ -1,10 +1,10 @@
 # system.toml.example — fully-commented template for /etc/shedos/system.toml
 #
 # Copy sections you want to customize into /etc/shedos/system.toml and run
-# `shedos-apply` to reconcile. `shedos-apply --dry-run` prints the plan
-# without touching anything; `shedos-apply --validate` only checks syntax.
+# `shedman apply` to reconcile. `shedman apply --dry-run` prints the plan
+# without touching anything; `shedman apply --validate` only checks syntax.
 #
-# The schema version is frozen at 1. shedos-apply refuses unknown versions
+# The schema version is frozen at 1. shedman apply refuses unknown versions
 # with a pointed error — safer than silent reinterpretation.
 
 schema = 1
@@ -75,12 +75,12 @@ limit = 50       # NUMBER_LIMIT — max snapshots before oldest get culled
 # end in a known config extension (.conf, .rules, .json, .cfg, ...).
 # Values are the full file content as a literal TOML string.
 #
-# shedos-apply tracks ownership of drop-ins in /var/lib/shedos/apply.state.json.
+# shedman apply tracks ownership of drop-ins in /var/lib/shedos/apply.state.json.
 # Removing a drop-in from here deletes the file on the next apply.
 #
 # WARNING: do NOT declare drop-ins that are already managed by a package's
 # backup=() entry (sudoers.d/wheel, sddm.conf.d/theme.conf, etc.) —
-# shedos-apply and pacman will fight over ownership. Stick to bespoke
+# shedman apply and pacman will fight over ownership. Stick to bespoke
 # drop-ins that no package claims.
 
 # [drop-ins]
@@ -98,9 +98,9 @@ limit = 50       # NUMBER_LIMIT — max snapshots before oldest get culled
 # [pacman.repos.<name>] — managed stanzas in /etc/pacman.conf
 # ---------------------------------------------------------------------------
 #
-# shedos-apply owns a fenced block between `# >>> shedos <<<` and
+# shedman apply owns a fenced block between `# >>> shedos <<<` and
 # `# <<< shedos >>>` in /etc/pacman.conf. The install scriptlet writes the
-# initial fence on first install; ongoing edits flow through shedos-apply.
+# initial fence on first install; ongoing edits flow through shedman apply.
 #
 # Each repo table below becomes one [<name>] stanza inside the fence.
 # Anything outside the fence (e.g. [core], [extra], [multilib], or the
@@ -116,16 +116,16 @@ limit = 50       # NUMBER_LIMIT — max snapshots before oldest get culled
 # removes just that repo.
 
 [pacman.repos.shedos]
-server   = "https://repo.shedos.org/$arch"
+server   = "https://repo.shedos.org/stable/$arch"
 siglevel = "Required DatabaseRequired"
 
 # Opt in to the canary (testing) channel by uncommenting the block
 # below. RC packages land here before reaching [shedos]. Stable cuts
-# also publish to /x86_64-testing/, so opting in only changes
-# behavior during RC windows.
+# also publish to /test/x86_64/, so opting in only changes behavior
+# during RC windows.
 #
 # [pacman.repos.shedos-testing]
-# server   = "https://repo.shedos.org/$arch-testing"
+# server   = "https://repo.shedos.org/test/$arch"
 # siglevel = "Required DatabaseRequired"
 
 # Add your own repo:
@@ -148,6 +148,16 @@ siglevel = "Required DatabaseRequired"
 [services.postgresql]
 auto-init   = true   # controls shedos-pg-initdb.service
 per-user-db = true   # controls shedos-pg-user-bootstrap.service
+
+# ---------------------------------------------------------------------------
+# [services.docker] — declarative wrapper over docker.service
+# ---------------------------------------------------------------------------
+#
+# Docker is enabled at install time. Set `enable = false` and run
+# `shedman apply` to mask docker.service on systems that don't need it.
+
+[services.docker]
+enable = true
 
 # ---------------------------------------------------------------------------
 # [network.firewall] — declarative ufw with bidirectional adoption

@@ -74,6 +74,11 @@ siglevel = "Required DatabaseRequired"
 auto-init   = true   # shedos-pg-initdb.service
 per-user-db = true   # shedos-pg-user-bootstrap.service
 
+# Docker daemon — enabled at install time. Flip to false and run
+# `shedman apply` to mask docker.service.
+[services.docker]
+enable = true
+
 # Realtime audio group. Empty by default — users opt in by adding
 # themselves under [[users]].groups (or with `sudo gpasswd -a $USER
 # realtime`). The /etc/security/limits.d/30-shedos-realtime.conf file
