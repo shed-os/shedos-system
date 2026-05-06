@@ -42,8 +42,8 @@ depends=(
                        # — tagged 1.1.1 fails on glibc 2.41+. See
                        # packages/aur.txt for the upstream context.
     'yad'              # shedman welcome + apps installer GUI
-    'yay'               # shedman update + apps installer
-    'kitty'             # shedman update runs interactively
+    'yay'              # shedman update + apps installer
+    'kitty'            # shedman update runs interactively
     'libnotify'         # notify-send fallbacks
     'reflector'        # shedos-reflector.{service,timer} refresh mirrorlist
 )
