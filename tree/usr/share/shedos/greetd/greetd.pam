@@ -1,9 +1,16 @@
 #%PAM-1.0
 
+# pam_gnome_keyring.so must follow the password-asking include in
+# both auth and session phases — only after system-local-login has
+# set PAM_AUTHTOK can pam_gnome_keyring stash + use it to unlock
+# the login keyring. Reversing the order silently turns the keyring
+# into a write-only sink (Chrome/VSCode then complain about a
+# "weak" or empty keyring on first secret request).
+
 auth       required     pam_securetty.so
 auth       requisite    pam_nologin.so
-auth       optional     pam_gnome_keyring.so
 auth       include      system-local-login
+auth       optional     pam_gnome_keyring.so
 account    include      system-local-login
-session    optional     pam_gnome_keyring.so auto_start
 session    include      system-local-login
+session    optional     pam_gnome_keyring.so auto_start
