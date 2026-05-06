@@ -140,6 +140,12 @@ package() {
             "$pkgdir/etc/shedos/themes/palettes/$(basename "$_palette")"
     done
 
+    # Single source of truth for the reflector flag set, exec'd by
+    # shedos-mirrorlist.service (live ISO), shedos-reflector.service
+    # (installed system), and the shedos_mirrors Calamares module.
+    install -Dm755 tree/usr/lib/shedos/refresh-mirrorlist.sh \
+        "$pkgdir/usr/lib/shedos/refresh-mirrorlist.sh"
+
     # Limine multi-kernel renderer + the pacman hook that fires it on
     # every kernel install/upgrade/remove.
     install -Dm755 tree/usr/lib/shedos/render-limine-config.sh \
