@@ -1,10 +1,10 @@
-# /etc/shedos/system.toml — declarative system state for shedos-apply.
+# /etc/shedos/system.toml — declarative system state for `shedman apply`.
 #
 # This file is the default ShedOS ships with. It mirrors the behavior the
-# install scriptlet used to apply imperatively, so `shedos-apply` is a
+# install scriptlet used to apply imperatively, so `shedman apply` is a
 # no-op on a freshly-installed system.
 #
-# Edit freely. Run `shedos-apply` afterwards to reconcile. A fully-
+# Edit freely. Run `shedman apply` afterwards to reconcile. A fully-
 # commented template lives at /usr/share/shedos/system.toml.example.
 #
 # Backed up by pacman (see `backup=` in shedos-system PKGBUILD), so your
@@ -54,18 +54,18 @@ limit = 50
 #
 # The /etc drop-ins that shedos-system already ships (sudoers.d/wheel,
 # sddm.conf.d/theme.conf, NetworkManager/conf.d/*) are managed by pacman
-# via backup=() so user edits become .pacnew on upgrade. If shedos-apply
+# via backup=() so user edits become .pacnew on upgrade. If `shedman apply`
 # took ownership of those same files there'd be a fight between pacman's
-# .pacnew merge and shedos-apply's reconcile.
+# .pacnew merge and apply's reconcile.
 #
 # Only declare drop-ins here that aren't already pacman-managed. See the
 # example template for syntax.
 
 # The [shedos] repo stanza in /etc/pacman.conf. The install scriptlet
 # writes an initial fence on first install; ongoing edits flow through
-# shedos-apply so you can add extra repos or tweak SigLevel here.
+# `shedman apply` so you can add extra repos or tweak SigLevel here.
 [pacman.repos.shedos]
-server   = "https://repo.shedos.org/$arch"
+server   = "https://repo.shedos.org/stable/$arch"
 siglevel = "Required DatabaseRequired"
 
 # PostgreSQL bootstrap — mirrors what the install scriptlet enables.
