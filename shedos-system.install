@@ -4,6 +4,15 @@
 # the live system; during pacstrap it's the install target.
 
 _add_shedos_repo() {
+    # Skip when running inside the ShedOS package-build chroot. The build
+    # script (scripts/build-shedos-packages.sh) creates this marker so the
+    # scriptlet doesn't add the production repo to the build container's
+    # /etc/pacman.conf — the next pacman -Sy inside makepkg would 404 on
+    # a repo whose db doesn't yet exist (we're building what would land
+    # there). Pacstrap and Calamares chroot into a target rootfs, so the
+    # marker at container / isn't visible to them; they get normal behavior.
+    [[ -e /.shedos-build-environment ]] && return 0
+
     # /etc/pacman.conf is owned by `pacman`. We append a fenced block.
     # The strip-then-append flow is idempotent AND handles bare [shedos]
     # blocks left behind by older airootfs templates (rc16 and earlier
