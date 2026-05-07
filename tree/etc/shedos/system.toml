@@ -108,6 +108,11 @@ name = "realtime"
 #   console=tty1                       restrict /dev/console broadcasts to
 #                                      tty1 so they don't leak onto the
 #                                      greeter VT (greetd uses vt="next")
+#   fbcon=nodefer,map:99               unbind the framebuffer text console
+#                                      from any GPU, so the bare TTY can
+#                                      never paint between cage exiting
+#                                      and Hyprland claiming DRM (no flash
+#                                      during greeter → desktop transition)
 [kernel.cmdline]
 append = [
     "nowatchdog",
@@ -116,4 +121,5 @@ append = [
     "rd.udev.log_level=3",
     "nvme_core.default_ps_max_latency_us=5500",
     "console=tty1",
+    "fbcon=nodefer,map:99",
 ]

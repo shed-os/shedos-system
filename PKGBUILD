@@ -146,6 +146,13 @@ package() {
     install -Dm755 tree/usr/lib/shedos/refresh-mirrorlist.sh \
         "$pkgdir/usr/lib/shedos/refresh-mirrorlist.sh"
 
+    # Greetd → Hyprland session launcher: redirects uwsm + Hyprland
+    # output to journald so the post-auth transition doesn't flash
+    # text on the framebuffer console. Invoked by shedos-greeter via
+    # greetd's IPC.
+    install -Dm755 tree/usr/lib/shedos/start-hyprland-session.sh \
+        "$pkgdir/usr/lib/shedos/start-hyprland-session.sh"
+
     # Limine multi-kernel renderer + the pacman hook that fires it on
     # every kernel install/upgrade/remove.
     install -Dm755 tree/usr/lib/shedos/render-limine-config.sh \
