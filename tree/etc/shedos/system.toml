@@ -86,40 +86,33 @@ enable = true
 [[groups]]
 name = "realtime"
 
-# Limine kernel cmdline tokens.
+# Limine kernel cmdline tokens — user-tunable additions only.
 #
-# These tokens are user-managed: applied on first `shedman apply` after
-# install, and removable by deleting any entry below + running apply
-# again. They are NOT part of the install-time baseline — the installer
-# never writes them into /boot/limine.conf, so the [kernel.cmdline]
-# reconciler doesn't snapshot them as protected baseline state.
+# These tokens are applied on first `shedman apply` after install and
+# can be removed by deleting any entry below + running apply again.
+# Tokens listed here become part of the apply_core protected baseline
+# only after they first appear in /boot/limine.conf via this list.
 #
-# What each does:
+# UX-critical tokens (loglevel=3, rd.udev.log_level=3, console=tty1,
+# fbcon=nodefer,map:99) are NOT listed here on purpose — they are
+# baked into the install-time cmdline by the installer
+# (installer/shedos_installer/core/bootloader.py :: _build_cmdline)
+# so a fresh install boots without a console flash before any apply
+# has run. They become part of the protected baseline on first apply,
+# which is the desired property for tokens no end-user would remove.
+#
+# What each below does:
 #   nowatchdog                         disable kernel watchdog timers
 #                                      (drops timer interrupts on idle CPUs)
 #   split_lock_detect=off              don't trap on cross-cacheline atomics
 #                                      (some games / legacy workloads need this)
-#   loglevel=3                         only WARN+ to console (quiet boot)
-#   rd.udev.log_level=3                same for the initramfs udev pass
 #   nvme_core.default_ps_max_latency_us=5500
 #                                      cap NVMe deepest power state to one
 #                                      that wakes within 5.5 ms; some drives
 #                                      otherwise stall I/O for 50+ ms
-#   console=tty1                       restrict /dev/console broadcasts to
-#                                      tty1 so they don't leak onto the
-#                                      greeter VT (greetd uses vt="next")
-#   fbcon=nodefer,map:99               unbind the framebuffer text console
-#                                      from any GPU, so the bare TTY can
-#                                      never paint between cage exiting
-#                                      and Hyprland claiming DRM (no flash
-#                                      during greeter → desktop transition)
 [kernel.cmdline]
 append = [
     "nowatchdog",
     "split_lock_detect=off",
-    "loglevel=3",
-    "rd.udev.log_level=3",
     "nvme_core.default_ps_max_latency_us=5500",
-    "console=tty1",
-    "fbcon=nodefer,map:99",
 ]

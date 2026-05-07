@@ -307,10 +307,14 @@ enable = true
 # Adoption: tokens added by hand-editing /boot/limine.conf get pulled
 # into `append` on the next `shedman apply`.
 #
-# Baseline: every cmdline token present on first apply (root=,
-# rw, quiet, splash, …) is permanently invisible. Removing a baseline
-# token from `append` is a no-op; baseline tokens stay in the live
-# cmdline forever.
+# Baseline: every cmdline token present on first apply is permanently
+# invisible. The installer-baked baseline includes hardware essentials
+# (root=, rootflags=, rootfstype=, rw, optional cryptdevice= and
+# nvidia_drm.modeset=1) and the UX-critical tokens that suppress the
+# first-boot console flash (quiet, splash, loglevel=3,
+# rd.udev.log_level=3, console=tty1, fbcon=nodefer,map:99). Removing a
+# baseline token from `append` is a no-op; baseline tokens stay in the
+# live cmdline forever.
 #
 # Reboot required: every change reaches the kernel only on the next
 # boot. Plan output marks the Change with a "reboot to apply" hint.
