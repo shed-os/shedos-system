@@ -1,10 +1,10 @@
-# /etc/shedos/system.toml — declarative system state for shedos-apply.
+# /etc/shedos/system.toml — declarative system state for `shedman apply`.
 #
 # This file is the default ShedOS ships with. It mirrors the behavior the
-# install scriptlet used to apply imperatively, so `shedos-apply` is a
+# install scriptlet used to apply imperatively, so `shedman apply` is a
 # no-op on a freshly-installed system.
 #
-# Edit freely. Run `shedos-apply` afterwards to reconcile. A fully-
+# Edit freely. Run `shedman apply` afterwards to reconcile. A fully-
 # commented template lives at /usr/share/shedos/system.toml.example.
 #
 # Backed up by pacman (see `backup=` in shedos-system PKGBUILD), so your
@@ -54,18 +54,18 @@ limit = 50
 #
 # The /etc drop-ins that shedos-system already ships (sudoers.d/wheel,
 # sddm.conf.d/theme.conf, NetworkManager/conf.d/*) are managed by pacman
-# via backup=() so user edits become .pacnew on upgrade. If shedos-apply
+# via backup=() so user edits become .pacnew on upgrade. If `shedman apply`
 # took ownership of those same files there'd be a fight between pacman's
-# .pacnew merge and shedos-apply's reconcile.
+# .pacnew merge and apply's reconcile.
 #
 # Only declare drop-ins here that aren't already pacman-managed. See the
 # example template for syntax.
 
 # The [shedos] repo stanza in /etc/pacman.conf. The install scriptlet
 # writes an initial fence on first install; ongoing edits flow through
-# shedos-apply so you can add extra repos or tweak SigLevel here.
+# `shedman apply` so you can add extra repos or tweak SigLevel here.
 [pacman.repos.shedos]
-server   = "https://repo.shedos.org/$arch"
+server   = "https://repo.shedos.org/stable/$arch"
 siglevel = "Required DatabaseRequired"
 
 # PostgreSQL bootstrap — mirrors what the install scriptlet enables.
@@ -73,6 +73,11 @@ siglevel = "Required DatabaseRequired"
 [services.postgresql]
 auto-init   = true   # shedos-pg-initdb.service
 per-user-db = true   # shedos-pg-user-bootstrap.service
+
+# Docker daemon — enabled at install time. Flip to false and run
+# `shedman apply` to mask docker.service.
+[services.docker]
+enable = true
 
 # Realtime audio group. Empty by default — users opt in by adding
 # themselves under [[users]].groups (or with `sudo gpasswd -a $USER
@@ -103,6 +108,11 @@ name = "realtime"
 #   console=tty1                       restrict /dev/console broadcasts to
 #                                      tty1 so they don't leak onto the
 #                                      greeter VT (greetd uses vt="next")
+#   fbcon=nodefer,map:99               unbind the framebuffer text console
+#                                      from any GPU, so the bare TTY can
+#                                      never paint between cage exiting
+#                                      and Hyprland claiming DRM (no flash
+#                                      during greeter → desktop transition)
 [kernel.cmdline]
 append = [
     "nowatchdog",
@@ -111,4 +121,5 @@ append = [
     "rd.udev.log_level=3",
     "nvme_core.default_ps_max_latency_us=5500",
     "console=tty1",
+    "fbcon=nodefer,map:99",
 ]

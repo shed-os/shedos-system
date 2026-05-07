@@ -6,4 +6,4 @@ ConditionPathExists=/usr/bin/reflector
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/reflector --save /etc/pacman.d/mirrorlist --sort rate --latest 20 --protocol https --age 12 --threads 5
+ExecStart=/usr/lib/shedos/refresh-mirrorlist.sh
