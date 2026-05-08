@@ -267,6 +267,12 @@ package() {
         "$pkgdir/etc/systemd/system.conf.d/shedos-quiet-status.conf"
     install -Dm644 tree/etc/systemd/user.conf.d/shedos-quiet-status.conf \
         "$pkgdir/etc/systemd/user.conf.d/shedos-quiet-status.conf"
+
+    # user@.service drop-in: pin stderr to journal at the root of the
+    # inheritance chain. Every user service that uses the default
+    # StandardError=inherit then lands in journald instead of /dev/console.
+    install -Dm644 tree/etc/systemd/system/user@.service.d/journal-only.conf \
+        "$pkgdir/etc/systemd/system/user@.service.d/journal-only.conf"
     install -Dm644 tree/etc/modules-load.d/shedos-net.conf \
         "$pkgdir/etc/modules-load.d/shedos-net.conf"
     install -Dm644 tree/etc/systemd/zram-generator.conf \
