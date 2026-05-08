@@ -448,6 +448,53 @@ PY
     : > "$sentinel"
 }
 
+_fix_locale_conf_encoding() {
+    # Calamares sometimes wrote /etc/locale.conf with bare locale names
+    # (`LANG=en_NG`, `LC_TIME=en_NG`) instead of the encoding-qualified
+    # form (`LANG=en_NG.UTF-8`). glibc indexes locales by their fully
+    # qualified name; setlocale("en_NG") fails with "cannot change
+    # locale" and bash prints the warning to stderr on every interactive
+    # login. With greetd's session worker running bash on tty1, those
+    # warnings reached tty1's vcs buffer and were painted by fbcon
+    # during DRM-master gaps.
+    #
+    # Fresh installs done with the post-fix shedos_finalize Calamares
+    # module no longer have this problem; this self-heal handles
+    # existing installs from before that fix landed. Idempotent:
+    # locale lines that already have a dot-separated encoding suffix
+    # are left alone.
+    local conf=/etc/locale.conf
+    [[ -f $conf ]] || return 0
+    [[ -x /usr/bin/python3 ]] || return 0
+
+    /usr/bin/python3 - "$conf" <<'PY' 2>/dev/null
+import sys
+from pathlib import Path
+
+p = Path(sys.argv[1])
+original = p.read_text()
+fixed = []
+changed = False
+for line in original.splitlines():
+    stripped = line.strip()
+    if "=" in stripped and not stripped.startswith("#"):
+        key, _, value = stripped.partition("=")
+        value = value.strip().strip('"').strip("'")
+        if value and "." not in value and value not in ("C", "POSIX"):
+            fixed.append(f"{key.strip()}={value}.UTF-8")
+            changed = True
+            continue
+    fixed.append(line)
+if changed:
+    p.write_text("\n".join(fixed) + "\n")
+    sys.exit(10)
+PY
+    # Exit code 10 from the Python heredoc means the file was rewritten.
+    if [[ $? -eq 10 ]]; then
+        echo "  → fixed bare locale names in $conf (added .UTF-8 suffix)"
+    fi
+}
+
 _self_heal_welcome_marker() {
     # One-shot fix for users stuck behind the old (rc1) silent-marker
     # bug: marker present AND ~/.gitconfig lacks user.email is the
@@ -483,6 +530,7 @@ post_upgrade() {
     _render_theme
     _self_heal_welcome_marker
     _backfill_cmdline_ux_tokens
+    _fix_locale_conf_encoding
 
     if [[ -d /run/systemd/system ]]; then
         systemctl enable --now snapper-timeline.timer 2>/dev/null || true
