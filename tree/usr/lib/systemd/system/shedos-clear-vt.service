@@ -1,0 +1,12 @@
+[Unit]
+Description=Clear VT text buffers before greetd takeover
+After=plymouth-quit-wait.service systemd-user-sessions.service
+Before=greetd.service
+ConditionPathExists=/dev/vcs1
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/shedos/clear-vt-text.sh
+
+[Install]
+WantedBy=greetd.service

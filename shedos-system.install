@@ -188,6 +188,8 @@ _bootstrap_snapper() {
 post_install() {
     systemctl daemon-reload || true
     systemctl enable shedos-pg-initdb.service || true
+    # Defense-in-depth VT wipe before greetd takes over tty1.
+    systemctl enable shedos-clear-vt.service 2>/dev/null || true
     # Creates a LOGIN+CREATEDB postgres role + same-named database for each
     # regular Linux user, on every boot (idempotent). Safety net for the
     # Calamares-time bootstrap in shedos_finalize — if that fails silently,
@@ -519,6 +521,8 @@ _self_heal_welcome_marker() {
 post_upgrade() {
     systemctl daemon-reload || true
     systemctl enable shedos-pg-user-bootstrap.service || true
+    # Defense-in-depth VT wipe before greetd takes over tty1.
+    systemctl enable shedos-clear-vt.service 2>/dev/null || true
     systemctl --global enable shedos-update-check.timer || true
     systemctl --global enable shedos-check-health.timer || true
     systemctl --global enable shedos-doctor.timer || true

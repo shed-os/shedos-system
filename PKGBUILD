@@ -273,6 +273,14 @@ package() {
     # StandardError=inherit then lands in journald instead of /dev/console.
     install -Dm644 tree/etc/systemd/system/user@.service.d/journal-only.conf \
         "$pkgdir/etc/systemd/system/user@.service.d/journal-only.conf"
+
+    # Clear-VT defense-in-depth service: wipes vcs1..6 with ESC c so
+    # fbcon paints empty during DRM-master gaps. Fires after
+    # plymouth-quit-wait + systemd-user-sessions, before greetd.
+    install -Dm755 tree/usr/lib/shedos/clear-vt-text.sh \
+        "$pkgdir/usr/lib/shedos/clear-vt-text.sh"
+    install -Dm644 tree/usr/lib/systemd/system/shedos-clear-vt.service \
+        "$pkgdir/usr/lib/systemd/system/shedos-clear-vt.service"
     install -Dm644 tree/etc/modules-load.d/shedos-net.conf \
         "$pkgdir/etc/modules-load.d/shedos-net.conf"
     install -Dm644 tree/etc/systemd/zram-generator.conf \
