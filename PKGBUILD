@@ -46,6 +46,9 @@ depends=(
     'kitty'            # shedman update runs interactively
     'libnotify'         # notify-send fallbacks
     'reflector'        # shedos-reflector.{service,timer} refresh mirrorlist
+    'imagemagick'      # theme_renderer.py shells out to `magick` to
+                       # generate wallpaper-blurred.png when a user-set
+                       # wallpaper has no shipped -blurred companion
 )
 # Hard conflict with power-profiles-daemon: it competes with tlp for
 # CPU governor ownership. `replaces=` lets pacman do a transactional
