@@ -128,6 +128,18 @@ _bootstrap_greetd() {
     if id greeter &>/dev/null; then
         usermod -aG seat,video,input greeter 2>/dev/null || true
     fi
+
+    # Mask getty@tty1.service and its autovt@tty1 alias so no agetty
+    # ever spawns on tty1. greetd's [terminal] vt = 1 pins greetd
+    # there exclusively; without the mask, getty@tty1 still runs
+    # briefly at boot (despite Conflicts=greetd), prints its banner
+    # + bash setlocale warnings to /dev/tty1 → vcs1, and that text
+    # is painted by fbcon during DRM-master gaps at compositor
+    # handoffs. Skip during pacstrap (no running systemd).
+    if [[ -d /run/systemd/system ]]; then
+        systemctl mask getty@tty1.service 2>/dev/null || true
+        systemctl mask autovt@tty1.service 2>/dev/null || true
+    fi
 }
 
 _bootstrap_snapper() {
