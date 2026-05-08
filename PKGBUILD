@@ -258,6 +258,15 @@ package() {
         "$pkgdir/etc/tlp.d/00-shedos.conf"
     install -Dm644 tree/etc/modprobe.d/shedos-blacklist.conf \
         "$pkgdir/etc/modprobe.d/shedos-blacklist.conf"
+
+    # systemd config drop-ins: ShowStatus=no at both system and user
+    # scopes silences "[ OK ] Started/Stopped foo" chatter that would
+    # otherwise reach /dev/console = /dev/tty1, land in vcs1, and be
+    # painted by fbcon during DRM-master gaps at compositor handoffs.
+    install -Dm644 tree/etc/systemd/system.conf.d/shedos-quiet-status.conf \
+        "$pkgdir/etc/systemd/system.conf.d/shedos-quiet-status.conf"
+    install -Dm644 tree/etc/systemd/user.conf.d/shedos-quiet-status.conf \
+        "$pkgdir/etc/systemd/user.conf.d/shedos-quiet-status.conf"
     install -Dm644 tree/etc/modules-load.d/shedos-net.conf \
         "$pkgdir/etc/modules-load.d/shedos-net.conf"
     install -Dm644 tree/etc/systemd/zram-generator.conf \
