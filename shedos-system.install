@@ -239,66 +239,67 @@ EOF
 }
 
 _backfill_cmdline_ux_tokens() {
-    # One-shot back-fill for installs predating commit 6f8a21a
-    # (2026-05-07), which baked four UX-critical kernel cmdline tokens
-    # into the install-time limine.conf:
+    # Self-correcting backfill for the kernel cmdline UX tokens.
     #
-    #   loglevel=3 rd.udev.log_level=3 console=tty1 fbcon=nodefer,map:99
+    # Two classes of touched-up systems share this function:
     #
-    # Together they suppress the framebuffer console flash between
-    # Plymouth and Hyprland on boot AND between Hyprland tear-down and
-    # systemd-shutdown on poweroff/reboot. On older installs these
-    # tokens never reached limine.conf, so apply_core's
-    # first-baseline-seed snapshotted their absence and now protects
-    # it — the result is a console flash on every boot/shutdown plus
-    # Plymouth's shutdown brand getting visually replaced by the
-    # rebound framebuffer console.
+    #   (A) Installs predating commit 6f8a21a (2026-05-07): never had
+    #       any UX tokens, suffer the boot/login console flash.
     #
-    # We back-fill three places in order:
-    #   1. /boot/limine.conf — every kernel_cmdline line (both primary
-    #      AND fallback entries). render-limine-config.sh:95-99 only
-    #      strips `quiet|splash` from fallback at generation time;
-    #      every other UX token survives. So a fresh post-6f8a21a
-    #      install carries loglevel=3 / rd.udev.log_level=3 /
-    #      console=tty1 / fbcon=nodefer,map:99 on its fallback entry
-    #      too. Matching only primary would leave pre-6f8a21a fallback
-    #      entries structurally inconsistent with fresh-install
-    #      fallbacks. We add the four UX tokens to every entry; we
-    #      never add quiet/splash, so debug-friendly fallback boots
-    #      stay debug-friendly.
+    #   (B) Installs that already ran the v1 backfill on commit
+    #       a88274e (2026-05-08): got loglevel=3, rd.udev.log_level=3,
+    #       console=tty1, AND fbcon=nodefer,map:99 — but `console=tty1`
+    #       broke Plymouth's shutdown brand (Plymouth interprets any
+    #       explicit `console=` as a serial console and force-falls
+    #       back to the text-only `details` plugin) and also broke VT
+    #       switching because of how fbcon=map:99 + console=tty1
+    #       interact.
+    #
+    # The corrective pass:
+    #
+    #   - REMOVE console=tty1 from every kernel_cmdline line that
+    #     carries it (the v1 backfill stamped it on both primary and
+    #     fallback).
+    #   - ADD loglevel=3, rd.udev.log_level=3, fbcon=nodefer,map:99 to
+    #     every kernel_cmdline line that's missing any of them.
+    #
+    # We touch three places in order:
+    #   1. /boot/limine.conf — every kernel_cmdline line (primary AND
+    #      fallback). render-limine-config.sh strips only quiet/splash
+    #      from fallback at generation time; every other token
+    #      survives. So fresh post-fix installs carry the three UX
+    #      tokens on their fallback entry too — we match that.
     #   2. Every existing ESP mirror of limine.conf — the firmware
     #      boots from the ESP, not /boot/limine.conf. Mirror set
-    #      matches apply_core._ESP_LIMINE_MIRRORS so the two stay
-    #      in lockstep.
-    #   3. /var/lib/shedos/cmdline.baseline.json (if present) so the
-    #      next `shedman apply` doesn't strip the new tokens as
-    #      out-of-baseline.
+    #      matches apply_core._ESP_LIMINE_MIRRORS.
+    #   3. /var/lib/shedos/cmdline.baseline.json — add the three good
+    #      tokens, remove console=tty1 if it was added by v1. Atomic
+    #      via tempfile + os.replace.
     #
-    # Idempotent via /var/lib/shedos/.cmdline-ux-backfill-applied:
-    # running on a system where every primary line already carries the
-    # tokens (post-6f8a21a fresh installs, or systems already
-    # back-filled) is a no-op that just touches the sentinel.
+    # Idempotent via /var/lib/shedos/.cmdline-ux-backfill-v2-applied.
+    # The v2 sentinel is intentionally a different name so machines
+    # that ran v1 (sentinel /var/lib/shedos/.cmdline-ux-backfill-
+    # applied) re-enter and get the corrective pass.
 
-    local sentinel=/var/lib/shedos/.cmdline-ux-backfill-applied
+    local sentinel=/var/lib/shedos/.cmdline-ux-backfill-v2-applied
     [[ -f $sentinel ]] && return 0
 
     local conf=/boot/limine.conf
     [[ -f $conf ]] || return 0
 
     # shellcheck disable=SC2054  # bash arrays split on whitespace, not commas — `fbcon=nodefer,map:99` is one element
-    local tokens=(loglevel=3 rd.udev.log_level=3 console=tty1 fbcon=nodefer,map:99)
+    local add_tokens=(loglevel=3 rd.udev.log_level=3 fbcon=nodefer,map:99)
+    local remove_tokens=(console=tty1)
 
     # Field-split match for "is <tok> a whole token on this line?".
     # Avoids gawk-only \<...\> word boundaries so the script works
     # under any POSIX awk (mawk, busybox-awk). Applies to every
-    # kernel_cmdline line — render-limine-config strips only
-    # quiet/splash from fallback; the four UX tokens belong on
-    # both primary AND fallback (they don't silence anything that
-    # debug-boots need to see, they just suppress the framebuffer
-    # console punching through Plymouth).
+    # kernel_cmdline line.
     local tmp
     tmp=$(mktemp)
-    if ! awk -v toks="${tokens[*]}" '
+    if ! awk \
+        -v add="${add_tokens[*]}" \
+        -v rem="${remove_tokens[*]}" '
         function has_token(line, tok,    fields, fcount, i) {
             fcount = split(line, fields, /[[:space:]]+/)
             for (i = 1; i <= fcount; i++) {
@@ -306,12 +307,30 @@ _backfill_cmdline_ux_tokens() {
             }
             return 0
         }
+        function strip_token(line, tok,    fields, fcount, i, out) {
+            fcount = split(line, fields, /[[:space:]]+/)
+            out = ""
+            for (i = 1; i <= fcount; i++) {
+                if (fields[i] != tok) {
+                    out = (out == "" ? fields[i] : out " " fields[i])
+                }
+            }
+            return out
+        }
         /^[[:space:]]*kernel_cmdline:/ {
             line = $0
-            tcount = split(toks, t, " ")
-            for (j = 1; j <= tcount; j++) {
-                if (!has_token(line, t[j])) {
-                    line = line " " t[j]
+            # remove pass
+            rcount = split(rem, r, " ")
+            for (j = 1; j <= rcount; j++) {
+                if (has_token(line, r[j])) {
+                    line = strip_token(line, r[j])
+                }
+            }
+            # add pass
+            acount = split(add, a, " ")
+            for (j = 1; j <= acount; j++) {
+                if (!has_token(line, a[j])) {
+                    line = line " " a[j]
                 }
             }
             print line
@@ -351,15 +370,21 @@ _backfill_cmdline_ux_tokens() {
             && echo "  → mirrored to $esp"
     done
 
-    # Sync the apply baseline so the next `shedman apply` protects
-    # the new tokens. Skip cleanly if shedman apply has never run
-    # (no baseline) or python3 is missing. Atomic write via tempfile +
-    # os.replace mirrors apply_core.save_state_set so a crash mid-
-    # write can't leave a half-written baseline (which load_state_set
-    # would treat as empty, triggering a strip on the next apply).
+    # Sync the apply baseline: add the three good tokens if missing,
+    # remove console=tty1 if v1 of this backfill stamped it in. Skip
+    # cleanly if shedman apply has never run (no baseline) or python3
+    # is missing. Atomic write via tempfile + os.replace mirrors
+    # apply_core.save_state_set so a crash mid-write can't leave a
+    # half-written baseline (which load_state_set would treat as
+    # empty, triggering a strip on the next apply).
+    #
+    # Args to the embedded Python: <baseline-path> <add-csv> <remove-csv>
+    local add_csv rem_csv
+    add_csv=$(IFS=,; echo "${add_tokens[*]}")
+    rem_csv=$(IFS=,; echo "${remove_tokens[*]}")
     local baseline=/var/lib/shedos/cmdline.baseline.json
     if [[ -f $baseline && -x /usr/bin/python3 ]]; then
-        /usr/bin/python3 - "$baseline" "${tokens[@]}" <<'PY' || true
+        /usr/bin/python3 - "$baseline" "$add_csv" "$rem_csv" <<'PY' || true
 import json
 import os
 import sys
@@ -367,16 +392,21 @@ import tempfile
 from pathlib import Path
 
 baseline_path = Path(sys.argv[1])
-new_tokens = sys.argv[2:]
+add_tokens = [t for t in sys.argv[2].split(",") if t]
+remove_tokens = [t for t in sys.argv[3].split(",") if t]
 
 doc = json.loads(baseline_path.read_text())
 items = {tuple(item) for item in doc.get("items", [])}
-added = False
-for tok in new_tokens:
+changed = False
+for tok in add_tokens:
     if (tok,) not in items:
         items.add((tok,))
-        added = True
-if not added:
+        changed = True
+for tok in remove_tokens:
+    if (tok,) in items:
+        items.discard((tok,))
+        changed = True
+if not changed:
     sys.exit(0)
 
 doc["items"] = sorted([list(t) for t in items])
