@@ -93,7 +93,7 @@ name = "realtime"
 # Tokens listed here become part of the apply_core protected baseline
 # only after they first appear in /boot/limine.conf via this list.
 #
-# UX-critical tokens (loglevel=3, rd.udev.log_level=3, console=tty1,
+# UX-critical tokens (loglevel=3, rd.udev.log_level=3,
 # fbcon=nodefer,map:99) are NOT listed here on purpose — they are
 # baked into the install-time cmdline by the installer
 # (installer/shedos_installer/core/bootloader.py :: _build_cmdline)

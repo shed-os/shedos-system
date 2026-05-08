@@ -312,9 +312,9 @@ enable = true
 # (root=, rootflags=, rootfstype=, rw, optional cryptdevice= and
 # nvidia_drm.modeset=1) and the UX-critical tokens that suppress the
 # first-boot console flash (quiet, splash, loglevel=3,
-# rd.udev.log_level=3, console=tty1, fbcon=nodefer,map:99). Removing a
-# baseline token from `append` is a no-op; baseline tokens stay in the
-# live cmdline forever.
+# rd.udev.log_level=3, fbcon=nodefer,map:99). Removing a baseline
+# token from `append` is a no-op; baseline tokens stay in the live
+# cmdline forever.
 #
 # Reboot required: every change reaches the kernel only on the next
 # boot. Plan output marks the Change with a "reboot to apply" hint.
