@@ -137,3 +137,23 @@ EOF
 
 install -Dm644 "$tmp" "$LIMINE_CONF"
 echo "render-limine-config: wrote $LIMINE_CONF (${#ordered[@]} kernel(s), timeout=$TIMEOUT, default=${ordered[0]})"
+
+# Mirror the freshly-rendered config into every existing ESP path.
+# Limine boots from the ESP, not from /boot/limine.conf, so any change
+# to the seed file must propagate or the firmware will load stale
+# entries (kernel cmdline drift, missing/extra kernel entries, etc.).
+# Mirror set matches apply_core._ESP_LIMINE_MIRRORS so the two writers
+# of /boot/limine.conf (apply_core's cmdline reconciler + this script)
+# stay in lockstep. install -Dm644 is idempotent; only existing ESP
+# files are touched (we don't create a new ESP layout).
+for esp in \
+    /boot/efi/EFI/limine/limine.conf \
+    /boot/efi/limine.conf \
+    /efi/EFI/limine/limine.conf \
+    /efi/limine.conf
+do
+    if [[ -f $esp ]]; then
+        install -Dm644 "$tmp" "$esp" 2>/dev/null \
+            && echo "render-limine-config: mirrored to $esp"
+    fi
+done
