@@ -19,5 +19,13 @@ vt = "next"
 # the kiosk session before cage's EGL pipeline tries to write Mesa's
 # shader cache to $HOME/.cache (`Failed to create //.cache for shader
 # cache (Permission denied)` is the symptom of an empty HOME).
-command = "env HOME=/var/lib/greetd cage -s -- /usr/bin/shedos-greeter"
+#
+# Wrap the whole thing in `systemd-cat -t cage-greeter --` so cage's
+# wlroots backend-init logs ([libseat], [backend/drm], [render/egl],
+# [render/gles2]) are captured by journald instead of writing to the
+# session TTY's vcs buffer. Without this, fbcon paints those logs on
+# the framebuffer during DRM-master gaps at compositor handoffs
+# (Plymouth→cage, cage→Hyprland, Hyprland→Plymouth-shutdown). Logs
+# remain fully recoverable via `journalctl -t cage-greeter`.
+command = "env HOME=/var/lib/greetd systemd-cat -t cage-greeter -- cage -s -- /usr/bin/shedos-greeter"
 user = "greeter"
