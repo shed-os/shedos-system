@@ -1,14 +1,10 @@
 #!/bin/bash
+# Emit logind LockSession; hypridle's lock_cmd is the listener that
+# actually starts the lock-client systemd unit.
 
 if [[ "${1:-}" == "--help-summary" ]]; then
     echo "lock the session"
     exit 0
 fi
 
-if pidof hyprlock >/dev/null; then
-    exit 0
-fi
-
-systemctl --user start shedos-screensaver.service 2>/dev/null
-hyprlock
-systemctl --user stop shedos-screensaver.service 2>/dev/null
+exec loginctl lock-session "$@"
