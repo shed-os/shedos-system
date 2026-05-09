@@ -308,7 +308,8 @@ package() {
     # surface; man pages are the secondary path for `man <cmd>`.
     install -d "$pkgdir/usr/share/man/man1"
     for _name in shedman shedman-update shedman-apply shedman-doctor \
-                 shedman-rollback shedman-config shedman-status; do
+                 shedman-rollback shedman-config shedman-status \
+                 shedman-fingerprint; do
         install -Dm644 "man/build/${_name}.1" \
             "$pkgdir/usr/share/man/man1/${_name}.1"
     done
