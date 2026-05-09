@@ -206,6 +206,7 @@ post_install() {
     _bootstrap_greetd
     _bootstrap_snapper
     _render_theme
+    _apply_faillock_policy
 
     # Timeline + cleanup timers from the snapper package. Idempotent enable:
     # re-running is harmless. Guarded against pacstrap (no running systemd)
@@ -497,6 +498,18 @@ PY
     fi
 }
 
+_apply_faillock_policy() {
+    # ShedOS lenient defaults: 6 tries / 5-min lockout (vs upstream 3 / 10-min).
+    # Only rewrites the pristine upstream commented defaults — any user
+    # customization (commented or uncommented, different value) is left alone.
+    local f=/etc/security/faillock.conf
+    [[ -f $f ]] || return 0
+    sed -i -E \
+        -e 's/^[[:space:]]*#[[:space:]]*deny[[:space:]]*=[[:space:]]*3[[:space:]]*$/deny = 6/' \
+        -e 's/^[[:space:]]*#[[:space:]]*unlock_time[[:space:]]*=[[:space:]]*600[[:space:]]*$/unlock_time = 300/' \
+        "$f"
+}
+
 _self_heal_welcome_marker() {
     # One-shot fix for users stuck behind the old (rc1) silent-marker
     # bug: marker present AND ~/.gitconfig lacks user.email is the
@@ -532,6 +545,7 @@ post_upgrade() {
     _bootstrap_greetd
     _bootstrap_snapper
     _render_theme
+    _apply_faillock_policy
     _self_heal_welcome_marker
     _backfill_cmdline_ux_tokens
     _fix_locale_conf_encoding
