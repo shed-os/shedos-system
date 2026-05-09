@@ -1,0 +1,290 @@
+#!/bin/bash
+# shedman fingerprint — manage user fingerprint enrollments via fprintd.
+
+set -uo pipefail
+
+FPRINT_DEST=net.reactivated.Fprint
+FPRINT_IFACE=net.reactivated.Fprint.Device
+FPRINT_MGR_IFACE=net.reactivated.Fprint.Manager
+
+VALID_FINGERS=(
+    left-thumb left-index-finger left-middle-finger left-ring-finger left-little-finger
+    right-thumb right-index-finger right-middle-finger right-ring-finger right-little-finger
+)
+
+usage() {
+    cat <<'EOF'
+Usage:
+  shedman fingerprint <verb> [args]
+
+Verbs:
+  list                       Show enrolled fingers for the current user.
+  enroll [<finger>]          Enroll a finger (default: right-index-finger).
+  delete <finger>            Remove one enrolled finger.
+  clear                      Remove every enrolled finger.
+  detect                     Show sensor model and the libfprint package providing it.
+  status                     Combined view: sensor, driver, fprintd, enrolled fingers.
+  test [-r N] [-w M]         Characterise the matcher: N right-finger trials,
+                             M wrong-finger trials. Computes FAR / FRR.
+                             Defaults: -r 20 -w 20.
+
+Finger names:
+  left-thumb        left-index-finger     left-middle-finger
+  left-ring-finger  left-little-finger    right-thumb
+  right-index-finger right-middle-finger  right-ring-finger
+  right-little-finger
+EOF
+}
+
+die() { printf 'shedman fingerprint: %s\n' "$*" >&2; exit 1; }
+
+require_fprintd() {
+    command -v fprintd-list >/dev/null 2>&1 \
+        || die "fprintd not installed (shedman install fprintd)"
+    systemctl is-active --quiet fprintd.service 2>/dev/null \
+        || systemctl is-enabled --quiet fprintd.service 2>/dev/null \
+        || true
+}
+
+device_path() {
+    # fprintd-list prints "Device at /net/reactivated/Fprint/Device/N" on stderr
+    # for both empty and populated enrollments. Tolerate either by reading both.
+    fprintd-list "$USER" 2>&1 \
+        | awk '/Device at/ { print $3; exit }'
+}
+
+is_valid_finger() {
+    local f
+    for f in "${VALID_FINGERS[@]}"; do [[ $f == "$1" ]] && return 0; done
+    return 1
+}
+
+cmd_list() {
+    require_fprintd
+    fprintd-list "$USER"
+}
+
+cmd_enroll() {
+    require_fprintd
+    local finger="${1:-right-index-finger}"
+    is_valid_finger "$finger" \
+        || die "unknown finger '$finger' — see 'shedman fingerprint --help'"
+    fprintd-enroll -f "$finger" "$USER"
+}
+
+cmd_delete() {
+    require_fprintd
+    [[ $# -ge 1 ]] || die "delete requires a finger name (try 'shedman fingerprint list' first)"
+    local finger="$1"
+    is_valid_finger "$finger" \
+        || die "unknown finger '$finger' — see 'shedman fingerprint --help'"
+    local dev
+    dev=$(device_path)
+    [[ -n $dev ]] || die "no fingerprint device detected"
+    # fprintd's per-finger delete requires the device to be claimed and
+    # the claim only persists for the lifetime of the D-Bus connection
+    # that issued it. gdbus call opens a new connection per invocation,
+    # so the claim is lost between Claim and DeleteEnrolledFinger. A
+    # short python helper holds one bus across the full sequence.
+    FPRINT_DEV_PATH="$dev" FPRINT_USER="$USER" FPRINT_FINGER="$finger" \
+    python3 - <<'PYEOF' || die "could not delete '$finger' — see error above"
+import os, sys, dbus
+bus = dbus.SystemBus()
+dev = bus.get_object('net.reactivated.Fprint', os.environ['FPRINT_DEV_PATH'])
+iface = 'net.reactivated.Fprint.Device'
+try:
+    dev.Claim(os.environ['FPRINT_USER'], dbus_interface=iface)
+except dbus.DBusException as e:
+    sys.stderr.write(f'fprintd Claim failed: {e.get_dbus_message()}\n')
+    sys.exit(1)
+rc = 0
+try:
+    dev.DeleteEnrolledFinger(os.environ['FPRINT_FINGER'], dbus_interface=iface)
+except dbus.DBusException as e:
+    sys.stderr.write(f'fprintd DeleteEnrolledFinger failed: {e.get_dbus_message()}\n')
+    rc = 1
+finally:
+    try:
+        dev.Release(dbus_interface=iface)
+    except dbus.DBusException:
+        pass
+sys.exit(rc)
+PYEOF
+    printf 'Deleted: %s\n' "$finger"
+}
+
+cmd_clear() {
+    require_fprintd
+    fprintd-delete "$USER"
+}
+
+cmd_detect() {
+    require_fprintd
+    local dev
+    dev=$(device_path)
+    if [[ -z $dev ]]; then
+        printf 'No fingerprint device detected.\n'
+        printf 'If a sensor is physically present, check `lsusb` and the kernel log.\n'
+        return 1
+    fi
+    local model
+    model=$(gdbus call --system --dest "$FPRINT_DEST" \
+        --object-path "$dev" \
+        --method org.freedesktop.DBus.Properties.Get \
+        "$FPRINT_IFACE" name 2>/dev/null \
+        | sed -nE "s/.*<'([^']*)'.*/\1/p")
+    printf 'Device path: %s\n' "$dev"
+    [[ -n $model ]] && printf 'Sensor:      %s\n' "$model"
+    local lib
+    lib=$(pacman -Qq 2>/dev/null | grep -E '^libfprint(-|$)' | head -1)
+    [[ -n $lib ]] && printf 'libfprint:   %s (%s)\n' \
+        "$lib" "$(pacman -Q "$lib" | awk '{print $2}')"
+    if pacman -Qq 2>/dev/null | grep -q '^libfprint-2-tod1-'; then
+        printf 'TOD plugins:\n'
+        pacman -Qq | grep '^libfprint-2-tod1-' | sed 's/^/  - /'
+    fi
+}
+
+cmd_status() {
+    require_fprintd
+    printf '== Sensor ==\n'
+    cmd_detect
+    printf '\n== fprintd service ==\n'
+    if systemctl is-active --quiet fprintd.service 2>/dev/null; then
+        printf 'fprintd:     active\n'
+    else
+        printf 'fprintd:     inactive (started on demand by D-Bus activation)\n'
+    fi
+    printf '\n== Enrollments ==\n'
+    fprintd-list "$USER" 2>&1 | sed -n '/Fingerprints\|^ - #/p'
+}
+
+cmd_test() {
+    require_fprintd
+    local right_trials=20 wrong_trials=20
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -r|--right-trials)
+                shift; right_trials="${1:-}"
+                [[ "$right_trials" =~ ^[0-9]+$ ]] || die "--right-trials needs a number"
+                ;;
+            -w|--wrong-trials)
+                shift; wrong_trials="${1:-}"
+                [[ "$wrong_trials" =~ ^[0-9]+$ ]] || die "--wrong-trials needs a number"
+                ;;
+            *) die "unknown test flag: $1" ;;
+        esac
+        shift
+    done
+    [[ -t 0 && -t 1 ]] || die "test must be run interactively in a terminal"
+    fprintd-list "$USER" 2>&1 | grep -q '^ - #' \
+        || die "no fingers enrolled — run 'shedman fingerprint enroll' first"
+
+    cat <<EOF
+Matcher characterisation: $right_trials right-finger trials, $wrong_trials wrong-finger trials.
+
+This will measure your sensor's False Reject Rate (legitimate scans
+the matcher rejected) and False Accept Rate (wrong-finger scans
+the matcher accepted). Press Enter to begin each scan; Ctrl+C aborts.
+
+EOF
+
+    local right_match=0 right_nomatch=0 i
+    printf '== Right-finger trials (use your enrolled finger only) ==\n'
+    for ((i = 1; i <= right_trials; i++)); do
+        printf '[%d/%d] press Enter, then scan your enrolled finger... ' \
+            "$i" "$right_trials"
+        read -r _
+        local out
+        out=$(fprintd-verify "$USER" 2>&1)
+        if grep -q 'verify-match' <<<"$out"; then
+            right_match=$((right_match + 1)); printf '  -> match\n'
+        else
+            right_nomatch=$((right_nomatch + 1)); printf '  -> no-match\n'
+        fi
+    done
+
+    printf '\n== Wrong-finger trials (use a finger you have NOT enrolled) ==\n'
+    local wrong_match=0 wrong_nomatch=0
+    for ((i = 1; i <= wrong_trials; i++)); do
+        printf '[%d/%d] press Enter, then scan a non-enrolled finger... ' \
+            "$i" "$wrong_trials"
+        read -r _
+        local out
+        out=$(fprintd-verify "$USER" 2>&1)
+        if grep -q 'verify-match' <<<"$out"; then
+            wrong_match=$((wrong_match + 1)); printf '  -> match (FALSE ACCEPT)\n'
+        else
+            wrong_nomatch=$((wrong_nomatch + 1)); printf '  -> no-match\n'
+        fi
+    done
+
+    local frr_pct=0 far_pct=0
+    if (( right_trials > 0 )); then
+        frr_pct=$(( right_nomatch * 100 / right_trials ))
+    fi
+    if (( wrong_trials > 0 )); then
+        far_pct=$(( wrong_match * 100 / wrong_trials ))
+    fi
+
+    cat <<EOF
+
+== Results ==
+False Reject Rate (right-finger no-matches): $right_nomatch / $right_trials  (~${frr_pct}%)
+False Accept Rate (wrong-finger matches):    $wrong_match / $wrong_trials  (~${far_pct}%)
+
+EOF
+
+    if (( wrong_match > 0 )); then
+        cat <<EOF
+WARNING: matcher accepted ${wrong_match} wrong-finger scan(s).
+Fingerprint unlock is not safe on this sensor at the current
+libfprint matcher threshold. Consider disabling fingerprint
+unlock until the underlying driver is patched, or use a
+different sensor.
+EOF
+        return 2
+    fi
+
+    if (( right_nomatch > right_trials / 4 )); then
+        cat <<EOF
+NOTE: matcher rejected more than 25% of legitimate scans.
+Consider re-enrolling your finger with broader sensor coverage:
+  shedman fingerprint clear
+  shedman fingerprint enroll
+EOF
+        return 0
+    fi
+
+    printf 'Matcher looks reliable on this sample.\n'
+}
+
+complete_bash() {
+    cat <<'EOF'
+list
+enroll
+delete
+clear
+detect
+status
+test
+EOF
+}
+
+if [[ $# -eq 0 ]]; then
+    usage; exit 1
+fi
+
+case "$1" in
+    -h|--help|help)         usage; exit 0 ;;
+    --help-summary)         echo "manage your fingerprint enrollments"; exit 0 ;;
+    --complete-bash)        complete_bash; exit 0 ;;
+    list)                   shift; cmd_list "$@" ;;
+    enroll)                 shift; cmd_enroll "$@" ;;
+    delete)                 shift; cmd_delete "$@" ;;
+    clear)                  shift; cmd_clear "$@" ;;
+    detect)                 shift; cmd_detect "$@" ;;
+    status)                 shift; cmd_status "$@" ;;
+    test)                   shift; cmd_test "$@" ;;
+    *)                      die "unknown verb '$1' — try 'shedman fingerprint --help'" ;;
+esac

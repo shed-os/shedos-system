@@ -24,6 +24,9 @@ depends=(
     'diffutils'        # diff for `shedman config --sync --list-diffs`
     'sudo'
     'python'           # shedman config --review, shedman doctor
+    'python-dbus'      # shedman fingerprint delete holds a D-Bus connection
+                       # across Claim+DeleteEnrolledFinger+Release; gdbus
+                       # closes the connection per call and loses the claim
     'python-textual'   # merge TUI framework
     'python-rich'      # transitive dep of textual, declared for clarity
     'snapper'          # pre/post btrfs snapshots + shedman rollback
