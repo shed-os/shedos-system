@@ -104,7 +104,7 @@ log "launching yad form (name=$FULL_NAME existing_email=$EXISTING_EMAIL)"
 
 # Loop the form until either the user clicks Skip / closes the dialog,
 # or they submit valid data. Earlier versions exec'd $0 on validation
-# failure, which spawned a second welcome window — avoid that.
+# failure, which spawned a second welcome window; avoid that.
 NAME="$FULL_NAME"
 EMAIL="$EXISTING_EMAIL"
 GITHUB=""
