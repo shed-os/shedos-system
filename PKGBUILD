@@ -41,8 +41,8 @@ depends=(
                        # charge thresholds); install scriptlet enables
                        # tlp.service
     'ananicy-cpp-git'  # auto-renicer; install scriptlet enables
-                       # ananicy-cpp.service. -git tracks post-1.2.0
-                       # — tagged 1.1.1 fails on glibc 2.41+. See
+                       # ananicy-cpp.service. -git tracks post-1.2.0;
+                       # tagged 1.1.1 fails on glibc 2.41+. See
                        # packages/aur.txt for the upstream context.
     'yad'              # shedman welcome + apps installer GUI
     'yay'              # shedman update + apps installer
@@ -129,7 +129,7 @@ package() {
     install -Dm755 tree/usr/bin/shedos-user-session \
         "$pkgdir/usr/bin/shedos-user-session"
 
-    # Shared plan engine — both `shedman apply` and `shedman doctor` add
+    # Shared plan engine; both `shedman apply` and `shedman doctor` add
     # /usr/lib/shedos to sys.path and `import apply_core`.
     install -Dm644 tree/usr/lib/shedos/apply_core.py \
         "$pkgdir/usr/lib/shedos/apply_core.py"
@@ -182,7 +182,7 @@ package() {
     install -Dm644 tree/usr/share/shedos/system.toml.example \
         "$pkgdir/usr/share/shedos/system.toml.example"
 
-    # Snapper config template — copied to /etc/snapper/configs/root by the
+    # Snapper config template; copied to /etc/snapper/configs/root by the
     # install scriptlet on first install. Kept out of /etc itself so we
     # don't collide with the snapper package's ownership of that directory.
     install -Dm644 tree/usr/share/shedos/snapper/root.conf \
@@ -303,7 +303,7 @@ package() {
     install -Dm644 tree/usr/share/fish/vendor_completions.d/shedman.fish \
         "$pkgdir/usr/share/fish/vendor_completions.d/shedman.fish"
 
-    # Man pages — rendered from man/*.scd by prepare() above; install
+    # Man pages; rendered from man/*.scd by prepare() above; install
     # the rendered .1 files. `shedman help` is the primary discovery
     # surface; man pages are the secondary path for `man <cmd>`.
     install -d "$pkgdir/usr/share/man/man1"
