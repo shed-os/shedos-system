@@ -287,6 +287,25 @@ EOF
     esac
 }
 
+complete_zsh() {
+    case "${1:-}" in
+        enroll|delete)
+            printf '%s\n' "${VALID_FINGERS[@]}"
+            ;;
+        *)
+            cat <<'EOF'
+list:Show enrolled fingers
+enroll:Enroll a finger (default: right-index-finger)
+delete:Remove one enrolled finger
+clear:Remove every enrolled finger
+detect:Show sensor model and libfprint variant
+status:Combined view of sensor, service, and enrollments
+test:Characterise the matcher (FAR/FRR)
+EOF
+            ;;
+    esac
+}
+
 if [[ $# -eq 0 ]]; then
     usage; exit 1
 fi
@@ -295,6 +314,7 @@ case "$1" in
     -h|--help|help)         usage; exit 0 ;;
     --help-summary)         echo "manage your fingerprint enrollments"; exit 0 ;;
     --complete-bash)        shift; complete_bash "$@"; exit 0 ;;
+    --complete-zsh)         shift; complete_zsh "$@"; exit 0 ;;
     list)                   shift; cmd_list "$@" ;;
     enroll)                 shift; cmd_enroll "$@" ;;
     delete)                 shift; cmd_delete "$@" ;;
