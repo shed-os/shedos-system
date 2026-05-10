@@ -7,7 +7,7 @@ _add_shedos_repo() {
     # Skip when running inside the ShedOS package-build chroot. The build
     # script (scripts/build-shedos-packages.sh) creates this marker so the
     # scriptlet doesn't add the production repo to the build container's
-    # /etc/pacman.conf — the next pacman -Sy inside makepkg would 404 on
+    # /etc/pacman.conf; the next pacman -Sy inside makepkg would 404 on
     # a repo whose db doesn't yet exist (we're building what would land
     # there). Pacstrap and Calamares chroot into a target rootfs, so the
     # marker at container / isn't visible to them; they get normal behavior.
@@ -23,7 +23,7 @@ _add_shedos_repo() {
     local tmp
     tmp=$(mktemp)
 
-    # Drop every existing [shedos] block — fenced or bare — so we end
+    # Drop every existing [shedos] block — fenced or bare; so we end
     # up with at most one canonical block after appending below.
     awk '
         /^# >>> shedos <<<$/                  { skip=1; next }
@@ -36,7 +36,7 @@ _add_shedos_repo() {
     cat >> "$tmp" <<'EOF'
 
 # >>> shedos <<<
-# Managed by shedos-system — do not edit between these markers.
+# Managed by shedos-system; do not edit between these markers.
 # Run `pacman -R shedos-system` to remove automatically.
 [shedos]
 SigLevel = Required DatabaseRequired
@@ -53,7 +53,7 @@ EOF
         cat >>"$pacman_conf" <<'EOF'
 
 # >>> shedos-testing <<<
-# ShedOS canary channel — RC packages land here before reaching
+# ShedOS canary channel; RC packages land here before reaching
 # [shedos]. Uncomment the four lines below to opt in. Stable cuts
 # also publish to /test/x86_64/, so opting in only changes
 # behavior during RC windows.
@@ -76,7 +76,7 @@ _migrate_repo_url() {
 _remove_shedos_repo() {
     # Strip the fenced block(s) on uninstall. sed operates on exact marker
     # ranges so a user who scribbles outside the blocks keeps their edits.
-    # May leave a trailing blank line in /etc/pacman.conf — cosmetic only.
+    # May leave a trailing blank line in /etc/pacman.conf; cosmetic only.
     if grep -q '^# >>> shedos <<<' /etc/pacman.conf; then
         sed -i '/^# >>> shedos <<<$/,/^# <<< shedos >>>$/d' /etc/pacman.conf
     fi
@@ -113,9 +113,9 @@ _bootstrap_greetd() {
     fi
 
     # The `greeter` system user (created by greetd's sysusers.d) needs:
-    #   - `seat`  — talk to seatd, acquire a Wayland seat for cage
-    #   - `video` — open /dev/dri/cardX for EGL/GBM
-    #   - `input` — read /dev/input/event* for keyboard/touchpad
+    #   - `seat` ; talk to seatd, acquire a Wayland seat for cage
+    #   - `video`; open /dev/dri/cardX for EGL/GBM
+    #   - `input`; read /dev/input/event* for keyboard/touchpad
     # Without these the cage compositor fails with EGL_BAD_ALLOC and
     # libseat connect errors during boot.
     # `groupadd -r -f` ensures the groups exist before usermod runs;
@@ -176,7 +176,7 @@ _bootstrap_snapper() {
         fi
     fi
 
-    # /.snapshots exists as @snapshots mounted via fstab — tighten perms so
+    # /.snapshots exists as @snapshots mounted via fstab; tighten perms so
     # snapper's own validation is happy. Guarded against live/ISO envs where
     # /.snapshots may be a plain directory (no mount).
     if [[ -d /.snapshots ]]; then
@@ -192,7 +192,7 @@ post_install() {
     systemctl enable shedos-clear-vt.service 2>/dev/null || true
     # Creates a LOGIN+CREATEDB postgres role + same-named database for each
     # regular Linux user, on every boot (idempotent). Safety net for the
-    # Calamares-time bootstrap in shedos_finalize — if that fails silently,
+    # Calamares-time bootstrap in shedos_finalize; if that fails silently,
     # or if a new user is added post-install, this catches it.
     systemctl enable shedos-pg-user-bootstrap.service || true
     # --global enables the user-scope unit for every user on the system via
@@ -263,7 +263,7 @@ _backfill_cmdline_ux_tokens() {
     #
     #   (B) Installs that already ran the v1 backfill on commit
     #       a88274e (2026-05-08): got loglevel=3, rd.udev.log_level=3,
-    #       console=tty1, AND fbcon=nodefer,map:99 — but `console=tty1`
+    #       console=tty1, AND fbcon=nodefer,map:99; but `console=tty1`
     #       broke Plymouth's shutdown brand (Plymouth interprets any
     #       explicit `console=` as a serial console and force-falls
     #       back to the text-only `details` plugin) and also broke VT
@@ -279,15 +279,15 @@ _backfill_cmdline_ux_tokens() {
     #     every kernel_cmdline line that's missing any of them.
     #
     # We touch three places in order:
-    #   1. /boot/limine.conf — every kernel_cmdline line (primary AND
+    #   1. /boot/limine.conf; every kernel_cmdline line (primary AND
     #      fallback). render-limine-config.sh strips only quiet/splash
     #      from fallback at generation time; every other token
     #      survives. So fresh post-fix installs carry the three UX
-    #      tokens on their fallback entry too — we match that.
-    #   2. Every existing ESP mirror of limine.conf — the firmware
+    #      tokens on their fallback entry too; we match that.
+    #   2. Every existing ESP mirror of limine.conf; the firmware
     #      boots from the ESP, not /boot/limine.conf. Mirror set
     #      matches apply_core._ESP_LIMINE_MIRRORS.
-    #   3. /var/lib/shedos/cmdline.baseline.json — add the three good
+    #   3. /var/lib/shedos/cmdline.baseline.json; add the three good
     #      tokens, remove console=tty1 if it was added by v1. Atomic
     #      via tempfile + os.replace.
     #
@@ -302,7 +302,7 @@ _backfill_cmdline_ux_tokens() {
     local conf=/boot/limine.conf
     [[ -f $conf ]] || return 0
 
-    # shellcheck disable=SC2054  # bash arrays split on whitespace, not commas — `fbcon=nodefer,map:99` is one element
+    # shellcheck disable=SC2054  # bash arrays split on whitespace, not commas; `fbcon=nodefer,map:99` is one element
     local add_tokens=(loglevel=3 rd.udev.log_level=3 fbcon=nodefer,map:99)
     local remove_tokens=(console=tty1)
 
@@ -359,7 +359,7 @@ _backfill_cmdline_ux_tokens() {
     fi
 
     if cmp -s "$tmp" "$conf"; then
-        # Already in good shape — just record the sentinel so we don't
+        # Already in good shape; just record the sentinel so we don't
         # re-run on every upgrade.
         rm -f "$tmp"
         mkdir -p "$(dirname "$sentinel")"
@@ -372,7 +372,7 @@ _backfill_cmdline_ux_tokens() {
     echo "  → back-filled UX cmdline tokens into $conf"
 
     # Mirror to whichever ESP path Limine actually boots from. Set
-    # matches apply_core._ESP_LIMINE_MIRRORS — keep in sync.
+    # matches apply_core._ESP_LIMINE_MIRRORS; keep in sync.
     local esp
     for esp in \
         /boot/efi/EFI/limine/limine.conf \
@@ -500,7 +500,7 @@ PY
 
 _apply_faillock_policy() {
     # ShedOS lenient defaults: 6 tries / 5-min lockout (vs upstream 3 / 10-min).
-    # Only rewrites the pristine upstream commented defaults — any user
+    # Only rewrites the pristine upstream commented defaults; any user
     # customization (commented or uncommented, different value) is left alone.
     local f=/etc/security/faillock.conf
     [[ -f $f ]] || return 0
