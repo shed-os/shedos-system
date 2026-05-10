@@ -135,10 +135,19 @@ cmd_detect() {
         | sed -nE "s/.*<'([^']*)'.*/\1/p")
     printf 'Device path: %s\n' "$dev"
     [[ -n $model ]] && printf 'Sensor:      %s\n' "$model"
-    local lib
-    lib=$(pacman -Qq 2>/dev/null | grep -E '^libfprint(-|$)' | head -1)
-    [[ -n $lib ]] && printf 'libfprint:   %s (%s)\n' \
-        "$lib" "$(pacman -Q "$lib" | awk '{print $2}')"
+    local lib variant
+    lib=$(pacman -Qo /usr/lib/libfprint-2.so 2>/dev/null \
+        | awk '{print $(NF-1)}')
+    case "$lib" in
+        libfprint)        variant="stock libfprint" ;;
+        libfprint-tod)    variant="TOD-enabled libfprint" ;;
+        "")               variant="(unknown — /usr/lib/libfprint-2.so unowned)" ;;
+        *)                variant="community fork" ;;
+    esac
+    if [[ -n $lib ]]; then
+        printf 'libfprint:   %s %s — %s\n' \
+            "$lib" "$(pacman -Q "$lib" | awk '{print $2}')" "$variant"
+    fi
     if pacman -Qq 2>/dev/null | grep -q '^libfprint-2-tod1-'; then
         printf 'TOD plugins:\n'
         pacman -Qq | grep '^libfprint-2-tod1-' | sed 's/^/  - /'
@@ -260,7 +269,12 @@ EOF
 }
 
 complete_bash() {
-    cat <<'EOF'
+    case "${1:-}" in
+        enroll|delete)
+            printf '%s\n' "${VALID_FINGERS[@]}"
+            ;;
+        *)
+            cat <<'EOF'
 list
 enroll
 delete
@@ -269,6 +283,8 @@ detect
 status
 test
 EOF
+            ;;
+    esac
 }
 
 if [[ $# -eq 0 ]]; then
@@ -278,7 +294,7 @@ fi
 case "$1" in
     -h|--help|help)         usage; exit 0 ;;
     --help-summary)         echo "manage your fingerprint enrollments"; exit 0 ;;
-    --complete-bash)        complete_bash; exit 0 ;;
+    --complete-bash)        shift; complete_bash "$@"; exit 0 ;;
     list)                   shift; cmd_list "$@" ;;
     enroll)                 shift; cmd_enroll "$@" ;;
     delete)                 shift; cmd_delete "$@" ;;
