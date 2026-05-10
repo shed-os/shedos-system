@@ -12,4 +12,4 @@
 # `journalctl -t hyprland-session`.
 
 exec systemd-cat -t hyprland-session -- \
-    /usr/bin/uwsm start -g -1 -e -D Hyprland hyprland.desktop
+    /usr/bin/uwsm start -g -1 -e -D Hyprland Hyprland
