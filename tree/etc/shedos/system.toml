@@ -53,7 +53,7 @@ limit = 50
 # [drop-ins] — intentionally empty in the default.
 #
 # The /etc drop-ins that shedos-system already ships (sudoers.d/wheel,
-# sddm.conf.d/theme.conf, NetworkManager/conf.d/*) are managed by pacman
+# sysctl.d/99-shedos-tuning.conf, NetworkManager/conf.d/*) are managed by pacman
 # via backup=() so user edits become .pacnew on upgrade. If `shedman apply`
 # took ownership of those same files there'd be a fight between pacman's
 # .pacnew merge and apply's reconcile.
