@@ -81,11 +81,9 @@ cmd_delete() {
     local dev
     dev=$(device_path)
     [[ -n $dev ]] || die "no fingerprint device detected"
-    # fprintd's per-finger delete requires the device to be claimed and
-    # the claim only persists for the lifetime of the D-Bus connection
-    # that issued it. gdbus call opens a new connection per invocation,
-    # so the claim is lost between Claim and DeleteEnrolledFinger. A
-    # short python helper holds one bus across the full sequence.
+    # fprintd's Claim is scoped to its D-Bus connection. gdbus opens
+    # a new connection per invocation, so Claim and DeleteEnrolledFinger
+    # can't share state. The inline python holds one bus.
     FPRINT_DEV_PATH="$dev" FPRINT_USER="$USER" FPRINT_FINGER="$finger" \
     python3 - <<'PYEOF' || die "could not delete '$finger' — see error above"
 import os, sys, dbus
