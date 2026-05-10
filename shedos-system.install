@@ -23,8 +23,8 @@ _add_shedos_repo() {
     local tmp
     tmp=$(mktemp)
 
-    # Drop every existing [shedos] block — fenced or bare; so we end
-    # up with at most one canonical block after appending below.
+    # Drop every existing [shedos] block (fenced or bare) so we end up
+    # with at most one canonical block after appending below.
     awk '
         /^# >>> shedos <<<$/                  { skip=1; next }
         /^# <<< shedos >>>$/                  { skip=0; next }
