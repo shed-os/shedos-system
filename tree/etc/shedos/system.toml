@@ -1,4 +1,4 @@
-# /etc/shedos/system.toml — declarative system state for `shedman apply`.
+# /etc/shedos/system.toml; declarative system state for `shedman apply`.
 #
 # This file is the default ShedOS ships with. It mirrors the behavior the
 # install scriptlet used to apply imperatively, so `shedman apply` is a
@@ -12,7 +12,7 @@
 
 schema = 1
 
-# Theme — wallpaper + Catppuccin palette + fonts. Edit and run
+# Theme; wallpaper + Catppuccin palette + fonts. Edit and run
 # `shedman theme apply` (or `shedman apply`) to push the change
 # into hyprland, waybar, walker, GTK, and the greeter.
 # Available palettes: see /etc/shedos/themes/palettes/*.toml.
@@ -50,7 +50,7 @@ yearly  = 0
 [snapper.cleanup.number]
 limit = 50
 
-# [drop-ins] — intentionally empty in the default.
+# [drop-ins]; intentionally empty in the default.
 #
 # The /etc drop-ins that shedos-system already ships (sudoers.d/wheel,
 # sysctl.d/99-shedos-tuning.conf, NetworkManager/conf.d/*) are managed by pacman
@@ -68,25 +68,25 @@ limit = 50
 server   = "https://repo.shedos.org/stable/$arch"
 siglevel = "Required DatabaseRequired"
 
-# PostgreSQL bootstrap — mirrors what the install scriptlet enables.
+# PostgreSQL bootstrap; mirrors what the install scriptlet enables.
 # Flip either to false to mask the corresponding unit.
 [services.postgresql]
 auto-init   = true   # shedos-pg-initdb.service
 per-user-db = true   # shedos-pg-user-bootstrap.service
 
-# Docker daemon — enabled at install time. Flip to false and run
+# Docker daemon; enabled at install time. Flip to false and run
 # `shedman apply` to mask docker.service.
 [services.docker]
 enable = true
 
-# Realtime audio group. Empty by default — users opt in by adding
+# Realtime audio group. Empty by default; users opt in by adding
 # themselves under [[users]].groups (or with `sudo gpasswd -a $USER
 # realtime`). The /etc/security/limits.d/30-shedos-realtime.conf file
 # grants rtprio + memlock once a user is a member.
 [[groups]]
 name = "realtime"
 
-# Limine kernel cmdline tokens — user-tunable additions only.
+# Limine kernel cmdline tokens; user-tunable additions only.
 #
 # These tokens are applied on first `shedman apply` after install and
 # can be removed by deleting any entry below + running apply again.
@@ -94,7 +94,7 @@ name = "realtime"
 # only after they first appear in /boot/limine.conf via this list.
 #
 # UX-critical tokens (loglevel=3, rd.udev.log_level=3,
-# fbcon=nodefer,map:99) are NOT listed here on purpose — they are
+# fbcon=nodefer,map:99) are NOT listed here on purpose; they are
 # baked into the install-time cmdline by the installer
 # (installer/shedos_installer/core/bootloader.py :: _build_cmdline)
 # so a fresh install boots without a console flash before any apply

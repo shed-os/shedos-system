@@ -1,7 +1,7 @@
 # ShedOS sync-configs user exclude list
 #
 # Copy this file to ~/.config/shedos/sync-exclude and edit to taste.
-# Paths listed here are excluded from the ShedOS dotfile sync — ShedOS
+# Paths listed here are excluded from the ShedOS dotfile sync; ShedOS
 # will never seed, auto-update, or drop a .shedosnew for them.
 #
 # If a path already has manifest state or a leftover .shedosnew from
@@ -22,7 +22,7 @@
 #   .local/state/*
 #   .cache/*
 #
-# Examples — uncomment or adapt to your setup:
+# Examples; uncomment or adapt to your setup:
 
 # Keep your own hyprland bindings; don't let upstream drop .shedosnew for them.
 #.config/hypr/hyprland.conf

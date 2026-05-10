@@ -7,7 +7,7 @@
 # stderr inherited from its TTY. Without the redirect, uwsm's status
 # logs and Hyprland's startup banner land on the bare framebuffer
 # console during the gap between cage exiting and Hyprland claiming
-# DRM — visible as a brief flash of text. Routing them through
+# DRM; visible as a brief flash of text. Routing them through
 # journald keeps the screen clean and preserves the logs for
 # `journalctl -t hyprland-session`.
 

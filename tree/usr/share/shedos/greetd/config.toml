@@ -13,12 +13,12 @@
 
 [terminal]
 # Pin to tty1 explicitly. With "next", greetd picks the first
-# available tty — but `getty@tty1.service` is briefly running at
+# available tty; but `getty@tty1.service` is briefly running at
 # boot (despite Conflicts=greetd), so "next" lands on tty2 and
 # leaves tty1 to agetty. agetty's banner + bash setlocale messages
 # on tty1 then leak into vcs1 and get painted by fbcon during
-# DRM-master gaps. Pinning vt = 1 — paired with masking
-# getty@tty1 / autovt@tty1 in shedos-system.install — gives greetd
+# DRM-master gaps. Pinning vt = 1; paired with masking
+# getty@tty1 / autovt@tty1 in shedos-system.install; gives greetd
 # exclusive ownership of tty1 with no agetty contention.
 vt = 1
 

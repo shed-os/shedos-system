@@ -5,7 +5,7 @@
 # read-ahead to 1024 KB amortises each seek across 8x more useful payload
 # without measurably increasing memory pressure.
 #
-# SSDs explicitly skipped — they serve 1024 KB just as fast as 128 KB
+# SSDs explicitly skipped; they serve 1024 KB just as fast as 128 KB
 # from random offsets, so there's no benefit and the prefetched pages
 # evict cache that would have been more useful.
 

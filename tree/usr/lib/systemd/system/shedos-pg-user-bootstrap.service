@@ -14,7 +14,7 @@ RemainAfterExit=yes
 ExecStart=/usr/bin/shedman db --pg-bootstrap
 StandardOutput=journal
 StandardError=journal
-# Sandboxing — see shedos-pg-initdb.service for the rationale on why
+# Sandboxing; see shedos-pg-initdb.service for the rationale on why
 # we stop short of ProtectSystem=strict for the postgres bootstraps.
 NoNewPrivileges=true
 PrivateTmp=true

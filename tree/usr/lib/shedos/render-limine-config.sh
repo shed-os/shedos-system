@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Re-emit /boot/limine.conf with one entry per installed kernel (plus a
 # fallback entry per kernel) and a default timeout that makes the menu
-# visible. Idempotent — running twice in a row produces a byte-identical
+# visible. Idempotent; running twice in a row produces a byte-identical
 # output.
 #
 # Discovers kernels via /usr/lib/modules/*/pkgbase. Each kernel package
@@ -9,7 +9,7 @@
 # the renderer reads them all to build the entry list.
 #
 # Cmdline resolution, in order:
-#   1. SHEDOS_LIMINE_CMDLINE env — used by the installer at fresh-install
+#   1. SHEDOS_LIMINE_CMDLINE env; used by the installer at fresh-install
 #      time, when /boot/limine.conf doesn't exist yet
 #   2. First kernel_cmdline: line in the existing /boot/limine.conf —
 #      preserves anything the [kernel.cmdline] reconciler in apply_core
@@ -18,7 +18,7 @@
 #
 # Default boot priority (first wins):
 #   1. /var/lib/shedos/kernel-default contents (if the file exists and
-#      names an installed kernel) — `shedman kernel --set-default` writes
+#      names an installed kernel); `shedman kernel --set-default` writes
 #      it
 #   2. shedos-kernel (if installed)
 #   3. linux

@@ -1,7 +1,7 @@
 #!/bin/bash
 # First-boot wizard. Collects name/email/github, writes them to
 # ~/.gitconfig. The marker only gets written on confirmed user
-# interaction — yad-launch failures leave it off so next login retries.
+# interaction; yad-launch failures leave it off so next login retries.
 
 set -u
 

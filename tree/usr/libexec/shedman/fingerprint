@@ -1,5 +1,5 @@
 #!/bin/bash
-# shedman fingerprint — manage user fingerprint enrollments via fprintd.
+# shedman fingerprint; manage user fingerprint enrollments via fprintd.
 
 set -uo pipefail
 

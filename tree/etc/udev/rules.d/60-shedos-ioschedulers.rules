@@ -7,7 +7,7 @@
 # Matchers fire on `add` and `change` so hot-plugged USB drives also get
 # the right scheduler when they appear.
 
-# NVMe — the device's own internal queue is the one that matters.
+# NVMe; the device's own internal queue is the one that matters.
 # Adding a Linux mq scheduler on top just costs latency.
 ACTION=="add|change", KERNEL=="nvme[0-9]*n[0-9]*", ATTR{queue/scheduler}="none"
 

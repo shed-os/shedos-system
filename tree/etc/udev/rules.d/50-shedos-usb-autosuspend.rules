@@ -3,7 +3,7 @@
 # The kernel default suspends idle USB devices after ~2 seconds to save
 # power. For HID-class peripherals (keyboards, mice, gamepads, drawing
 # tablets) that means the first keypress after a brief idle pauses for
-# tens of milliseconds while the device wakes — visible as input lag.
+# tens of milliseconds while the device wakes; visible as input lag.
 # The power saving on a HID device is negligible (single-digit milliwatts).
 
 ACTION=="add", SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="03", ATTR{power/autosuspend}="-1"

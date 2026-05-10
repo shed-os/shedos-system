@@ -1,5 +1,5 @@
 # mkinitcpio preset file for the 'shedos-kernel' package.
-# Do NOT add ALL_config="/etc/mkinitcpio.conf" — setting it forces
+# Do NOT add ALL_config="/etc/mkinitcpio.conf"; setting it forces
 # mkinitcpio into -c <file> mode, which silently disables conf.d
 # drop-ins and strips the archiso hooks needed for live-ISO boot.
 

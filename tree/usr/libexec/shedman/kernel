@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shedman kernel — list installed kernels and set the default Limine entry.
+# shedman kernel; list installed kernels and set the default Limine entry.
 
 set -uo pipefail
 

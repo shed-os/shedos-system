@@ -1,11 +1,11 @@
-# system.toml.example — fully-commented template for /etc/shedos/system.toml
+# system.toml.example; fully-commented template for /etc/shedos/system.toml
 #
 # Copy sections you want to customize into /etc/shedos/system.toml and run
 # `shedman apply` to reconcile. `shedman apply --dry-run` prints the plan
 # without touching anything; `shedman apply --validate` only checks syntax.
 #
 # The schema version is frozen at 1. shedman apply refuses unknown versions
-# with a pointed error — safer than silent reinterpretation.
+# with a pointed error; safer than silent reinterpretation.
 
 schema = 1
 
@@ -13,9 +13,9 @@ schema = 1
 # [systemd.system] / [systemd.user]
 # ---------------------------------------------------------------------------
 #
-# `enable`  — units that should be enabled (systemctl enable). Missing
+# `enable` ; units that should be enabled (systemctl enable). Missing
 #             ones will be enabled on apply.
-# `disable` — units that should be disabled. Any enabled ones get
+# `disable`; units that should be disabled. Any enabled ones get
 #             disabled on apply.
 #
 # A unit appearing in both enable and disable is rejected at validation
@@ -46,14 +46,14 @@ enable = [
 disable = []
 
 # ---------------------------------------------------------------------------
-# [snapper] — timeline + retention knobs for the `root` config
+# [snapper]; timeline + retention knobs for the `root` config
 # ---------------------------------------------------------------------------
 #
 # Only the TIMELINE_* and NUMBER_LIMIT keys in /etc/snapper/configs/root are
 # managed. Everything else (SUBVOLUME, QGROUP, ACL flags, user cleanup
 # algos) is left untouched so snapper's own tooling stays authoritative.
 #
-# Omitting a subkey means "leave current value alone" — not "reset to
+# Omitting a subkey means "leave current value alone"; not "reset to
 # zero". The declarative layer is additive over what snapper ships.
 
 [snapper.timeline]
@@ -68,10 +68,10 @@ yearly  = 0      # TIMELINE_LIMIT_YEARLY
 limit = 50       # NUMBER_LIMIT — max snapshots before oldest get culled
 
 # ---------------------------------------------------------------------------
-# [drop-ins] — file-content entries under /etc/<relpath>
+# [drop-ins]; file-content entries under /etc/<relpath>
 # ---------------------------------------------------------------------------
 #
-# Keys are paths RELATIVE to /etc — they must contain at least one "/" and
+# Keys are paths RELATIVE to /etc; they must contain at least one "/" and
 # end in a known config extension (.conf, .rules, .json, .cfg, ...).
 # Values are the full file content as a literal TOML string.
 #
@@ -95,7 +95,7 @@ limit = 50       # NUMBER_LIMIT — max snapshots before oldest get culled
 # """
 
 # ---------------------------------------------------------------------------
-# [pacman.repos.<name>] — managed stanzas in /etc/pacman.conf
+# [pacman.repos.<name>]; managed stanzas in /etc/pacman.conf
 # ---------------------------------------------------------------------------
 #
 # shedman apply owns a fenced block between `# >>> shedos <<<` and
@@ -107,9 +107,9 @@ limit = 50       # NUMBER_LIMIT — max snapshots before oldest get culled
 # global [options] block) is left strictly alone.
 #
 # Required keys per repo:
-#   server    — the Server URL (supports $arch)
+#   server   ; the Server URL (supports $arch)
 # Optional:
-#   siglevel  — SigLevel directive (default "Required DatabaseRequired")
+#   siglevel ; SigLevel directive (default "Required DatabaseRequired")
 #
 # Dropping the entire [pacman.repos] table removes all managed repos on
 # the next apply (the fence stays empty). Removing a single stanza
@@ -134,7 +134,7 @@ siglevel = "Required DatabaseRequired"
 # siglevel = "Optional TrustAll"
 
 # ---------------------------------------------------------------------------
-# [services.postgresql] — declarative wrapper over the bootstrap units
+# [services.postgresql]; declarative wrapper over the bootstrap units
 # ---------------------------------------------------------------------------
 #
 # Flips below desugar to ordinary systemctl enable/disable on the two
@@ -150,7 +150,7 @@ auto-init   = true   # controls shedos-pg-initdb.service
 per-user-db = true   # controls shedos-pg-user-bootstrap.service
 
 # ---------------------------------------------------------------------------
-# [services.docker] — declarative wrapper over docker.service
+# [services.docker]; declarative wrapper over docker.service
 # ---------------------------------------------------------------------------
 #
 # Docker is enabled at install time. Set `enable = false` and run
@@ -160,23 +160,23 @@ per-user-db = true   # controls shedos-pg-user-bootstrap.service
 enable = true
 
 # ---------------------------------------------------------------------------
-# [network.firewall] — declarative ufw with bidirectional adoption
+# [network.firewall]; declarative ufw with bidirectional adoption
 # ---------------------------------------------------------------------------
 #
-# UFW ships installed but disabled-by-default on ShedOS — uncomment and
+# UFW ships installed but disabled-by-default on ShedOS; uncomment and
 # set `enabled = true` to opt in. ShedOS never enables the firewall for
 # you.
 #
 # Adoption model: rules added via raw `ufw allow|deny` get adopted into
 # this section on the next `shedman apply`. So the TOML and `ufw`
-# remain a coherent single source of truth — edit either, the file
+# remain a coherent single source of truth; edit either, the file
 # always reflects current intent.
 #
 # Safety: removing a rule from TOML deletes it from ufw on apply.
 # Removing the entire `[network.firewall]` section makes the
 # reconciler invisible (it stops managing the firewall, including
 # adoption). On first apply, any pre-existing ufw rules are silently
-# adopted — preview with `shedman apply --dry-run` if that matters.
+# adopted; preview with `shedman apply --dry-run` if that matters.
 #
 # Defaults & service flag (incoming/outgoing/routed/enabled) are only
 # applied when declared. Omit them to leave any user-set defaults
@@ -200,7 +200,7 @@ enable = true
 #   comment    <text>                                  (informational)
 #
 # Flag combining note for bash callers: `app` cannot pair with
-# `port`/`proto`/`from-port`/`to-port` — the validator rejects that
+# `port`/`proto`/`from-port`/`to-port`; the validator rejects that
 # combination.
 
 # [network.firewall]
@@ -229,7 +229,7 @@ enable = true
 # comment   = "lan → postgres"
 
 # ---------------------------------------------------------------------------
-# [security.keyring] — declarative pacman-key trust
+# [security.keyring]; declarative pacman-key trust
 # ---------------------------------------------------------------------------
 #
 # Each fingerprint is a 40-char upper-hex string with no spaces. To
@@ -248,7 +248,7 @@ enable = true
 #
 # Baseline: every fingerprint trusted on first apply (including
 # shedos's own install-time chain) is permanently invisible to the
-# reconciler — never adopted into TOML, never warned about.
+# reconciler; never adopted into TOML, never warned about.
 
 # [security.keyring]
 # trusted = [
@@ -257,7 +257,7 @@ enable = true
 # ]
 
 # ---------------------------------------------------------------------------
-# [[fs.mounts]] — declarative /etc/fstab entries
+# [[fs.mounts]]; declarative /etc/fstab entries
 # ---------------------------------------------------------------------------
 #
 # Each table below becomes one fstab line inside a marker fence at the
@@ -296,7 +296,7 @@ enable = true
 # options = "defaults,_netdev,noauto,x-systemd.automount"
 
 # ---------------------------------------------------------------------------
-# [kernel.cmdline] — declarative Limine kernel parameters
+# [kernel.cmdline]; declarative Limine kernel parameters
 # ---------------------------------------------------------------------------
 #
 # `append` is a list of tokens to ensure-present in the default Limine
@@ -326,22 +326,22 @@ enable = true
 # ]
 
 # ---------------------------------------------------------------------------
-# [[groups]] / [[users]] — declarative groups + users
+# [[groups]] / [[users]]; declarative groups + users
 # ---------------------------------------------------------------------------
 #
 # Strictly additive, by design. ShedOS NEVER deletes a user or group
-# from declarative state — removing a TOML entry only emits a ⚠
+# from declarative state; removing a TOML entry only emits a ⚠
 # warning. Use `sudo userdel`/`sudo groupdel` by hand if you really
 # mean it.
 #
 # What's declarative:
 #   - Group existence (`[[groups]] name = "docker"`)
 #   - User existence (`[[users]] name = "shedrack"`)
-#   - User shell (at create-time only — `useradd -s ...`)
-#   - Group memberships (additive — never `gpasswd -d`)
+#   - User shell (at create-time only; `useradd -s ...`)
+#   - Group memberships (additive; never `gpasswd -d`)
 #
 # What's NOT declarative (deferred):
-#   - User UID, primary GID, home directory path, password — install-
+#   - User UID, primary GID, home directory path, password; install-
 #     time properties, owned by Calamares.
 #   - User deletion / home cleanup.
 #   - Re-adding-with-different-shell on existing users.
