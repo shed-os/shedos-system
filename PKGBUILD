@@ -266,6 +266,14 @@ package() {
     # scopes silences "[ OK ] Started/Stopped foo" chatter that would
     # otherwise reach /dev/console = /dev/tty1, land in vcs1, and be
     # painted by fbcon during DRM-master gaps at compositor handoffs.
+    # System-wide GTK theme defaults. Per-user ~/.config/gtk-*/settings.ini
+    # (seeded from /etc/skel by shedos-hyprland) wins when present; these
+    # files cover any user that doesn't have one.
+    install -Dm644 tree/etc/gtk-3.0/settings.ini \
+        "$pkgdir/etc/gtk-3.0/settings.ini"
+    install -Dm644 tree/etc/gtk-4.0/settings.ini \
+        "$pkgdir/etc/gtk-4.0/settings.ini"
+
     install -Dm644 tree/etc/systemd/system.conf.d/shedos-quiet-status.conf \
         "$pkgdir/etc/systemd/system.conf.d/shedos-quiet-status.conf"
     install -Dm644 tree/etc/systemd/user.conf.d/shedos-quiet-status.conf \
