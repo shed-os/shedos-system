@@ -271,6 +271,24 @@ package() {
     install -Dm644 tree/etc/systemd/user.conf.d/shedos-quiet-status.conf \
         "$pkgdir/etc/systemd/user.conf.d/shedos-quiet-status.conf"
 
+    # RebootWatchdogSec=0 matches the `nowatchdog` kernel cmdline so
+    # systemd doesn't try to arm a shutdown watchdog the kernel
+    # refuses, which would otherwise spam "Watchdog did not stop"
+    # to /dev/console under the Plymouth splash.
+    install -Dm644 tree/etc/systemd/system.conf.d/shedos-no-shutdown-watchdog.conf \
+        "$pkgdir/etc/systemd/system.conf.d/shedos-no-shutdown-watchdog.conf"
+
+    # Plymouth ships plymouth-{poweroff,halt,reboot}.service without
+    # an [Install] section; the systemd shutdown units don't pull
+    # them in by default, so the splash never appears at shutdown.
+    # These three drop-ins add the Wants/After wiring.
+    install -Dm644 tree/etc/systemd/system/systemd-poweroff.service.d/shedos-plymouth.conf \
+        "$pkgdir/etc/systemd/system/systemd-poweroff.service.d/shedos-plymouth.conf"
+    install -Dm644 tree/etc/systemd/system/systemd-halt.service.d/shedos-plymouth.conf \
+        "$pkgdir/etc/systemd/system/systemd-halt.service.d/shedos-plymouth.conf"
+    install -Dm644 tree/etc/systemd/system/systemd-reboot.service.d/shedos-plymouth.conf \
+        "$pkgdir/etc/systemd/system/systemd-reboot.service.d/shedos-plymouth.conf"
+
     # user@.service drop-in: pin stderr to journal at the root of the
     # inheritance chain. Every user service that uses the default
     # StandardError=inherit then lands in journald instead of /dev/console.
