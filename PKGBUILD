@@ -102,7 +102,7 @@ package() {
     install -d "$pkgdir/usr/libexec/shedman"
     local _libexec_shedman=(
         apply config conflicts db doctor health install kernel lock logs rollback
-        services status theme update updates upgrade-history welcome
+        services status theme uninstall update updates upgrade-history welcome
         _config-sync _config-review
     )
     local _name
@@ -344,7 +344,7 @@ package() {
     install -d "$pkgdir/usr/share/man/man1"
     for _name in shedman shedman-update shedman-apply shedman-doctor \
                  shedman-rollback shedman-config shedman-status \
-                 shedman-fingerprint; do
+                 shedman-fingerprint shedman-uninstall; do
         install -Dm644 "man/build/${_name}.1" \
             "$pkgdir/usr/share/man/man1/${_name}.1"
     done
