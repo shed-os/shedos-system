@@ -73,6 +73,7 @@ backup=(
     'etc/NetworkManager/conf.d/wifi_backend.conf'
     'etc/os-release'
     'etc/shedos/system.toml'
+    'etc/shedos/review-exclude.toml'
 )
 install=shedos-system.install
 
@@ -181,6 +182,12 @@ package() {
         "$pkgdir/etc/shedos/system.toml"
     install -Dm644 tree/usr/share/shedos/system.toml.example \
         "$pkgdir/usr/share/shedos/system.toml.example"
+
+    # Exclude list for the .shedosnew conflict reviewer (shedman config
+    # --review). Users overlay at ~/.config/shedos/review-exclude.toml;
+    # see shedos-review-exclude(5).
+    install -Dm644 tree/etc/shedos/review-exclude.toml \
+        "$pkgdir/etc/shedos/review-exclude.toml"
 
     # Snapper config template; copied to /etc/snapper/configs/root by the
     # install scriptlet on first install. Kept out of /etc itself so we
@@ -341,4 +348,7 @@ package() {
         install -Dm644 "man/build/${_name}.1" \
             "$pkgdir/usr/share/man/man1/${_name}.1"
     done
+
+    install -Dm644 man/build/shedos-review-exclude.5 \
+        "$pkgdir/usr/share/man/man5/shedos-review-exclude.5"
 }

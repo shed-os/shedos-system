@@ -1,0 +1,47 @@
+# shedos: paths to skip when scanning for .shedosnew config-merge artifacts.
+#
+# Consumed by `shedman config --review` (the .shedosnew conflict reviewer).
+# Distinct from ~/.config/shedos/sync-exclude, which controls the seeder
+# (shedos-sync-configs) — that file uses globs and decides whether to drop
+# a .shedosnew at all. This file uses regex and decides whether the reviewer
+# walks into a given subtree.
+#
+# Lookup order:
+#   1. /etc/shedos/review-exclude.toml   (this file; system defaults)
+#   2. ~/.config/shedos/review-exclude.toml  (per-user; patterns append)
+#
+# Patterns are Python `re` regexes matched against the relpath under $HOME
+# (no leading slash). Directories are matched with a trailing "/" appended,
+# so `^Projects/` matches the whole tree `Projects/...`.
+#
+# A broken or malformed file falls back to the in-code defaults with a
+# single warning printed to stderr; you never go blind to real conflicts
+# because of a typo here.
+
+output_schema_version = 1
+
+patterns = [
+    # Editor lockfiles we deliberately never touch.
+    "^\\.config/nvim/lazy-lock\\.json$",
+    "^\\.config/nvim/lazyvim\\.json$",
+
+    # Caches and ephemeral state.
+    "^\\.local/state/",
+    "^\\.cache/",
+
+    # Common dev-project parent dirs. User code, not system config.
+    "^Projects/",
+    "^src/",
+    "^code/",
+    "^dev/",
+    "^repos/",
+    "^work/",
+    "^go/",
+    "^rust/",
+]
+
+# Prune any directory whose contents look like a git working tree
+# (a `.git` entry, file or dir). Catches user repos parked outside the
+# dev-parent dirs above. $HOME itself is never pruned even if it's a
+# git repo, so dotfile-tracking setups still work.
+skip_git_trees = true
