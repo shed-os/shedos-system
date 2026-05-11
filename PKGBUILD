@@ -227,6 +227,8 @@ package() {
     # upgrade rather than being silently clobbered.
     install -Dm440 tree/etc/sudoers.d/wheel \
         "$pkgdir/etc/sudoers.d/wheel"
+    install -Dm440 tree/etc/sudoers.d/shedos-locale \
+        "$pkgdir/etc/sudoers.d/shedos-locale"
     install -Dm644 tree/usr/share/shedos/greetd/config.toml \
         "$pkgdir/usr/share/shedos/greetd/config.toml"
     install -Dm644 tree/usr/share/shedos/greetd/greetd.pam \
