@@ -101,8 +101,8 @@ package() {
 
     install -d "$pkgdir/usr/libexec/shedman"
     local _libexec_shedman=(
-        apply config conflicts db doctor health install kernel lock logs rollback
-        services status theme uninstall update updates upgrade-history welcome
+        apply config conflicts db doctor fingerprint health install kernel lock logs
+        rollback services status theme uninstall update updates upgrade-history welcome
         _config-sync _config-review
     )
     local _name
