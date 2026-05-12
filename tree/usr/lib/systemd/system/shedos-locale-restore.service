@@ -1,0 +1,14 @@
+[Unit]
+Description=Reinstall packages whose locale/man/doc/info files were stripped pre-rc4
+Documentation=man:pacman(8)
+ConditionPathExists=!/var/lib/shedos/locale-restore.done
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/shedos-system/locale-restore
+
+[Install]
+WantedBy=multi-user.target

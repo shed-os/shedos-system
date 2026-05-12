@@ -206,6 +206,13 @@ package() {
     install -Dm644 tree/etc/skel/.local/share/keyrings/default \
         "$pkgdir/etc/skel/.local/share/keyrings/default"
 
+    # One-shot heal for pre-rc4 installs whose locale/man/doc/info
+    # files were stripped from the squashfs. Reinstalls only the
+    # affected packages and writes a done-marker; gated by
+    # ConditionPathExists on the service.
+    install -Dm755 tree/usr/libexec/shedos-system/locale-restore \
+        "$pkgdir/usr/libexec/shedos-system/locale-restore"
+
     # Systemd (system-scope)
     install -Dm644 tree/usr/lib/systemd/system/shedos-pg-initdb.service \
         "$pkgdir/usr/lib/systemd/system/shedos-pg-initdb.service"
@@ -215,6 +222,8 @@ package() {
         "$pkgdir/usr/lib/systemd/system/shedos-reflector.service"
     install -Dm644 tree/usr/lib/systemd/system/shedos-reflector.timer \
         "$pkgdir/usr/lib/systemd/system/shedos-reflector.timer"
+    install -Dm644 tree/usr/lib/systemd/system/shedos-locale-restore.service \
+        "$pkgdir/usr/lib/systemd/system/shedos-locale-restore.service"
 
     # Systemd (user-scope): update-check timer
     install -Dm644 tree/usr/lib/systemd/user/shedos-update-check.service \

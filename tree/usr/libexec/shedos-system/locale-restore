@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# Heal pre-rc4 ShedOS installs whose locale/man/doc/info files were
+# stripped from the squashfs by the old airootfs-slim hook. Pacman's
+# local db tracks those files; libalpm warns on every transaction
+# because lstat() returns ENOENT. Reinstalling the affected packages
+# with --overwrite restores the files and silences the warnings.
+#
+# Idempotent: a marker at /var/lib/shedos/locale-restore.done makes
+# subsequent runs a no-op. systemd's ConditionPathExists also gates
+# re-runs.
+#
+# Exits 0 on success or when there's nothing to do. Exits non-zero
+# only if pacman -S fails or if files are still missing after the
+# reinstall (in which case the unit re-fires on the next boot via
+# the missing marker).
+
+set -uo pipefail
+
+MARKER=/var/lib/shedos/locale-restore.done
+LOG_PREFIX="shedos-locale-restore"
+
+log() { printf '%s: %s\n' "$LOG_PREFIX" "$*"; }
+die() { printf '%s: %s\n' "$LOG_PREFIX" "$*" >&2; exit 1; }
+
+if [[ -f $MARKER ]]; then
+    log "already complete (marker at $MARKER)"
+    exit 0
+fi
+
+if ! command -v pacman >/dev/null 2>&1; then
+    die "pacman not on PATH; nothing to do"
+fi
+
+# Best-effort network gate beyond systemd's network-online.target.
+# Some networks let the target fire before DNS works; check explicitly
+# so we don't churn through pacman with a half-up stack.
+if ! getent ahosts archlinux.org >/dev/null 2>&1; then
+    die "no network (getent ahosts archlinux.org failed); retry on next boot"
+fi
+
+log "scanning pacman db for files-in-db-missing-on-disk..."
+
+# Collect every "<pkg>: <path> (No such file or directory)" line.
+# pacman -Qkk emits these on stderr; the package name is the literal
+# field before the first colon.
+mapfile -t MISSING_LINES < <(pacman -Qkk 2>&1 1>/dev/null \
+    | grep -E ': /(usr/share/locale|usr/share/man|usr/share/doc|usr/share/info)/.* \(No such file or directory\)$' \
+    || true)
+
+if (( ${#MISSING_LINES[@]} == 0 )); then
+    log "no locale/man/doc/info gaps; nothing to repair"
+    install -Dm644 /dev/null "$MARKER"
+    exit 0
+fi
+
+# Filter to packages whose ONLY missing files are under the four
+# prefixes. A package with unrelated missing files (e.g., a corrupt
+# install) should not be silently --overwrite'd here.
+declare -A PKG_HAS_OTHER_MISS=()
+declare -A PKG_HAS_TARGET_MISS=()
+
+while IFS= read -r line; do
+    pkg=${line%%:*}
+    [[ -n $pkg ]] || continue
+    if [[ $line =~ :\ /(usr/share/locale|usr/share/man|usr/share/doc|usr/share/info)/ ]]; then
+        PKG_HAS_TARGET_MISS[$pkg]=1
+    else
+        PKG_HAS_OTHER_MISS[$pkg]=1
+    fi
+done < <(pacman -Qkk 2>&1 1>/dev/null | grep -E ': /.* \(No such file or directory\)$' || true)
+
+PKGS=()
+for pkg in "${!PKG_HAS_TARGET_MISS[@]}"; do
+    if [[ -z ${PKG_HAS_OTHER_MISS[$pkg]:-} ]]; then
+        PKGS+=("$pkg")
+    fi
+done
+
+if (( ${#PKGS[@]} == 0 )); then
+    log "no packages with locale/man/doc/info-only gaps; nothing to repair"
+    install -Dm644 /dev/null "$MARKER"
+    exit 0
+fi
+
+# Stable order for log readability.
+IFS=$'\n' PKGS=($(LC_ALL=C printf '%s\n' "${PKGS[@]}" | sort -u))
+unset IFS
+
+log "repairing ${#PKGS[@]} package(s): ${PKGS[*]}"
+
+# --overwrite '*' is safe here because every file we're restoring is
+# by definition absent from disk; pacman cannot clobber user edits to
+# files that aren't there. --needed avoids redundant reinstalls if
+# the upgrade already touched a package.
+if ! pacman -S --overwrite '*' --noconfirm --needed "${PKGS[@]}"; then
+    die "pacman -S failed; will retry on next boot"
+fi
+
+log "verifying no locale/man/doc/info gaps remain..."
+
+if pacman -Qkk 2>&1 1>/dev/null \
+    | grep -qE ': /(usr/share/locale|usr/share/man|usr/share/doc|usr/share/info)/.* \(No such file or directory\)$'; then
+    die "files still missing after reinstall; retrying on next boot"
+fi
+
+install -Dm644 /dev/null "$MARKER"
+log "done; marker written to $MARKER"
