@@ -45,7 +45,7 @@ depends=(
                        # ananicy-cpp.service. -git tracks post-1.2.0;
                        # tagged 1.1.1 fails on glibc 2.41+. See
                        # packages/aur.txt for the upstream context.
-    'yad'              # shedman welcome + apps installer GUI
+    'yad'              # `shedman install` apps-installer GUI
     'yay'              # shedman update + apps installer
     'kitty'            # shedman update runs interactively
     'libnotify'         # notify-send fallbacks
@@ -104,7 +104,7 @@ package() {
     install -d "$pkgdir/usr/libexec/shedman"
     local _libexec_shedman=(
         apply config conflicts db dock doctor fingerprint health install kernel lock logs
-        rollback services status theme uninstall update updates upgrade-history welcome
+        rollback services status theme uninstall update updates upgrade-history
         _config-sync _config-review
     )
     local _name
@@ -121,7 +121,7 @@ package() {
         shedos-check-health shedos-check-services shedos-check-updates
         shedos-doctor shedos-logs shedos-pg-user-bootstrap
         shedos-review-configs shedos-rollback shedos-sync-configs
-        shedos-update shedos-upgrade-history shedos-welcome
+        shedos-update shedos-upgrade-history
     )
     for _name in "${_shims[@]}"; do
         install -Dm755 "tree/usr/bin/$_name" "$pkgdir/usr/bin/$_name"

@@ -514,24 +514,16 @@ _apply_faillock_policy() {
         "$f"
 }
 
-_self_heal_welcome_marker() {
-    # One-shot fix for users stuck behind the old (rc1) silent-marker
-    # bug: marker present AND ~/.gitconfig lacks user.email is the
-    # fingerprint of a welcome that never actually showed.
-    local user uid home marker gitconfig
-    while IFS=: read -r user _ uid _ _ home _; do
-        [[ "$uid" -ge 1000 ]] || continue
+_strip_leaked_welcome_autostart() {
+    # Existing installs carry the autostart entry + per-user marker
+    # from when the live ISO airootfs shipped them; without removal
+    # the autostart logs "exec /usr/bin/shedos-welcome not found" on
+    # every login now that the yad welcome surface is gone.
+    rm -f /etc/xdg/autostart/shedos-welcome.desktop 2>/dev/null || true
+    local home
+    while IFS=: read -r _ _ _ _ _ home _; do
         [[ "$home" == /home/* ]] || continue
-        [[ -d "$home" ]] || continue
-        marker="$home/.config/shedos-setup-complete"
-        gitconfig="$home/.gitconfig"
-        [[ -f "$marker" ]] || continue
-        if [[ -f "$gitconfig" ]] && \
-           grep -qE '^\s*email\s*=' "$gitconfig" 2>/dev/null; then
-            continue
-        fi
-        rm -f "$marker"
-        echo "  → cleared stale welcome marker for $user (no user.email in ~/.gitconfig)"
+        rm -f "$home/.config/shedos-setup-complete" 2>/dev/null || true
     done < <(getent passwd 2>/dev/null)
 }
 
@@ -554,7 +546,7 @@ post_upgrade() {
     _bootstrap_snapper
     _render_theme
     _apply_faillock_policy
-    _self_heal_welcome_marker
+    _strip_leaked_welcome_autostart
     _backfill_cmdline_ux_tokens
     _fix_locale_conf_encoding
 
