@@ -527,6 +527,10 @@ _strip_leaked_welcome_autostart() {
     done < <(getent passwd 2>/dev/null)
 }
 
+_strip_leaked_installer_launcher() {
+    rm -f /usr/share/applications/shedos-install.desktop 2>/dev/null || true
+}
+
 post_upgrade() {
     systemctl daemon-reload || true
     systemctl enable shedos-pg-user-bootstrap.service || true
@@ -547,6 +551,7 @@ post_upgrade() {
     _render_theme
     _apply_faillock_policy
     _strip_leaked_welcome_autostart
+    _strip_leaked_installer_launcher
     _backfill_cmdline_ux_tokens
     _fix_locale_conf_encoding
 
