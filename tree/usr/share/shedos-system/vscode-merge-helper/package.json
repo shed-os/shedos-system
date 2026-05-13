@@ -1,0 +1,13 @@
+{
+    "name": "shedman-merge-helper",
+    "displayName": "Shedman Merge Helper",
+    "description": "Auto-focus Source Control panel for shedman config --review workspaces. No-op in any other workspace.",
+    "version": "1.3.0",
+    "publisher": "shedos",
+    "engines": { "vscode": "^1.69.0" },
+    "activationEvents": [
+        "workspaceContains:**/.shedman/MARKER",
+        "onStartupFinished"
+    ],
+    "main": "./extension.js"
+}
