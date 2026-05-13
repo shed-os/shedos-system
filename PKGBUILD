@@ -29,6 +29,7 @@ depends=(
                        # closes the connection per call and loses the claim
     'python-textual'   # merge TUI framework
     'python-rich'      # transitive dep of textual, declared for clarity
+    'python-pygments'  # syntax highlighting in merge TUI hunk panes
     'snapper'          # pre/post btrfs snapshots + shedman rollback
     'btrfs-progs'      # shedman rollback calls `btrfs subvolume`
     'lm_sensors'       # shedman health CPU-temp metric
