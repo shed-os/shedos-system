@@ -64,6 +64,7 @@ optdepends=(
     'postgresql: shedos-pg-initdb.service initializes a cluster on first boot'
     'networkmanager: connectivity check in the apps installer'
     'nm-connection-editor: launched by the apps installer when offline'
+    'meld: GUI merge backend for shedman config --review (default when a display is available)'
     'bash-completion: tab-complete subcommands and flags in bash'
     'zsh: tab-complete subcommands and flags in zsh (via /usr/share/zsh/site-functions/_shedman)'
     'fish: tab-complete subcommands and flags in fish (via /usr/share/fish/vendor_completions.d/shedman.fish)'
