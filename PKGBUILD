@@ -1,4 +1,4 @@
-# Maintainer: ShedOS <https://github.com/theshedman/shedos>
+# Maintainer: ShedOS <https://github.com/Theshedman/shedos>
 #
 # Root-owned system payload: the unified `shedman` CLI (plus its
 # subcommand binaries under /usr/libexec/shedman/), systemd units, and /etc
@@ -11,7 +11,7 @@ pkgver=2026.05.14
 pkgrel=2
 pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
-url='https://github.com/theshedman/shedos'
+url='https://github.com/Theshedman/shedos'
 license=('GPL-3.0-or-later')
 makedepends=(
     'scdoc'            # renders man/*.scd → /usr/share/man/man1/*.1
