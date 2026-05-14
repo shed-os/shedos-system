@@ -191,6 +191,12 @@ package() {
     install -Dm644 tree/etc/shedos/review-exclude.toml \
         "$pkgdir/etc/shedos/review-exclude.toml"
 
+    # XDG Base Directory defaults exported system-wide so sudoers
+    # env_keep can preserve them across `sudo` for any user, shell,
+    # or rc state.
+    install -Dm644 tree/etc/profile.d/shedos-xdg.sh \
+        "$pkgdir/etc/profile.d/shedos-xdg.sh"
+
     # Snapper config template; copied to /etc/snapper/configs/root by the
     # install scriptlet on first install. Kept out of /etc itself so we
     # don't collide with the snapper package's ownership of that directory.
