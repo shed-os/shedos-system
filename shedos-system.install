@@ -260,26 +260,36 @@ EOF
 _backfill_cmdline_ux_tokens() {
     # Self-correcting backfill for the kernel cmdline UX tokens.
     #
-    # Two classes of touched-up systems share this function:
+    # Four classes of touched-up systems share this function:
     #
     #   (A) Installs predating commit 6f8a21a (2026-05-07): never had
     #       any UX tokens, suffer the boot/login console flash.
     #
-    #   (B) Installs that already ran the v1 backfill on commit
-    #       a88274e (2026-05-08): got loglevel=3, rd.udev.log_level=3,
-    #       console=tty1, AND fbcon=nodefer,map:99; but `console=tty1`
-    #       broke Plymouth's shutdown brand (Plymouth interprets any
-    #       explicit `console=` as a serial console and force-falls
-    #       back to the text-only `details` plugin) and also broke VT
-    #       switching because of how fbcon=map:99 + console=tty1
-    #       interact.
+    #   (B) Installs that ran the v1 backfill on commit a88274e
+    #       (2026-05-08): got loglevel=3, rd.udev.log_level=3,
+    #       console=tty1, AND fbcon=nodefer,map:99. console=tty1
+    #       broke Plymouth's shutdown brand and (combined with
+    #       fbcon=map:99) broke VT switching; v2 removed it.
+    #
+    #   (C) Installs that ran the v2 backfill: got loglevel=3,
+    #       rd.udev.log_level=3, fbcon=nodefer,map:99. The map:99
+    #       half permanently unmaps the framebuffer console from
+    #       every VT, silently breaking Ctrl+Alt+F<N> TTY switching
+    #       post-boot. Empirically confirmed: removing `,map:99`
+    #       restored VT switching with no flash regression — the
+    #       other mitigations (clear-vt-text.sh +
+    #       quiet/loglevel=3/rd.udev.log_level=3 + journal
+    #       redirects) cover flash suppression on their own.
+    #
+    #   (D) Post-v3 fresh installs: bootloader.py bakes in
+    #       fbcon=nodefer (no map:99). v3 is a no-op for these.
     #
     # The corrective pass:
     #
-    #   - REMOVE console=tty1 from every kernel_cmdline line that
-    #     carries it (the v1 backfill stamped it on both primary and
-    #     fallback).
-    #   - ADD loglevel=3, rd.udev.log_level=3, fbcon=nodefer,map:99 to
+    #   - REMOVE console=tty1 (left over from v1) and
+    #     fbcon=nodefer,map:99 (left over from v1/v2) from every
+    #     kernel_cmdline line that carries either.
+    #   - ADD loglevel=3, rd.udev.log_level=3, fbcon=nodefer to
     #     every kernel_cmdline line that's missing any of them.
     #
     # We touch three places in order:
@@ -292,23 +302,26 @@ _backfill_cmdline_ux_tokens() {
     #      boots from the ESP, not /boot/limine.conf. Mirror set
     #      matches apply_core._ESP_LIMINE_MIRRORS.
     #   3. /var/lib/shedos/cmdline.baseline.json; add the three good
-    #      tokens, remove console=tty1 if it was added by v1. Atomic
-    #      via tempfile + os.replace.
+    #      tokens, remove console=tty1 and fbcon=nodefer,map:99 if
+    #      either was stamped by v1 or v2. Atomic via tempfile +
+    #      os.replace.
     #
-    # Idempotent via /var/lib/shedos/.cmdline-ux-backfill-v2-applied.
-    # The v2 sentinel is intentionally a different name so machines
-    # that ran v1 (sentinel /var/lib/shedos/.cmdline-ux-backfill-
-    # applied) re-enter and get the corrective pass.
+    # Idempotent via /var/lib/shedos/.cmdline-ux-backfill-v3-applied.
+    # The v3 sentinel is intentionally a different name so machines
+    # that ran v1 (.cmdline-ux-backfill-applied) or v2
+    # (.cmdline-ux-backfill-v2-applied) re-enter and get the
+    # corrective pass.
 
-    local sentinel=/var/lib/shedos/.cmdline-ux-backfill-v2-applied
+    local sentinel=/var/lib/shedos/.cmdline-ux-backfill-v3-applied
     [[ -f $sentinel ]] && return 0
 
     local conf=/boot/limine.conf
     [[ -f $conf ]] || return 0
 
     # shellcheck disable=SC2054  # bash arrays split on whitespace, not commas; `fbcon=nodefer,map:99` is one element
-    local add_tokens=(loglevel=3 rd.udev.log_level=3 fbcon=nodefer,map:99)
-    local remove_tokens=(console=tty1)
+    local add_tokens=(loglevel=3 rd.udev.log_level=3 fbcon=nodefer)
+    # shellcheck disable=SC2054  # ditto for fbcon=nodefer,map:99 in the remove list
+    local remove_tokens=(console=tty1 fbcon=nodefer,map:99)
 
     # Field-split match for "is <tok> a whole token on this line?".
     # Avoids gawk-only \<...\> word boundaries so the script works

@@ -312,7 +312,7 @@ enable = true
 # (root=, rootflags=, rootfstype=, rw, optional cryptdevice= and
 # nvidia_drm.modeset=1) and the UX-critical tokens that suppress the
 # first-boot console flash (quiet, splash, loglevel=3,
-# rd.udev.log_level=3, fbcon=nodefer,map:99). Removing a baseline
+# rd.udev.log_level=3, fbcon=nodefer). Removing a baseline
 # token from `append` is a no-op; baseline tokens stay in the live
 # cmdline forever.
 #
