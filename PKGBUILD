@@ -174,6 +174,9 @@ package() {
     install -Dm644 tree/usr/share/libalpm/hooks/05-shedos-mkinitcpio-migration.hook \
         "$pkgdir/usr/share/libalpm/hooks/05-shedos-mkinitcpio-migration.hook"
 
+    install -Dm755 tree/usr/lib/shedos/run-with-pause.sh \
+        "$pkgdir/usr/lib/shedos/run-with-pause.sh"
+
     # mkinitcpio preset that enables both default and fallback images for
     # shedos-kernel. Without this, mkinitcpio's pacman hook auto-generates
     # a default-only preset and the renderer's "Fallback" entries have no
