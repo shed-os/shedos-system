@@ -515,6 +515,14 @@ PY
     fi
 }
 
+_migrate_mkinitcpio_hooks() {
+    # In-band call for the hotfix transaction itself; the
+    # PreTransaction hook ships in this package and isn't on disk
+    # yet when pacman scans hooks at transaction start.
+    [[ -x /usr/lib/shedos/migrate-mkinitcpio-hooks.sh ]] || return 0
+    /usr/lib/shedos/migrate-mkinitcpio-hooks.sh || true
+}
+
 _apply_faillock_policy() {
     # ShedOS lenient defaults: 6 tries / 5-min lockout (vs upstream 3 / 10-min).
     # Only rewrites the pristine upstream commented defaults; any user
@@ -565,6 +573,8 @@ post_upgrade() {
     _apply_faillock_policy
     _strip_leaked_welcome_autostart
     _strip_leaked_installer_launcher
+    # Must precede anything that could re-trigger mkinitcpio.
+    _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens
     _fix_locale_conf_encoding
 

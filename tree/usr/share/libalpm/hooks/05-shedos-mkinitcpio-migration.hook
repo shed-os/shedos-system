@@ -1,0 +1,14 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = kbd
+Target = mkinitcpio
+Target = shedos-kernel
+Target = shedos-kernel-headers
+
+[Action]
+Description = Migrating legacy mkinitcpio HOOKS to systemd + sd-vconsole...
+When = PreTransaction
+Exec = /usr/lib/shedos/migrate-mkinitcpio-hooks.sh
+AbortOnFail
