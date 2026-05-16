@@ -211,6 +211,17 @@ post_install() {
     _bootstrap_snapper
     _render_theme
     _apply_faillock_policy
+    # State migrations run on fresh installs too — pre-cutover systems
+    # were laid down by the archiso payload with legacy /etc values that
+    # need the same correction the upgrade path applies. Order matches
+    # post_upgrade: leaked-file strip first, then mkinitcpio HOOKS
+    # (must precede anything that re-triggers mkinitcpio), then cmdline,
+    # then locale.
+    _strip_leaked_welcome_autostart
+    _strip_leaked_installer_launcher
+    _migrate_mkinitcpio_hooks
+    _backfill_cmdline_ux_tokens
+    _fix_locale_conf_encoding
 
     # Timeline + cleanup timers from the snapper package. Idempotent enable:
     # re-running is harmless. Guarded against pacstrap (no running systemd)
