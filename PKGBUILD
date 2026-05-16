@@ -103,7 +103,7 @@ package() {
 
     install -d "$pkgdir/usr/libexec/shedman"
     local _libexec_shedman=(
-        apply config conflicts db dock doctor fingerprint health install kernel lock logs
+        apply config conflicts datetime db dock doctor fingerprint health install kernel lock logs
         rollback services status theme uninstall update updates upgrade-history
         _config-sync _config-review
     )
@@ -213,6 +213,9 @@ package() {
 
     install -Dm644 tree/usr/share/shedos/apps-catalog.tsv \
         "$pkgdir/usr/share/shedos/apps-catalog.tsv"
+
+    install -Dm644 tree/usr/share/polkit-1/rules.d/49-shedos-timedate.rules \
+        "$pkgdir/usr/share/polkit-1/rules.d/49-shedos-timedate.rules"
 
     # Bundled vendor-licensed AUR builds (fingerprint TOD stack; see
     # packages/aur-bundled.txt). scripts/build-shedos-packages.sh stages
@@ -393,7 +396,8 @@ package() {
     install -d "$pkgdir/usr/share/man/man1"
     for _name in shedman shedman-update shedman-apply shedman-doctor \
                  shedman-rollback shedman-config shedman-status \
-                 shedman-fingerprint shedman-uninstall shedman-dock; do
+                 shedman-fingerprint shedman-uninstall shedman-dock \
+                 shedman-datetime; do
         install -Dm644 "man/build/${_name}.1" \
             "$pkgdir/usr/share/man/man1/${_name}.1"
     done
