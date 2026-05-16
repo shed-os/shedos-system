@@ -214,6 +214,19 @@ package() {
     install -Dm644 tree/usr/share/shedos/apps-catalog.tsv \
         "$pkgdir/usr/share/shedos/apps-catalog.tsv"
 
+    # Bundled vendor-licensed AUR builds (fingerprint TOD stack; see
+    # packages/aur-bundled.txt). scripts/build-shedos-packages.sh stages
+    # them into tree/usr/share/shedos/aur-pkgs/ from archiso/shedos-repo/
+    # at build time. shedman update and shedman migrate install them via
+    # pacman -U so users whose ISO predated this set, or who removed the
+    # drivers, get them on the next update. Bundling third-party
+    # .pkg.tar.zst as inert payload is the legal post-ISO install path
+    # (vendor licenses forbid resigning them as separate shedos-repo.db
+    # entries; carrying them unchanged as data is fine).
+    install -d "$pkgdir/usr/share/shedos/aur-pkgs"
+    install -m644 tree/usr/share/shedos/aur-pkgs/*.pkg.tar.zst \
+        "$pkgdir/usr/share/shedos/aur-pkgs/"
+
     # Example user exclude list for `shedman config --sync`. Users copy
     # this to ~/.config/shedos/sync-exclude to opt out of specific files.
     install -Dm644 tree/usr/share/shedos/sync-exclude.example \
