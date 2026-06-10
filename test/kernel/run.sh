@@ -1,134 +1,129 @@
 #!/usr/bin/env bash
-# Verify shedos-kernel ships a config that supports the storage devices
-# every ShedOS user is likely to touch — and verify the build-infra
-# entries that wire shedos-kernel into the wider package set haven't
-# regressed.
+# Guard the shedos-kernel -> linux-zen migration invariants.
 #
-# Storage-driver contract: every entry below MUST resolve to =y or =m
-# in packaging/shedos-kernel/config.x86_64. Dropping one would silently
-# break HDD users, USB-stick boot, btrfs/ext4 root, etc. CI fails the
-# kernel build job loudly when the config falls out of compliance.
+# ShedOS no longer vendors a kernel (Arch owns linux-zen's config), so there
+# is no storage-driver config to contract-test. Instead we assert the wiring
+# that keeps the migration correct: linux-zen is the primary kernel, stock
+# linux is an installable fallback, shedos-kernel is fully retired, and the
+# limine renderer + preset still produce a bootable default + recovery entry.
 
 set -uo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-config_file=$repo_root/packaging/shedos-kernel/config.x86_64
-build_script=$repo_root/scripts/build-shedos-packages.sh
+base_txt=$repo_root/packages/official/base.txt
 meta_render=$repo_root/scripts/render-meta-depends.sh
-
-if [[ ! -f $config_file ]]; then
-    echo "FATAL: $config_file missing — has shedos-kernel been removed?" >&2
-    exit 2
-fi
+build_script=$repo_root/scripts/build-shedos-packages.sh
+renderer=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/render-limine-config.sh
+preset=$repo_root/packaging/shedos-system/tree/etc/mkinitcpio.d/linux-zen.preset
 
 pass=0
 fail=0
 failures=()
-
 _ok()   { printf 'ok: %s\n' "$1"; ((pass++)); }
 _fail() { printf 'FAIL: %s — %s\n' "$1" "$2" >&2; failures+=("$1"); ((fail++)); }
 
 # ---------------------------------------------------------------------------
-# T1: storage-driver non-removal contract
+# K1: linux-zen (primary) + stock linux (fallback), with their headers, are
+#     explicit roots so all four install and land in closure/meta/airootfs.
 # ---------------------------------------------------------------------------
-storage_required=(
-    CONFIG_SATA_AHCI            # every modern SATA controller
-    CONFIG_SATA_AHCI_PLATFORM   # platform SATA (some embedded laptops)
-    CONFIG_ATA_PIIX             # 2010-era Intel + most VMs
-    CONFIG_BLK_DEV_SD           # SCSI disk; covers SATA via libata
-    CONFIG_USB_STORAGE          # USB sticks, external HDD enclosures, SD readers
-    CONFIG_BLK_DEV_NVME         # NVMe SSDs
-    CONFIG_BTRFS_FS             # root fs; non-negotiable
-    CONFIG_EXT4_FS              # data partitions, external drives
-    CONFIG_XFS_FS               # workstation/server data drives
-    CONFIG_VFAT_FS              # USB sticks, ESP, FAT32
-    CONFIG_EXFAT_FS             # large USB sticks, modern SD cards
-    CONFIG_NTFS3_FS             # Windows-formatted external drives
-    CONFIG_BLOCK_LEGACY_AUTOLOAD # some HDD controllers need this
-    CONFIG_IOSCHED_BFQ          # default scheduler for HDD per udev rules
-    CONFIG_MQ_IOSCHED_DEADLINE  # default scheduler for SSD per udev rules
-)
-
-for sym in "${storage_required[@]}"; do
-    val=$(awk -F= -v s="$sym" '$1 == s {print $2; exit}' "$config_file")
-    if [[ $val == y || $val == m ]]; then
-        _ok "T1_storage_$sym"
+for pkg in linux-zen linux-zen-headers linux linux-headers; do
+    if grep -qxF "$pkg" "$base_txt"; then
+        _ok "K1_base_has_$pkg"
     else
-        _fail "T1_storage_$sym" "expected =y or =m, got '${val:-MISSING}'"
+        _fail "K1_base_has_$pkg" "missing from packages/official/base.txt"
     fi
 done
 
 # ---------------------------------------------------------------------------
-# T2: developer-tuning knobs the README promises (HZ_1000, IKCONFIG, BPF,
-#     ftrace) all stay enabled.
+# K2: shedos-kernel is fully retired — no package tree, no build-order entry,
+#     no meta-depends entry. (The shedos-system retirement one-shot may still
+#     name it; we only scan the build/package-set wiring here.)
 # ---------------------------------------------------------------------------
-dev_required=(
-    "CONFIG_HZ_1000=y"
-    "CONFIG_PREEMPT=y"
-    "CONFIG_BPF=y"
-    "CONFIG_BPF_JIT=y"
-    "CONFIG_DEBUG_INFO_BTF=y"
-    "CONFIG_KPROBES=y"
-    "CONFIG_FTRACE=y"
-    "CONFIG_DYNAMIC_FTRACE=y"
-    "CONFIG_IKCONFIG=y"
-    "CONFIG_IKCONFIG_PROC=y"
-)
-
-for line in "${dev_required[@]}"; do
-    if grep -qxF "$line" "$config_file"; then
-        _ok "T2_dev_${line%%=*}"
-    else
-        _fail "T2_dev_${line%%=*}" "config line '$line' not found"
-    fi
-done
-
-# ---------------------------------------------------------------------------
-# T3: build-shedos-packages.sh wires shedos-kernel into BUILD_ORDER and
-#     drops --nodeps for it (kernel needs --syncdeps to pull gcc/etc.).
-# ---------------------------------------------------------------------------
-if grep -qE "^[[:space:]]*shedos-kernel\b" "$build_script"; then
-    _ok T3_build_order_lists_shedos_kernel
+if [[ -e $repo_root/packaging/shedos-kernel ]]; then
+    _fail K2_package_deleted "packaging/shedos-kernel/ still exists"
 else
-    _fail T3_build_order_lists_shedos_kernel \
-        "shedos-kernel missing from BUILD_ORDER in $build_script"
+    _ok K2_package_deleted
 fi
-
-if grep -qE 'pkgname == shedos-kernel' "$build_script" \
-   && grep -qE -- '--syncdeps' "$build_script"; then
-    _ok T3_build_drops_nodeps_for_shedos_kernel
+if grep -q 'shedos-kernel' "$build_script"; then
+    _fail K2_build_clean "shedos-kernel still referenced in $build_script"
 else
-    _fail T3_build_drops_nodeps_for_shedos_kernel \
-        "expected a 'pkgname == shedos-kernel' branch with --syncdeps in $build_script"
+    _ok K2_build_clean
+fi
+if grep -q 'shedos-kernel' "$meta_render"; then
+    _fail K2_meta_clean "shedos-kernel still referenced in $meta_render"
+else
+    _ok K2_meta_clean
 fi
 
 # ---------------------------------------------------------------------------
-# T4: render-meta-depends.sh includes shedos-kernel so it lands in
-#     shedos-meta's depends=. Stock 'linux' must also remain depended-on
-#     for the fallback boot entry to keep working — that comes from
-#     packages/official/base.txt; we sanity-check it.
+# K3: the fallback kernel can actually install — stock linux must NOT be
+#     conflicted by shedos-meta (it was, while shedos-kernel was the only
+#     kernel we shipped).
 # ---------------------------------------------------------------------------
-if grep -qE "^[[:space:]]*shedos-kernel[[:space:]]*$" "$meta_render"; then
-    _ok T4_meta_lists_shedos_kernel
+if awk '/^shedos_conflicts=\(/{c=1;next} /^\)/{c=0} c' "$meta_render" \
+        | grep -qE "^[[:space:]]*'?linux'?[[:space:]]*$"; then
+    _fail K3_linux_not_conflicted "stock linux is still in shedos_conflicts"
 else
-    _fail T4_meta_lists_shedos_kernel \
-        "shedos-kernel missing from shedos_pkgs in $meta_render"
+    _ok K3_linux_not_conflicted
 fi
 
-if grep -qxE "^linux$" "$repo_root/packages/official/base.txt"; then
-    _ok T4_base_keeps_linux
+# ---------------------------------------------------------------------------
+# K4: ShedOS ships a linux-zen.preset forcing BOTH default + fallback images.
+#     mkinitcpio's stock template is default-only, so without this the limine
+#     "(Fallback)" recovery entry would have no initramfs to load.
+# ---------------------------------------------------------------------------
+if [[ -f $preset ]] && grep -qF "PRESETS=('default' 'fallback')" "$preset"; then
+    _ok K4_preset_enables_fallback
 else
-    _fail T4_base_keeps_linux \
-        "stock 'linux' missing from packages/official/base.txt — fallback kernel would not be installed"
+    _fail K4_preset_enables_fallback "linux-zen.preset missing or not enabling the fallback preset"
 fi
+
+# ---------------------------------------------------------------------------
+# K5: functional — the limine renderer makes linux-zen the default entry,
+#     labels stock linux as "(stock)", and omits a recovery entry for a
+#     kernel whose fallback initramfs doesn't exist (default-only preset).
+# ---------------------------------------------------------------------------
+tmp=$(mktemp -d)
+mkdir -p "$tmp/modules/9.9-zen" "$tmp/modules/9.9-stock" "$tmp/boot"
+echo linux-zen > "$tmp/modules/9.9-zen/pkgbase"
+echo linux     > "$tmp/modules/9.9-stock/pkgbase"
+: > "$tmp/boot/initramfs-linux-zen.img"
+: > "$tmp/boot/initramfs-linux-zen-fallback.img"
+: > "$tmp/boot/initramfs-linux.img"   # default only; no -fallback
+SHEDOS_LIMINE_CMDLINE="root=UUID=test rw quiet" \
+SHEDOS_BOOT_DIR="$tmp/boot" SHEDOS_MODULES_DIR="$tmp/modules" \
+    bash "$renderer" >/dev/null 2>&1
+conf=$tmp/boot/limine.conf
+
+# linux-zen entry comes first (the default), labelled "ShedOS Linux".
+if [[ -f $conf ]] && [[ "$(grep -m1 '^/' "$conf")" == "/ShedOS Linux" ]] \
+   && grep -q 'vmlinuz-linux-zen' "$conf"; then
+    _ok K5_default_is_linux_zen
+else
+    _fail K5_default_is_linux_zen "linux-zen is not the first/default limine entry"
+fi
+# linux-zen keeps its recovery entry (its fallback initramfs exists)...
+if grep -qF '/ShedOS Linux (Fallback)' "$conf"; then
+    _ok K5_linux_zen_has_fallback
+else
+    _fail K5_linux_zen_has_fallback "linux-zen recovery entry missing"
+fi
+# ...stock linux is present but its recovery entry is omitted (no initramfs).
+if grep -qF '/ShedOS Linux (stock)' "$conf" \
+   && ! grep -qF '/ShedOS Linux (stock) (Fallback)' "$conf"; then
+    _ok K5_stock_fallback_omitted
+else
+    _fail K5_stock_fallback_omitted "stock linux entry wrong, or a dead fallback entry was emitted"
+fi
+rm -rf "$tmp"
 
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 total=$((pass + fail))
 echo
-echo "shedos-kernel: $pass/$total passed"
+echo "kernel wiring: $pass/$total passed"
 if (( fail > 0 )); then
     printf '  %s\n' "${failures[@]}" >&2
     exit 1
