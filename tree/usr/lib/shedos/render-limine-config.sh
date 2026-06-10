@@ -20,7 +20,7 @@
 #   1. /var/lib/shedos/kernel-default contents (if the file exists and
 #      names an installed kernel); `shedman kernel --set-default` writes
 #      it
-#   2. shedos-kernel (if installed)
+#   2. linux-zen (if installed)
 #   3. linux
 #   4. Anything else, alphabetical
 
@@ -44,7 +44,7 @@ if (( ${#pkgbases[@]} == 0 )); then
     exit 1
 fi
 
-# Build the boot order. User-chosen default first, then shedos-kernel,
+# Build the boot order. User-chosen default first, then linux-zen,
 # then linux, then everything else alphabetical. Each pkgbase appears
 # exactly once.
 user_default=""
@@ -71,7 +71,7 @@ _have_pkgbase() {
 if [[ -n $user_default ]] && _have_pkgbase "$user_default"; then
     _add "$user_default"
 fi
-_have_pkgbase shedos-kernel && _add shedos-kernel
+_have_pkgbase linux-zen && _add linux-zen
 _have_pkgbase linux && _add linux
 for k in "${pkgbases[@]}"; do
     _add "$k"
@@ -100,7 +100,7 @@ cmdline_fallback=$(printf '%s\n' "$cmdline" \
 
 _display_name() {
     case "$1" in
-        shedos-kernel) echo "ShedOS Linux" ;;
+        linux-zen)     echo "ShedOS Linux" ;;
         linux)         echo "ShedOS Linux (stock)" ;;
         *)             echo "ShedOS Linux ($1)" ;;
     esac
@@ -125,6 +125,14 @@ trap 'rm -f -- "$tmp"' EXIT
     kernel_cmdline: $cmdline
     module_path: boot():/initramfs-$k.img
 
+EOF
+        # Only emit the recovery entry when the fallback initramfs exists.
+        # mkinitcpio's stock preset template is default-only, so a kernel
+        # without a shipped both-presets file (e.g. the stock linux
+        # fallback) has no initramfs-$k-fallback.img — emitting the entry
+        # anyway would dead-end the boot.
+        if [[ -f $BOOT_DIR/initramfs-$k-fallback.img ]]; then
+            cat <<EOF
 /$name (Fallback)
     protocol: linux
     kernel_path: boot():/vmlinuz-$k
@@ -132,6 +140,7 @@ trap 'rm -f -- "$tmp"' EXIT
     module_path: boot():/initramfs-$k-fallback.img
 
 EOF
+        fi
     done
 } > "$tmp"
 

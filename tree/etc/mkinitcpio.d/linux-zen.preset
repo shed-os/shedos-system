@@ -1,0 +1,19 @@
+# mkinitcpio preset for the 'linux-zen' package.
+#
+# ShedOS ships this instead of relying on mkinitcpio's auto-generated
+# preset: the stock template (/usr/share/mkinitcpio/hook.preset) enables
+# 'default' only, so without this the limine "(Fallback)" recovery entry
+# would have no initramfs to load.
+#
+# Do NOT add ALL_config="/etc/mkinitcpio.conf"; setting it forces
+# mkinitcpio into -c <file> mode, which silently disables conf.d
+# drop-ins and strips the archiso hooks needed for live-ISO boot.
+
+ALL_kver="/boot/vmlinuz-linux-zen"
+
+PRESETS=('default' 'fallback')
+
+default_image="/boot/initramfs-linux-zen.img"
+
+fallback_image="/boot/initramfs-linux-zen-fallback.img"
+fallback_options="-S autodetect"

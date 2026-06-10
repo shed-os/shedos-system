@@ -4,8 +4,8 @@ Operation = Upgrade
 Type = Package
 Target = kbd
 Target = mkinitcpio
-Target = shedos-kernel
-Target = shedos-kernel-headers
+Target = linux-zen
+Target = linux-zen-headers
 
 [Action]
 Description = Migrating legacy mkinitcpio HOOKS to systemd + sd-vconsole...

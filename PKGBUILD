@@ -177,13 +177,14 @@ package() {
     install -Dm755 tree/usr/lib/shedos/run-with-pause.sh \
         "$pkgdir/usr/lib/shedos/run-with-pause.sh"
 
-    # mkinitcpio preset that enables both default and fallback images for
-    # shedos-kernel. Without this, mkinitcpio's pacman hook auto-generates
-    # a default-only preset and the renderer's "Fallback" entries have no
-    # initramfs to load. Stock linux ships its own preset with both
-    # presets enabled.
-    install -Dm644 tree/etc/mkinitcpio.d/shedos-kernel.preset \
-        "$pkgdir/etc/mkinitcpio.d/shedos-kernel.preset"
+    # mkinitcpio preset forcing both default and fallback images for
+    # linux-zen. Without it, mkinitcpio's hook template auto-generates a
+    # default-only preset and the limine renderer's "(Fallback)" recovery
+    # entry has no initramfs to load. The stock linux fallback kernel
+    # keeps the auto-generated default-only preset; the renderer omits a
+    # fallback entry when its initramfs is absent.
+    install -Dm644 tree/etc/mkinitcpio.d/linux-zen.preset \
+        "$pkgdir/etc/mkinitcpio.d/linux-zen.preset"
 
     # Declarative system state. /etc/shedos/system.toml is in backup=() so
     # user edits become .pacnew on upgrade; the example template is a
