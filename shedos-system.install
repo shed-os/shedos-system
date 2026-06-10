@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # shedos-system install scriptlet
 #
 # Runs as root in the target install root. For a normal `pacman -S` this is
@@ -66,6 +67,10 @@ EOF
 }
 
 _migrate_repo_url() {
+    # The literal `$arch` below is intentional: it's written into
+    # /etc/pacman.conf, where pacman (not bash) expands it. Single quotes
+    # keep it literal.
+    # shellcheck disable=SC2016
     sed -i \
         -e '/^# >>> shedos <<<$/,/^# <<< shedos >>>$/ s|^Server = https://repo\.shedos\.org/\$arch$|Server = https://repo.shedos.org/stable/$arch|' \
         -e '/^# >>> shedos-testing <<<$/,/^# <<< shedos-testing >>>$/ s|^#Server = https://repo\.shedos\.org/\$arch-testing$|#Server = https://repo.shedos.org/test/$arch|' \
