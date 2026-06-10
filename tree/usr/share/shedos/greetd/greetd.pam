@@ -9,6 +9,13 @@
 
 auth       required     pam_securetty.so
 auth       requisite    pam_nologin.so
+# Fingerprint before the password stack: the greeter creates its
+# greetd session eagerly, so the reader is armed from boot and a
+# touch logs in without typing. A `sufficient` failure (timeout, no
+# reader, no enrolled prints) falls through to the password include
+# without reaching faillock's authfail accounting. Note: a touch
+# login can't unlock the gnome keyring (no PAM_AUTHTOK).
+auth       sufficient   pam_fprintd.so
 auth       include      system-local-login
 auth       optional     pam_gnome_keyring.so
 account    include      system-local-login
