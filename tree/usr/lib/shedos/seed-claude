@@ -1,0 +1,12 @@
+#!/bin/bash
+# Seed the ISO-baked Claude Code from /etc/skel into the user's home.
+# /etc/skel only seeds new accounts at useradd time; this covers accounts
+# that predate the bake (and the switch off claude-code-bin). Idempotent.
+set -u
+
+[[ -e $HOME/.local/bin/claude ]] && exit 0
+[[ -e /etc/skel/.local/bin/claude ]] || exit 0
+
+mkdir -p "$HOME/.local/bin" "$HOME/.local/share"
+cp -a /etc/skel/.local/share/claude "$HOME/.local/share/claude"
+cp -a /etc/skel/.local/bin/claude "$HOME/.local/bin/claude"

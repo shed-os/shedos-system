@@ -1,0 +1,11 @@
+[Unit]
+Description=Seed ISO-baked Claude Code into the user's home
+ConditionPathExists=!%h/.local/bin/claude
+ConditionPathExists=/etc/skel/.local/bin/claude
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/shedos/seed-claude
+
+[Install]
+WantedBy=default.target

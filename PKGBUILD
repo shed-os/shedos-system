@@ -281,6 +281,10 @@ package() {
         "$pkgdir/usr/lib/systemd/user/shedos-doctor.service"
     install -Dm644 tree/usr/lib/systemd/user/shedos-doctor.timer \
         "$pkgdir/usr/lib/systemd/user/shedos-doctor.timer"
+    install -Dm755 tree/usr/lib/shedos/seed-claude \
+        "$pkgdir/usr/lib/shedos/seed-claude"
+    install -Dm644 tree/usr/lib/systemd/user/shedos-claude-seed.service \
+        "$pkgdir/usr/lib/systemd/user/shedos-claude-seed.service"
 
     # /etc drop-ins. These go in backup=() so user edits become .pacnew on
     # upgrade rather than being silently clobbered.

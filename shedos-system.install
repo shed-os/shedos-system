@@ -205,6 +205,7 @@ post_install() {
     systemctl --global enable shedos-update-check.timer || true
     systemctl --global enable shedos-check-health.timer || true
     systemctl --global enable shedos-doctor.timer || true
+    systemctl --global enable shedos-claude-seed.service || true
 
     _add_shedos_repo
     _bootstrap_greetd
@@ -575,6 +576,7 @@ post_upgrade() {
     systemctl --global enable shedos-update-check.timer || true
     systemctl --global enable shedos-check-health.timer || true
     systemctl --global enable shedos-doctor.timer || true
+    systemctl --global enable shedos-claude-seed.service || true
 
     _migrate_repo_url
     _add_shedos_repo
