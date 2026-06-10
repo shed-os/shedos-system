@@ -199,6 +199,10 @@ post_install() {
     # Calamares-time bootstrap in shedos_finalize; if that fails silently,
     # or if a new user is added post-install, this catches it.
     systemctl enable shedos-pg-user-bootstrap.service || true
+    # AppArmor LSM: loads /etc/apparmor.d profiles once the lsm= cmdline
+    # takes effect (next boot). The installer bakes lsm= into the
+    # install-time cmdline, so a fresh install is enforcing from first boot.
+    systemctl enable apparmor.service 2>/dev/null || true
     # --global enables the user-scope unit for every user on the system via
     # /etc/systemd/user/timers.target.wants/. Each user's systemd --user
     # instance picks it up on next login without any per-user bootstrap.
@@ -222,6 +226,7 @@ post_install() {
     _strip_leaked_installer_launcher
     _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens
+    _backfill_apparmor_lsm
     _fix_locale_conf_encoding
     _retire_legacy_kernel_setup
 
@@ -481,6 +486,99 @@ PY
     : > "$sentinel"
 }
 
+_backfill_apparmor_lsm() {
+    # Enable AppArmor on existing installs by adding the lsm= token to the
+    # live Limine kernel cmdline. Fresh installs already carry it from the
+    # installer's _build_cmdline; this backfills upgraders so AppArmor comes
+    # on at the next reboot. lsm= is a full override of the kernel's LSM
+    # list, so we only add ours when a line has no lsm= token already
+    # (respecting a user who set their own). Idempotent via the sentinel.
+    local sentinel=/var/lib/shedos/.apparmor-lsm-applied
+    [[ -f $sentinel ]] && return 0
+
+    local lsm_token="lsm=landlock,lockdown,yama,integrity,apparmor,bpf"
+    local conf=/boot/limine.conf
+    [[ -f $conf ]] || return 0
+
+    local tmp
+    tmp=$(mktemp)
+    if ! awk -v tok="$lsm_token" '
+        /^[[:space:]]*kernel_cmdline:/ {
+            has_lsm = 0
+            n = split($0, f, /[[:space:]]+/)
+            for (i = 1; i <= n; i++) if (f[i] ~ /^lsm=/) has_lsm = 1
+            if (!has_lsm) $0 = $0 " " tok
+            print
+            next
+        }
+        { print }
+    ' "$conf" > "$tmp"; then
+        rm -f "$tmp"
+        echo "shedos-system: AppArmor lsm backfill skipped — awk failed on $conf" >&2
+        return 0
+    fi
+
+    if ! cmp -s "$tmp" "$conf"; then
+        install -Dm644 "$tmp" "$conf"
+        echo "  → enabled AppArmor via lsm= in $conf"
+        # Mirror to whichever ESP path Limine boots from. Set matches
+        # apply_core._ESP_LIMINE_MIRRORS; keep in sync.
+        local esp
+        for esp in \
+            /boot/efi/EFI/limine/limine.conf \
+            /boot/efi/limine.conf \
+            /efi/EFI/limine/limine.conf \
+            /efi/limine.conf
+        do
+            [[ -f $esp ]] || continue
+            install -Dm644 "$conf" "$esp" 2>/dev/null \
+                && echo "  → mirrored to $esp"
+        done
+    fi
+    rm -f "$tmp"
+
+    # Add the lsm token to the apply baseline so `shedman apply` treats it
+    # as protected and never strips it. Atomic write via tempfile +
+    # os.replace, mirroring _backfill_cmdline_ux_tokens.
+    local baseline=/var/lib/shedos/cmdline.baseline.json
+    if [[ -f $baseline && -x /usr/bin/python3 ]]; then
+        /usr/bin/python3 - "$baseline" "$lsm_token" <<'PY' || true
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+baseline_path = Path(sys.argv[1])
+tok = sys.argv[2]
+
+doc = json.loads(baseline_path.read_text())
+items = {tuple(item) for item in doc.get("items", [])}
+if (tok,) in items:
+    sys.exit(0)
+items.add((tok,))
+doc["items"] = sorted([list(t) for t in items])
+payload = json.dumps(doc, indent=2) + "\n"
+
+fd, tmp = tempfile.mkstemp(dir=str(baseline_path.parent), prefix=".apparmor-lsm-")
+try:
+    with os.fdopen(fd, "w") as f:
+        f.write(payload)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, baseline_path)
+except Exception:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+PY
+    fi
+
+    mkdir -p "$(dirname "$sentinel")"
+    : > "$sentinel"
+}
+
 _fix_locale_conf_encoding() {
     # Calamares sometimes wrote /etc/locale.conf with bare locale names
     # (`LANG=en_NG`, `LC_TIME=en_NG`) instead of the encoding-qualified
@@ -595,6 +693,9 @@ post_upgrade() {
     # files were stripped from the squashfs; no-op once the
     # /var/lib/shedos/locale-restore.done marker is in place.
     systemctl enable shedos-locale-restore.service 2>/dev/null || true
+    # AppArmor LSM: enable so profiles load once the backfilled lsm=
+    # cmdline takes effect on the next reboot.
+    systemctl enable apparmor.service 2>/dev/null || true
     systemctl --global enable shedos-update-check.timer || true
     systemctl --global enable shedos-check-health.timer || true
     systemctl --global enable shedos-doctor.timer || true
@@ -611,6 +712,7 @@ post_upgrade() {
     # Must precede anything that could re-trigger mkinitcpio.
     _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens
+    _backfill_apparmor_lsm
     _fix_locale_conf_encoding
     _retire_legacy_kernel_setup
 
