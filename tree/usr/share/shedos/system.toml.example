@@ -160,6 +160,16 @@ per-user-db = true   # controls shedos-pg-user-bootstrap.service
 enable = true
 
 # ---------------------------------------------------------------------------
+# [services.sshd]; declarative wrapper over sshd.service
+# ---------------------------------------------------------------------------
+#
+# OpenSSH is enabled by default. Set `enable = false` and run
+# `shedman apply` to mask sshd.service on systems that don't need it.
+
+[services.sshd]
+enable = true
+
+# ---------------------------------------------------------------------------
 # [network.firewall]; declarative ufw with bidirectional adoption
 # ---------------------------------------------------------------------------
 #

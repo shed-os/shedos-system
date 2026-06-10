@@ -79,6 +79,11 @@ per-user-db = true   # shedos-pg-user-bootstrap.service
 [services.docker]
 enable = true
 
+# OpenSSH daemon; enabled by default. Flip to false and run
+# `shedman apply` to mask sshd.service.
+[services.sshd]
+enable = true
+
 # Realtime audio group. Empty by default; users opt in by adding
 # themselves under [[users]].groups (or with `sudo gpasswd -a $USER
 # realtime`). The /etc/security/limits.d/30-shedos-realtime.conf file
