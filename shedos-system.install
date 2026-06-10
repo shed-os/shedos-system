@@ -223,6 +223,7 @@ post_install() {
     _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens
     _fix_locale_conf_encoding
+    _retire_legacy_kernel_setup
 
     # Timeline + cleanup timers from the snapper package. Idempotent enable:
     # re-running is harmless. Guarded against pacstrap (no running systemd)
@@ -564,6 +565,27 @@ _strip_leaked_installer_launcher() {
     rm -f /usr/share/applications/shedos-install.desktop 2>/dev/null || true
 }
 
+_retire_legacy_kernel_setup() {
+    # Part of the shedos-kernel -> linux-zen migration. shedos-kernel is
+    # intentionally kept installed through this upgrade so the box always
+    # has a known-good, already-booting kernel; the shedos-retire-kernel
+    # one-shot removes it on the first boot that lands on linux-zen, so a
+    # bad linux-zen can never strand the user. Here we only arm that
+    # one-shot and make linux-zen the default boot entry so that first
+    # boot actually lands on it. No-op on fresh installs (no shedos-kernel).
+    pacman -Qq shedos-kernel &>/dev/null || return 0
+
+    # If the saved default still names the kernel we're retiring, repoint
+    # it at linux-zen — otherwise render-limine-config.sh would keep
+    # booting shedos-kernel and the one-shot would never fire.
+    local default_file=/var/lib/shedos/kernel-default
+    if [[ -f $default_file && "$(cat "$default_file" 2>/dev/null)" == shedos-kernel ]]; then
+        echo linux-zen > "$default_file"
+    fi
+
+    systemctl enable shedos-retire-kernel.service 2>/dev/null || true
+}
+
 post_upgrade() {
     systemctl daemon-reload || true
     systemctl enable shedos-pg-user-bootstrap.service || true
@@ -590,6 +612,7 @@ post_upgrade() {
     _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens
     _fix_locale_conf_encoding
+    _retire_legacy_kernel_setup
 
     if [[ -d /run/systemd/system ]]; then
         systemctl enable --now snapper-timeline.timer 2>/dev/null || true

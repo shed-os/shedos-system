@@ -166,6 +166,11 @@ package() {
     # every kernel install/upgrade/remove.
     install -Dm755 tree/usr/lib/shedos/render-limine-config.sh \
         "$pkgdir/usr/lib/shedos/render-limine-config.sh"
+
+    # First-boot one-shot that retires the legacy shedos-kernel once
+    # linux-zen is confirmed booting (see shedos-retire-kernel.service).
+    install -Dm755 tree/usr/lib/shedos/retire-shedos-kernel \
+        "$pkgdir/usr/lib/shedos/retire-shedos-kernel"
     install -Dm644 tree/usr/share/libalpm/hooks/95-shedos-limine-update.hook \
         "$pkgdir/usr/share/libalpm/hooks/95-shedos-limine-update.hook"
 
@@ -268,6 +273,8 @@ package() {
         "$pkgdir/usr/lib/systemd/system/shedos-reflector.timer"
     install -Dm644 tree/usr/lib/systemd/system/shedos-locale-restore.service \
         "$pkgdir/usr/lib/systemd/system/shedos-locale-restore.service"
+    install -Dm644 tree/usr/lib/systemd/system/shedos-retire-kernel.service \
+        "$pkgdir/usr/lib/systemd/system/shedos-retire-kernel.service"
 
     # Systemd (user-scope): update-check timer
     install -Dm644 tree/usr/lib/systemd/user/shedos-update-check.service \

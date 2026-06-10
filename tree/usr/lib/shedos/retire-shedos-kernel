@@ -1,0 +1,54 @@
+#!/bin/bash
+# First-boot retirement of the legacy shedos-kernel package.
+#
+# The shedos-kernel -> linux-zen migration deliberately leaves shedos-kernel
+# INSTALLED through the upgrade, so the machine always keeps a known-good,
+# already-booting kernel while linux-zen is added alongside it. This one-shot
+# finishes the job — but only AFTER the system has actually booted linux-zen,
+# so an incomplete or unbootable linux-zen can never strand the user. It
+# no-ops (and disables itself) once shedos-kernel is gone.
+set -uo pipefail
+
+# Nothing to retire — already done, or a fresh linux-zen install.
+if ! pacman -Qq shedos-kernel &>/dev/null; then
+    systemctl disable shedos-retire-kernel.service 2>/dev/null || true
+    exit 0
+fi
+
+# Fail-closed gate: only retire the old kernel when linux-zen is the kernel
+# we actually booted. The running kernel's modules dir names its package.
+running=$(uname -r)
+booted_pkgbase=$(cat "/usr/lib/modules/$running/pkgbase" 2>/dev/null || true)
+if [[ $booted_pkgbase != linux-zen ]]; then
+    echo "retire-shedos-kernel: booted kernel is '${booted_pkgbase:-$running}', not linux-zen — deferring to a later boot"
+    exit 0
+fi
+
+# Don't fight a concurrent pacman transaction; try again next boot.
+if [[ -e /var/lib/pacman/db.lck ]]; then
+    echo "retire-shedos-kernel: pacman db is locked — will retry next boot"
+    exit 0
+fi
+
+# Remove whichever of the pair is still present.
+remove=()
+for pkg in shedos-kernel shedos-kernel-headers; do
+    pacman -Qq "$pkg" &>/dev/null && remove+=("$pkg")
+done
+
+echo "retire-shedos-kernel: linux-zen confirmed running; removing ${remove[*]}"
+if ! pacman -R --noconfirm "${remove[@]}"; then
+    echo "retire-shedos-kernel: removal failed — leaving the old kernel in place, will retry next boot" >&2
+    exit 0
+fi
+
+# vmlinuz-shedos-kernel was package-owned and pacman just removed it; the
+# initramfs images were mkinitcpio-built and unowned, so clear them by hand.
+rm -f /boot/initramfs-shedos-kernel.img /boot/initramfs-shedos-kernel-fallback.img
+
+# The 95-limine hook re-renders on the removal above; re-run explicitly as a
+# belt-and-suspenders so the dead shedos-kernel entry is gone for certain.
+[[ -x /usr/lib/shedos/render-limine-config.sh ]] && /usr/lib/shedos/render-limine-config.sh || true
+
+systemctl disable shedos-retire-kernel.service 2>/dev/null || true
+echo "retire-shedos-kernel: shedos-kernel retired; booting linux-zen from here on."

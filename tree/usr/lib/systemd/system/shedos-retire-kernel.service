@@ -1,0 +1,13 @@
+[Unit]
+Description=Retire the legacy shedos-kernel once linux-zen has booted
+# Self-gating one-shot: the script no-ops and disables this unit unless
+# shedos-kernel is installed AND the running kernel is linux-zen.
+ConditionPathExists=/usr/lib/shedos/retire-shedos-kernel
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/shedos/retire-shedos-kernel
+
+[Install]
+WantedBy=multi-user.target
