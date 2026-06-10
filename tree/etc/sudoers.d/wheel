@@ -1,2 +1,3 @@
-# Allow members of group wheel to execute any command without password
-%wheel ALL=(ALL:ALL) NOPASSWD: ALL
+# Members of group wheel may run any command; sudo prompts for the
+# user's password (cached briefly per sudo's timestamp_timeout).
+%wheel ALL=(ALL:ALL) ALL
