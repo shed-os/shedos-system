@@ -114,17 +114,24 @@ _bootstrap_greetd() {
     # lives under /usr/share/shedos/greetd/ and we copy it into place
     # on every install + upgrade so a stray .pacnew from an upstream
     # greetd update doesn't drift our defaults.
-    local src=/usr/share/shedos/greetd/config.toml
-    local dst=/etc/greetd/config.toml
-    if [[ -f $src ]]; then
-        install -Dm644 "$src" "$dst"
-    fi
-
-    local pam_src=/usr/share/shedos/greetd/greetd.pam
-    local pam_dst=/etc/pam.d/greetd
-    if [[ -f $pam_src ]]; then
-        install -Dm644 "$pam_src" "$pam_dst"
-    fi
+    # Seed when missing; on upgrades leave a user-edited file alone and
+    # drop our new default beside it as .shedosnew (the same contract
+    # `shedman config --sync` uses). The old unconditional copy silently
+    # clobbered /etc/greetd + PAM edits on every upgrade.
+    local src dst
+    for src in /usr/share/shedos/greetd/config.toml \
+               /usr/share/shedos/greetd/greetd.pam; do
+        [[ -f $src ]] || continue
+        case $src in
+            */config.toml) dst=/etc/greetd/config.toml ;;
+            *)             dst=/etc/pam.d/greetd ;;
+        esac
+        if [[ ! -f $dst ]]; then
+            install -Dm644 "$src" "$dst"
+        elif ! cmp -s "$src" "$dst"; then
+            install -Dm644 "$src" "$dst.shedosnew"
+        fi
+    done
 
     # The `greeter` system user (created by greetd's sysusers.d) needs:
     #   - `seat` ; talk to seatd, acquire a Wayland seat for cage

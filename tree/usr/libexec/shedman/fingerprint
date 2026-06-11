@@ -41,9 +41,10 @@ die() { printf 'shedman fingerprint: %s\n' "$*" >&2; exit 1; }
 require_fprintd() {
     command -v fprintd-list >/dev/null 2>&1 \
         || die "fprintd not installed (shedman install fprintd)"
-    systemctl is-active --quiet fprintd.service 2>/dev/null \
-        || systemctl is-enabled --quiet fprintd.service 2>/dev/null \
-        || true
+    # fprintd is D-Bus activated; neither active nor enabled is fine
+    # as long as the unit exists. Only a MISSING unit is fatal.
+    systemctl cat fprintd.service >/dev/null 2>&1 \
+        || die "fprintd.service not found (shedman install fprintd)"
 }
 
 device_path() {

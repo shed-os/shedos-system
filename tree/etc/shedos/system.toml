@@ -36,6 +36,7 @@ disable = []
 enable = [
     "shedos-update-check.timer",
     "shedos-check-health.timer",
+    "shedos-doctor.timer",
 ]
 disable = []
 

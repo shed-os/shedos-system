@@ -17,8 +17,12 @@ if [[ $hooks_line == *systemd* && $hooks_line == *sd-vconsole* ]]; then
     exit 0
 fi
 
+# Both space- and paren-delimited forms: a hook sitting at the end of
+# the list reads `keymap)` and the space-only patterns missed it.
 case " $hooks_line " in
-    *' udev '*|*'(udev '*|*' keymap '*|*' consolefont '*) ;;
+    *' udev '*|*'(udev '*|*' udev)'*|\
+    *' keymap '*|*'(keymap '*|*' keymap)'*|\
+    *' consolefont '*|*'(consolefont '*|*' consolefont)'*) ;;
     *) exit 0 ;;
 esac
 

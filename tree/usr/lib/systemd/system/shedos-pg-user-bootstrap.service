@@ -4,8 +4,9 @@ Documentation=man:psql(1)
 # Depends on the cluster actually existing. shedos-pg-initdb.service runs
 # first-boot if PG_VERSION is missing; after that postgresql.service itself
 # keeps the daemon running.
+# After only — Wants= would pull postgres up even on systems
+# where the user disabled it via [services.postgresql].
 After=postgresql.service
-Wants=postgresql.service
 ConditionPathExists=/var/lib/postgres/data/PG_VERSION
 
 [Service]
