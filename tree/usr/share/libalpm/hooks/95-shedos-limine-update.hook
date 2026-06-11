@@ -1,12 +1,23 @@
+# Mirrors 90-mkinitcpio-install.hook's triggers (which runs first by
+# number): whenever mkinitcpio rebuilds an initramfs, the rendered
+# config AND the kernel/initramfs copies on the FAT boot volume must
+# follow — Limine boots from there, not from /boot on btrfs.
 [Trigger]
 Type = Path
 Operation = Install
 Operation = Upgrade
 Operation = Remove
 Target = usr/lib/modules/*/vmlinuz
+Target = usr/lib/initcpio/*
+Target = usr/lib/firmware/*
+Target = usr/lib/modules/*/extramodules/
+Target = usr/src/*/dkms.conf
+Target = usr/lib/systemd/systemd
+Target = usr/bin/cryptsetup
+Target = usr/bin/lvm
 
 [Action]
-Description = Updating /boot/limine.conf for installed kernels...
+Description = Updating limine.conf + boot-volume kernels...
 When = PostTransaction
 NeedsTargets
 Exec = /usr/lib/shedos/render-limine-config.sh

@@ -175,3 +175,24 @@ do
             && echo "render-limine-config: mirrored to $esp"
     fi
 done
+
+# Limine boots the KERNELS from that FAT volume too (its own drivers
+# read only FAT/ISO9660 — /boot on btrfs is invisible to it), so the
+# freshly built vmlinuz/initramfs must follow the config. Without this
+# the ESP kept the install-day images forever: the first kernel
+# upgrade would boot the old kernel against the new modules tree.
+for esp_dir in /boot/efi /efi; do
+    [[ -f $esp_dir/limine.conf || -f $esp_dir/EFI/limine/limine.conf ]] \
+        || continue
+    for k in "${ordered[@]}"; do
+        for f in "vmlinuz-$k" "initramfs-$k.img" \
+                 "initramfs-$k-fallback.img"; do
+            src=$BOOT_DIR/$f
+            [[ -f $src ]] || continue
+            if ! cmp -s -- "$src" "$esp_dir/$f"; then
+                install -Dm600 "$src" "$esp_dir/$f" 2>/dev/null \
+                    && echo "render-limine-config: synced $f to $esp_dir"
+            fi
+        done
+    done
+done
