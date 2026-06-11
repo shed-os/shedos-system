@@ -1,0 +1,17 @@
+[Unit]
+Description=Boot-failure counter and auto-recovery
+# Initrd-only: counts boots before sysroot mounts; at the failure
+# threshold, redirects the root onto a clone of the newest snapshot.
+DefaultDependencies=no
+ConditionPathExists=/etc/initrd-release
+After=initrd-root-device.target cryptsetup.target
+Before=sysroot.mount
+Wants=initrd-root-device.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/shedos/initrd-recovery.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=initrd-root-fs.target

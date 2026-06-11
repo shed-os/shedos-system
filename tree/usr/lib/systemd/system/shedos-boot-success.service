@@ -1,0 +1,14 @@
+[Unit]
+Description=Mark this boot successful (reset the failure counter)
+# The greeter being up is the bar: the machine is usable. Crashes
+# before this point leave the counter growing toward auto-recovery.
+After=greetd.service graphical.target
+Requisite=greetd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/shedos/boot-success.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=graphical.target

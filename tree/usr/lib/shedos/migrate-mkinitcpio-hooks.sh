@@ -13,6 +13,14 @@ conf=/etc/mkinitcpio.conf
 hooks_line=$(grep -E '^HOOKS=' "$conf" | head -1 || true)
 [[ -n $hooks_line ]] || exit 0
 
+# Idempotent regardless of udev/systemd style: the auto-recovery hook
+# slots in before filesystems so the counter runs ahead of sysroot.
+if [[ $hooks_line != *shedos-recovery* ]]; then
+    sed -i -E '/^HOOKS=/ s/\bfilesystems\b/shedos-recovery filesystems/' "$conf"
+    echo "shedos: added shedos-recovery to mkinitcpio HOOKS" >&2
+    hooks_line=$(grep -E '^HOOKS=' "$conf" | head -1 || true)
+fi
+
 if [[ $hooks_line == *systemd* && $hooks_line == *sd-vconsole* ]]; then
     exit 0
 fi

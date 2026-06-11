@@ -261,6 +261,20 @@ package() {
         "$pkgdir/usr/lib/systemd/system/shedos-pg-initdb.service"
     install -Dm644 tree/usr/lib/systemd/system/shedos-firstboot-mirrors.service \
         "$pkgdir/usr/lib/systemd/system/shedos-firstboot-mirrors.service"
+
+    # Boot-failure auto-recovery: initrd script + unit (shipped into
+    # the initramfs by the shedos-recovery initcpio hook), the
+    # counter-reset unit for successful boots, and the hook itself.
+    install -Dm755 tree/usr/lib/shedos/initrd-recovery.sh \
+        "$pkgdir/usr/lib/shedos/initrd-recovery.sh"
+    install -Dm755 tree/usr/lib/shedos/boot-success.sh \
+        "$pkgdir/usr/lib/shedos/boot-success.sh"
+    install -Dm644 tree/usr/lib/systemd/system/shedos-initrd-recovery.service \
+        "$pkgdir/usr/lib/systemd/system/shedos-initrd-recovery.service"
+    install -Dm644 tree/usr/lib/systemd/system/shedos-boot-success.service \
+        "$pkgdir/usr/lib/systemd/system/shedos-boot-success.service"
+    install -Dm755 tree/usr/lib/initcpio/install/shedos-recovery \
+        "$pkgdir/usr/lib/initcpio/install/shedos-recovery"
     install -Dm644 tree/usr/lib/systemd/system/shedos-pg-user-bootstrap.service \
         "$pkgdir/usr/lib/systemd/system/shedos-pg-user-bootstrap.service"
     install -Dm644 tree/usr/lib/systemd/system/shedos-reflector.service \
