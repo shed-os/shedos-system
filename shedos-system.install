@@ -34,14 +34,23 @@ _add_shedos_repo() {
         !skip                                 { print }
     ' "$pacman_conf" > "$tmp"
 
-    cat >> "$tmp" <<'EOF'
+    # Channel routing: an RC ISO bakes `test` into /etc/shedos/channel
+    # (build-iso.yml) so its installs actually soak the RC packages;
+    # everything else — stable ISOs, existing systems with no marker —
+    # tracks /stable. The escaped \$arch stays literal for pacman.
+    local channel="stable"
+    if [[ "$(cat /etc/shedos/channel 2>/dev/null)" == "test" ]]; then
+        channel="test"
+    fi
+
+    cat >> "$tmp" <<EOF
 
 # >>> shedos <<<
 # Managed by shedos-system; do not edit between these markers.
-# Run `pacman -R shedos-system` to remove automatically.
+# Run \`pacman -R shedos-system\` to remove automatically.
 [shedos]
 SigLevel = Required DatabaseRequired
-Server = https://repo.shedos.org/stable/$arch
+Server = https://repo.shedos.org/$channel/\$arch
 # <<< shedos >>>
 EOF
     install -Dm644 "$tmp" "$pacman_conf"
