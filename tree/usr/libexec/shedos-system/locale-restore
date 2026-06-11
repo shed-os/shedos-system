@@ -40,14 +40,15 @@ fi
 
 log "scanning pacman db for files-in-db-missing-on-disk..."
 
-# Collect every "<pkg>: <path> (No such file or directory)" line.
-# pacman -Qkk emits these on stderr; the package name is the literal
-# field before the first colon.
-mapfile -t MISSING_LINES < <(pacman -Qkk 2>&1 1>/dev/null \
-    | grep -E ': /(usr/share/locale|usr/share/man|usr/share/doc|usr/share/info)/.* \(No such file or directory\)$' \
-    || true)
+# One full -Qkk per boot; both the gap check and the per-package
+# classification below read this capture. (A full -Qkk walks every
+# installed file — running it repeatedly is what made this unit the
+# slowest part of boot on affected machines.)
+QKK_MISSING=$(pacman -Qkk 2>&1 1>/dev/null \
+    | grep -E ': /.* \(No such file or directory\)$' || true)
 
-if (( ${#MISSING_LINES[@]} == 0 )); then
+if ! grep -qE ': /(usr/share/locale|usr/share/man|usr/share/doc|usr/share/info)/' \
+        <<<"$QKK_MISSING"; then
     log "no locale/man/doc/info gaps; nothing to repair"
     install -Dm644 /dev/null "$MARKER"
     exit 0
@@ -60,6 +61,7 @@ declare -A PKG_HAS_OTHER_MISS=()
 declare -A PKG_HAS_TARGET_MISS=()
 
 while IFS= read -r line; do
+    [[ -n $line ]] || continue
     pkg=${line%%:*}
     [[ -n $pkg ]] || continue
     if [[ $line =~ :\ /(usr/share/locale|usr/share/man|usr/share/doc|usr/share/info)/ ]]; then
@@ -67,7 +69,7 @@ while IFS= read -r line; do
     else
         PKG_HAS_OTHER_MISS[$pkg]=1
     fi
-done < <(pacman -Qkk 2>&1 1>/dev/null | grep -E ': /.* \(No such file or directory\)$' || true)
+done <<<"$QKK_MISSING"
 
 PKGS=()
 for pkg in "${!PKG_HAS_TARGET_MISS[@]}"; do
@@ -83,22 +85,24 @@ if (( ${#PKGS[@]} == 0 )); then
 fi
 
 # Stable order for log readability.
-IFS=$'\n' PKGS=($(LC_ALL=C printf '%s\n' "${PKGS[@]}" | sort -u))
-unset IFS
+mapfile -t PKGS < <(LC_ALL=C printf '%s\n' "${PKGS[@]}" | sort -u)
 
 log "repairing ${#PKGS[@]} package(s): ${PKGS[*]}"
 
 # --overwrite '*' is safe here because every file we're restoring is
 # by definition absent from disk; pacman cannot clobber user edits to
-# files that aren't there. --needed avoids redundant reinstalls if
-# the upgrade already touched a package.
-if ! pacman -S --overwrite '*' --noconfirm --needed "${PKGS[@]}"; then
+# files that aren't there. No --needed: the broken packages are
+# already at the installed version (their files are missing, not
+# outdated), so --needed skipped exactly the packages we came to
+# repair and the unit failed verification on every boot.
+if ! pacman -S --overwrite '*' --noconfirm "${PKGS[@]}"; then
     die "pacman -S failed; will retry on next boot"
 fi
 
 log "verifying no locale/man/doc/info gaps remain..."
 
-if pacman -Qkk 2>&1 1>/dev/null \
+# Scoped to the repaired packages — a full -Qkk walks the world.
+if pacman -Qkk "${PKGS[@]}" 2>&1 1>/dev/null \
     | grep -qE ': /(usr/share/locale|usr/share/man|usr/share/doc|usr/share/info)/.* \(No such file or directory\)$'; then
     die "files still missing after reinstall; retrying on next boot"
 fi
