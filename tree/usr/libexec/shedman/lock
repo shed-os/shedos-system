@@ -2,9 +2,22 @@
 # Emit logind LockSession; hypridle's lock_cmd is the listener that
 # actually starts the lock-client systemd unit.
 
-if [[ "${1:-}" == "--help-summary" ]]; then
-    echo "lock the session"
-    exit 0
-fi
+case "${1:-}" in
+    --help-summary)
+        echo "lock the session"
+        exit 0
+        ;;
+    # Without these, `shedman help lock` fell through to loginctl's
+    # help and completion ran loginctl with a bogus flag.
+    -h|--help)
+        echo "usage: shedman lock"
+        echo "Lock the session via logind; hypridle's lock_cmd starts"
+        echo "the shedos-screensaver lock client."
+        exit 0
+        ;;
+    --complete-bash|--complete-zsh|--complete-fish)
+        exit 0
+        ;;
+esac
 
 exec loginctl lock-session "$@"
