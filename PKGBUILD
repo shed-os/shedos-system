@@ -21,7 +21,7 @@ depends=(
     'systemd'
     'pacman-contrib'   # checkupdates
     'coreutils'        # sha256sum, install
-    'diffutils'        # diff for `shedman config --sync --list-diffs`
+    'diffutils'        # diff for the `list-diffs` answer at the sync prompt
     'sudo'
     'python'           # shedman config --review, shedman doctor
     'python-dbus'      # shedman fingerprint delete holds a D-Bus connection
@@ -45,8 +45,7 @@ depends=(
                        # ananicy-cpp.service. -git tracks post-1.2.0;
                        # tagged 1.1.1 fails on glibc 2.41+. See
                        # packages/aur.txt for the upstream context.
-    'yad'              # `shedman install` apps-installer GUI
-    'yay'              # shedman update + apps installer
+    'yay'              # shedman update + shedman install AUR path
     'kitty'            # shedman update runs interactively
     'libnotify'         # notify-send fallbacks
     'reflector'        # shedos-reflector.{service,timer} refresh mirrorlist
@@ -62,9 +61,7 @@ conflicts=('power-profiles-daemon')
 replaces=('power-profiles-daemon')
 optdepends=(
     'postgresql: shedos-pg-initdb.service initializes a cluster on first boot'
-    'networkmanager: connectivity check in the apps installer'
-    'nm-connection-editor: launched by the apps installer when offline'
-    'code: GUI merge backend for shedman config --review (default when a display is available; satisfied by code from extra or visual-studio-code-bin from AUR)'
+    'code: opt-in GUI merge backend for shedman config --review --gui (satisfied by code from extra or visual-studio-code-bin from AUR)'
     'bash-completion: tab-complete subcommands and flags in bash'
     'zsh: tab-complete subcommands and flags in zsh (via /usr/share/zsh/site-functions/_shedman)'
     'fish: tab-complete subcommands and flags in fish (via /usr/share/fish/vendor_completions.d/shedman.fish)'
@@ -216,9 +213,6 @@ package() {
     # don't collide with the snapper package's ownership of that directory.
     install -Dm644 tree/usr/share/shedos/snapper/root.conf \
         "$pkgdir/usr/share/shedos/snapper/root.conf"
-
-    install -Dm644 tree/usr/share/shedos/apps-catalog.tsv \
-        "$pkgdir/usr/share/shedos/apps-catalog.tsv"
 
     install -Dm644 tree/usr/share/polkit-1/rules.d/49-shedos-timedate.rules \
         "$pkgdir/usr/share/polkit-1/rules.d/49-shedos-timedate.rules"
