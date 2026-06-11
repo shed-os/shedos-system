@@ -433,13 +433,15 @@ _backfill_cmdline_ux_tokens() {
     # half-written baseline (which load_state_set would treat as
     # empty, triggering a strip on the next apply).
     #
-    # Args to the embedded Python: <baseline-path> <add-csv> <remove-csv>
-    local add_csv rem_csv
-    add_csv=$(IFS=,; echo "${add_tokens[*]}")
-    rem_csv=$(IFS=,; echo "${remove_tokens[*]}")
+    # Args to the embedded Python: <baseline-path> <add> <remove>,
+    # newline-delimited — kernel tokens may contain commas
+    # (console=ttyS0,115200), so CSV would shred them into fragments.
+    local add_nl rem_nl
+    add_nl=$(printf '%s\n' "${add_tokens[@]}")
+    rem_nl=$(printf '%s\n' "${remove_tokens[@]}")
     local baseline=/var/lib/shedos/cmdline.baseline.json
     if [[ -f $baseline && -x /usr/bin/python3 ]]; then
-        /usr/bin/python3 - "$baseline" "$add_csv" "$rem_csv" <<'PY' || true
+        /usr/bin/python3 - "$baseline" "$add_nl" "$rem_nl" <<'PY' || true
 import json
 import os
 import sys
@@ -447,19 +449,20 @@ import tempfile
 from pathlib import Path
 
 baseline_path = Path(sys.argv[1])
-add_tokens = [t for t in sys.argv[2].split(",") if t]
-remove_tokens = [t for t in sys.argv[3].split(",") if t]
+add_tokens = [t for t in sys.argv[2].split("\n") if t]
+remove_tokens = [t for t in sys.argv[3].split("\n") if t]
 
 doc = json.loads(baseline_path.read_text())
 items = {tuple(item) for item in doc.get("items", [])}
 changed = False
-for tok in add_tokens:
-    if (tok,) not in items:
-        items.add((tok,))
-        changed = True
+# Removals first: if a token appears in both lists, the add must win.
 for tok in remove_tokens:
     if (tok,) in items:
         items.discard((tok,))
+        changed = True
+for tok in add_tokens:
+    if (tok,) not in items:
+        items.add((tok,))
         changed = True
 if not changed:
     sys.exit(0)
