@@ -209,6 +209,7 @@ _bootstrap_snapper() {
 post_install() {
     systemctl daemon-reload || true
     systemctl enable shedos-pg-initdb.service || true
+    systemctl enable shedos-firstboot-mirrors.service 2>/dev/null || true
     # Defense-in-depth VT wipe before greetd takes over tty1.
     systemctl enable shedos-clear-vt.service 2>/dev/null || true
     # One-shot heal for pre-rc4 installs whose locale/man/doc/info

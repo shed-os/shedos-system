@@ -24,6 +24,7 @@ font_mono = "JetBrainsMono Nerd Font"
 
 [systemd.system]
 enable = [
+    "shedos-firstboot-mirrors.service",
     "snapper-timeline.timer",
     "snapper-cleanup.timer",
     "systemd-oomd.service",

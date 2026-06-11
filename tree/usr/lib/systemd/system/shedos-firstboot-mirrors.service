@@ -1,0 +1,20 @@
+[Unit]
+Description=Rank the pacman mirrorlist on first boot
+# Fresh installs keep the mirrorlist baked into the ISO; the daily
+# reflector timer only fires 15 minutes after boot, so the first
+# pacman runs of a new machine could crawl on a far-away mirror.
+# One-shot, stamp-gated; the daily timer owns every refresh after.
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=!/var/lib/shedos/.firstboot-mirrors-done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/shedos/refresh-mirrorlist.sh
+ExecStartPost=/usr/bin/install -Dm644 /dev/null /var/lib/shedos/.firstboot-mirrors-done
+# Best-effort: no network on first boot is fine; the stamp is still
+# written so we never block or retry forever — the daily timer covers it.
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=multi-user.target

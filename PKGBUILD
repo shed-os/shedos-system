@@ -259,6 +259,8 @@ package() {
     # Systemd (system-scope)
     install -Dm644 tree/usr/lib/systemd/system/shedos-pg-initdb.service \
         "$pkgdir/usr/lib/systemd/system/shedos-pg-initdb.service"
+    install -Dm644 tree/usr/lib/systemd/system/shedos-firstboot-mirrors.service \
+        "$pkgdir/usr/lib/systemd/system/shedos-firstboot-mirrors.service"
     install -Dm644 tree/usr/lib/systemd/system/shedos-pg-user-bootstrap.service \
         "$pkgdir/usr/lib/systemd/system/shedos-pg-user-bootstrap.service"
     install -Dm644 tree/usr/lib/systemd/system/shedos-reflector.service \
