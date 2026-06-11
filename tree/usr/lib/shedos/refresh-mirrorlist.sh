@@ -18,9 +18,15 @@
 # Tune the flags here and every caller picks them up on the next
 # run. Failure is non-fatal upstream; this script just exec's
 # reflector and inherits its exit code.
+#
+# Optional $1 overrides the output path. `shedman update` uses it to
+# rank into a user-owned temp file in the background (no root needed)
+# and atomically install the result after the user consents to the
+# upgrade — reflector's per-mirror timeout warnings are normal probing
+# chatter, but on the update screen they read like an error storm.
 
 exec /usr/bin/reflector \
-    --save /etc/pacman.d/mirrorlist \
+    --save "${1:-/etc/pacman.d/mirrorlist}" \
     --sort rate \
     --latest 20 \
     --protocol https \
