@@ -399,13 +399,13 @@ package() {
     # Man pages; rendered from man/*.scd by prepare() above; install
     # the rendered .1 files. `shedman help` is the primary discovery
     # surface; man pages are the secondary path for `man <cmd>`.
+    # Glob, not an allowlist: the old explicit name list silently
+    # dropped any page added to man/ without a matching edit here.
     install -d "$pkgdir/usr/share/man/man1"
-    for _name in shedman shedman-update shedman-apply shedman-doctor \
-                 shedman-rollback shedman-config shedman-status \
-                 shedman-fingerprint shedman-uninstall shedman-dock \
-                 shedman-datetime; do
-        install -Dm644 "man/build/${_name}.1" \
-            "$pkgdir/usr/share/man/man1/${_name}.1"
+    local _page
+    for _page in man/build/*.1; do
+        install -Dm644 "$_page" \
+            "$pkgdir/usr/share/man/man1/$(basename "$_page")"
     done
 
     install -Dm644 man/build/shedos-review-exclude.5 \
