@@ -142,6 +142,15 @@ EOF
 EOF
         fi
     done
+
+    # Verbatim extra entries (e.g. the Windows chainload the installer
+    # writes on dual-boot machines). Appended on every render so they
+    # survive the wholesale rewrite above.
+    extra=/etc/shedos/limine-extra-entries.conf
+    if [[ -f $extra ]]; then
+        echo
+        cat "$extra"
+    fi
 } > "$tmp"
 
 install -Dm644 "$tmp" "$LIMINE_CONF"
