@@ -1,0 +1,7 @@
+[Unit]
+Description=Cache SMART health verdicts for shedman health
+ConditionPathExists=/usr/bin/smartctl
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/shedos/smart-check.sh

@@ -33,6 +33,8 @@ depends=(
     'snapper'          # pre/post btrfs snapshots + shedman rollback
     'btrfs-progs'      # shedman rollback calls `btrfs subvolume`
     'lm_sensors'       # shedman health CPU-temp metric
+    'smartmontools'    # shedos-smart-check.timer caches disk verdicts
+                       # for the health SMART metric
     'python-tomlkit'   # format-preserving system.toml writes for
                        # bidirectional adoption (network.firewall, …)
     'ufw'              # `[network.firewall]` reconciler shells out to it
@@ -275,6 +277,15 @@ package() {
         "$pkgdir/usr/lib/systemd/system/shedos-boot-success.service"
     install -Dm755 tree/usr/lib/initcpio/install/shedos-recovery \
         "$pkgdir/usr/lib/initcpio/install/shedos-recovery"
+
+    # SMART verdict cache for shedman health (smartctl needs root;
+    # health runs unprivileged and reads the cache).
+    install -Dm755 tree/usr/lib/shedos/smart-check.sh \
+        "$pkgdir/usr/lib/shedos/smart-check.sh"
+    install -Dm644 tree/usr/lib/systemd/system/shedos-smart-check.service \
+        "$pkgdir/usr/lib/systemd/system/shedos-smart-check.service"
+    install -Dm644 tree/usr/lib/systemd/system/shedos-smart-check.timer \
+        "$pkgdir/usr/lib/systemd/system/shedos-smart-check.timer"
     install -Dm644 tree/usr/lib/systemd/system/shedos-pg-user-bootstrap.service \
         "$pkgdir/usr/lib/systemd/system/shedos-pg-user-bootstrap.service"
     install -Dm644 tree/usr/lib/systemd/system/shedos-reflector.service \
