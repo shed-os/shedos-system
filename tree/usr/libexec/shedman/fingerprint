@@ -314,6 +314,7 @@ case "$1" in
     --help-summary)         echo "manage your fingerprint enrollments"; exit 0 ;;
     --complete-bash)        shift; complete_bash "$@"; exit 0 ;;
     --complete-zsh)         shift; complete_zsh "$@"; exit 0 ;;
+    --complete-fish)        shift; complete_bash "$@"; exit 0 ;;
     list)                   shift; cmd_list "$@" ;;
     enroll)                 shift; cmd_enroll "$@" ;;
     delete)                 shift; cmd_delete "$@" ;;
