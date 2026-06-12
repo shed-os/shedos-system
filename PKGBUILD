@@ -282,6 +282,11 @@ package() {
     # health runs unprivileged and reads the cache).
     install -Dm755 tree/usr/lib/shedos/smart-check.sh \
         "$pkgdir/usr/lib/shedos/smart-check.sh"
+
+    # Hibernation retrofit: adds resume=UUID=<disk swap> to
+    # system.toml on machines installed before the installer baked it.
+    install -Dm755 tree/usr/lib/shedos/backfill-resume.py \
+        "$pkgdir/usr/lib/shedos/backfill-resume.py"
     install -Dm644 tree/usr/lib/systemd/system/shedos-smart-check.service \
         "$pkgdir/usr/lib/systemd/system/shedos-smart-check.service"
     install -Dm644 tree/usr/lib/systemd/system/shedos-smart-check.timer \

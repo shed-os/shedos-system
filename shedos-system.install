@@ -212,6 +212,7 @@ post_install() {
     systemctl enable shedos-firstboot-mirrors.service 2>/dev/null || true
     systemctl enable shedos-boot-success.service 2>/dev/null || true
     systemctl enable shedos-smart-check.timer 2>/dev/null || true
+    /usr/lib/shedos/backfill-resume.py 2>/dev/null || true
     systemctl enable 'btrfs-scrub@-.timer' 2>/dev/null || true
     # Defense-in-depth VT wipe before greetd takes over tty1.
     systemctl enable shedos-clear-vt.service 2>/dev/null || true
