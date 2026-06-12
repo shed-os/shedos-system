@@ -440,6 +440,10 @@ package() {
             "$pkgdir/usr/share/man/man1/$(basename "$_page")"
     done
 
-    install -Dm644 man/build/shedos-review-exclude.5 \
-        "$pkgdir/usr/share/man/man5/shedos-review-exclude.5"
+    # man5 pages, same glob-not-allowlist rule as man1.
+    install -d "$pkgdir/usr/share/man/man5"
+    for _page in man/build/*.5; do
+        install -Dm644 "$_page" \
+            "$pkgdir/usr/share/man/man5/$(basename "$_page")"
+    done
 }
