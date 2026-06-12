@@ -716,6 +716,12 @@ _retire_legacy_kernel_setup() {
 post_upgrade() {
     systemctl daemon-reload || true
     systemctl enable shedos-pg-user-bootstrap.service || true
+    systemctl enable shedos-firstboot-mirrors.service 2>/dev/null || true
+    systemctl enable shedos-boot-success.service 2>/dev/null || true
+    systemctl enable shedos-smart-check.timer 2>/dev/null || true
+    systemctl enable 'btrfs-scrub@-.timer' 2>/dev/null || true
+    # Hibernation retrofit for machines with disk swap; idempotent.
+    /usr/lib/shedos/backfill-resume.py 2>/dev/null || true
     # Defense-in-depth VT wipe before greetd takes over tty1.
     systemctl enable shedos-clear-vt.service 2>/dev/null || true
     # One-shot heal for pre-rc4 installs whose locale/man/doc/info

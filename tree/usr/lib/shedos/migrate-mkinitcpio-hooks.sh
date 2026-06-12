@@ -36,10 +36,37 @@ esac
 
 cp -a "$conf" "${conf}.shedos-pre-migration"
 
+# LUKS first: the classic `encrypt` hook is busybox-runtime and never
+# runs under the systemd initrd, and its replacement (sd-encrypt)
+# reads rd.luks.* tokens, not cryptdevice=. The cmdline translation
+# MUST land in the same transaction as the HOOKS change — a reboot
+# between the two would stop the root from unlocking. cryptdevice=
+# stays alongside (each initrd style ignores the other's token).
+if [[ $hooks_line == *encrypt* && $hooks_line != *sd-encrypt* ]]; then
+    limine_conf=/boot/limine.conf
+    cryptline=$(grep -m1 -oE 'cryptdevice=[^ ]+' "$limine_conf" 2>/dev/null || true)
+    if [[ -z $cryptline ]]; then
+        echo "shedos: LUKS hook present but no cryptdevice= found in $limine_conf;" >&2
+        echo "shedos: refusing to migrate HOOKS (manual conversion needed)" >&2
+        exit 0
+    fi
+    spec=${cryptline#cryptdevice=}            # UUID=x:name[:options]
+    uuid=${spec%%:*}; uuid=${uuid#UUID=}
+    rest=${spec#*:}; name=${rest%%:*}
+    rdluks="rd.luks.name=${uuid}=${name}"
+    [[ $spec == *:allow-discards* ]] && rdluks="$rdluks rd.luks.options=discard"
+    if ! grep -q 'rd\.luks\.name=' "$limine_conf"; then
+        cp -a "$limine_conf" "${limine_conf}.shedos-pre-migration"
+        sed -i "s|cryptdevice=|${rdluks} cryptdevice=|" "$limine_conf"
+        echo "shedos: added ${rdluks} to $limine_conf for sd-encrypt" >&2
+    fi
+fi
+
 sed -i -E '
     /^HOOKS=/ {
         s/\budev\b/systemd/
         s/\bkeymap\b/sd-vconsole/
+        s/\bencrypt\b/sd-encrypt/
         s/[[:space:]]+consolefont\b//
         s/\bconsolefont[[:space:]]+//
         s/  +/ /g

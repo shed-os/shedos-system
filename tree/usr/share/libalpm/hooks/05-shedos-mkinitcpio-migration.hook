@@ -4,6 +4,7 @@ Operation = Upgrade
 Type = Package
 Target = kbd
 Target = mkinitcpio
+Target = shedos-system
 Target = linux-zen
 Target = linux-zen-headers
 
