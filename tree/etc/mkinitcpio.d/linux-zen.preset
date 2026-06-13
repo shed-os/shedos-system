@@ -11,7 +11,17 @@
 
 ALL_kver="/boot/vmlinuz-linux-zen"
 
-PRESETS=('default' 'fallback')
+# shedos-kernel-only systems (before the migration to linux-zen) don't
+# have this kernel yet. mkinitcpio -P would then die on the missing -k
+# path during every kernel transaction — the -k value is a non-empty but
+# unreadable path, so check_path fails fatally. Define no presets until
+# the kernel is in place: mkinitcpio builds nothing for this file instead
+# of erroring, and picks the images up once linux-zen lands.
+if [[ -e $ALL_kver ]]; then
+    PRESETS=('default' 'fallback')
+else
+    PRESETS=()
+fi
 
 default_image="/boot/initramfs-linux-zen.img"
 
