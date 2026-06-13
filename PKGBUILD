@@ -228,9 +228,28 @@ package() {
     # .pkg.tar.zst as inert payload is the legal post-ISO install path
     # (vendor licenses forbid resigning them as separate shedos-repo.db
     # entries; carrying them unchanged as data is fine).
+    #
+    # A raw `makepkg` for local iteration has an empty aur-pkgs/ — the
+    # stager populates a build-root copy, not this source tree — which is
+    # fine for testing everything else here. Gate the bundle so a release
+    # build still aborts loudly when it is missing, while a local build
+    # that sets SHEDOS_DEV_BUILD=1 skips it. Both shedman update and
+    # shedman migrate already no-op on an empty aur-pkgs/, so the dev
+    # package is safe to install for testing.
     install -d "$pkgdir/usr/share/shedos/aur-pkgs"
-    install -m644 tree/usr/share/shedos/aur-pkgs/*.pkg.tar.zst \
-        "$pkgdir/usr/share/shedos/aur-pkgs/"
+    local _aur_bundle=(tree/usr/share/shedos/aur-pkgs/*.pkg.tar.zst)
+    if [[ -f ${_aur_bundle[0]} ]]; then
+        install -m644 "${_aur_bundle[@]}" "$pkgdir/usr/share/shedos/aur-pkgs/"
+    elif [[ -n ${SHEDOS_DEV_BUILD:-} ]]; then
+        echo "shedos-system: aur-pkgs/ empty and SHEDOS_DEV_BUILD set —" \
+             "skipping vendor bundle (dev build, not shippable)." >&2
+    else
+        echo "shedos-system: aur-pkgs/ is empty. Release builds stage the" \
+             "vendor bundle via scripts/build-shedos-packages.sh." >&2
+        echo "  For a local dev build that omits it, rebuild with" \
+             "SHEDOS_DEV_BUILD=1." >&2
+        return 1
+    fi
 
     # Example user exclude list for `shedman config --sync`. Users copy
     # this to ~/.config/shedos/sync-exclude to opt out of specific files.
