@@ -37,9 +37,11 @@ main() {
     mount -t btrfs -o subvolid=5,rw "$dev" "$MNT" 2>/dev/null || return 0
     # Everything past here must umount on the way out.
 
-    local count=0 counter="$MNT/.shedos-bootcount"
-    [[ -f $counter ]] && count=$(tr -dc '0-9' < "$counter" | head -c 4)
-    count=$(( ${count:-0} + 1 ))
+    local count=0 counter="$MNT/.shedos-bootcount" raw=""
+    [[ -f $counter ]] && raw=$(< "$counter")
+    raw=${raw//[!0-9]/}          # digits only — no `tr` in the initrd
+    count=${raw:0:4}             # cap the width — no `head` in the initrd
+    count=$(( 10#${count:-0} + 1 ))   # 10# so a leading zero isn't read as octal
     printf '%s\n' "$count" > "$counter" 2>/dev/null
 
     if (( count < THRESHOLD )); then
@@ -58,8 +60,10 @@ main() {
         umount "$MNT"; return 0
     fi
 
-    local clone
-    clone="@recovery-$(date +%Y%m%d-%H%M%S)"
+    # printf's strftime builtin — no `date` in the initrd.
+    local clone ts
+    printf -v ts '%(%Y%m%d-%H%M%S)T' -1
+    clone="@recovery-$ts"
     if ! btrfs subvolume snapshot "$newest" "$MNT/$clone" >/dev/null 2>&1; then
         umount "$MNT"; return 0
     fi
@@ -78,10 +82,9 @@ main() {
     # sysroot.mount from root=/rootflags=; a runtime drop-in overrides
     # just the subvolume.
     mkdir -p /run/systemd/system/sysroot.mount.d
-    cat > /run/systemd/system/sysroot.mount.d/50-shedos-recovery.conf <<DROPIN
-[Mount]
-Options=subvol=/$clone,rw
-DROPIN
+    # printf, not a `cat` heredoc — keep the initrd dep surface to bash.
+    printf '[Mount]\nOptions=subvol=/%s,rw\n' "$clone" \
+        > /run/systemd/system/sysroot.mount.d/50-shedos-recovery.conf
     systemctl daemon-reload
     echo "shedos-recovery: $count failed boots — booting snapshot #$best (as $clone)" \
         > /dev/kmsg 2>/dev/null || true

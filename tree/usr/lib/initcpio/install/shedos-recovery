@@ -5,6 +5,10 @@
 
 build() {
     add_binary /usr/bin/btrfs
+    # initrd-recovery.sh is #!/bin/bash and uses bashisms ([[, ((, =~,
+    # $(<file)); a systemd initrd carries only busybox /bin/sh, so bash
+    # has to be staged explicitly or the recovery one-shot can't exec.
+    add_binary /usr/bin/bash
     add_file /usr/lib/shedos/initrd-recovery.sh
     add_systemd_unit shedos-initrd-recovery.service
     cd "$BUILDROOT" || return 1
