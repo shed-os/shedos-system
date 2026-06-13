@@ -17,7 +17,7 @@ schema = 1
 # into hyprland, waybar, walker, GTK, and the greeter.
 # Available palettes: see /etc/shedos/themes/palettes/*.toml.
 [theme]
-wallpaper = "/usr/share/shedos/wallpapers/dusk.png"
+wallpaper = "/usr/share/shedos/wallpapers/lumen.png"
 palette   = "catppuccin-mocha-blue"
 font_ui   = "Inter 11"
 font_mono = "JetBrainsMono Nerd Font"

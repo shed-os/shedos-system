@@ -287,6 +287,8 @@ package() {
     # system.toml on machines installed before the installer baked it.
     install -Dm755 tree/usr/lib/shedos/backfill-resume.py \
         "$pkgdir/usr/lib/shedos/backfill-resume.py"
+    install -Dm755 tree/usr/lib/shedos/backfill-default-wallpaper.py \
+        "$pkgdir/usr/lib/shedos/backfill-default-wallpaper.py"
     install -Dm644 tree/usr/lib/systemd/system/shedos-smart-check.service \
         "$pkgdir/usr/lib/systemd/system/shedos-smart-check.service"
     install -Dm644 tree/usr/lib/systemd/system/shedos-smart-check.timer \
