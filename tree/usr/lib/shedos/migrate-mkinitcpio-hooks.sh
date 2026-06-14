@@ -21,6 +21,22 @@ if [[ $hooks_line != *shedos-recovery* ]]; then
     hooks_line=$(grep -E '^HOOKS=' "$conf" | head -1 || true)
 fi
 
+# linux-zen ships GPU drivers as modules; the kms hook then drags every
+# DRM driver's firmware — ~145 MiB of NVIDIA GSP and friends — into the
+# initramfs, overflowing the FAT ESP Limine boots from. Drop it: the
+# splash falls to the builtin simpledrm framebuffer and the GPU driver
+# loads from the root fs after mount. Proprietary-NVIDIA early KMS is
+# unaffected (it rides MODULES=, not this hook). Runs independently of
+# the systemd migration below, so it also fires on already-systemd boxes.
+if [[ " $hooks_line " == *' kms '* ]]; then
+    [[ -e "${conf}.shedos-pre-migration" ]] || cp -a "$conf" "${conf}.shedos-pre-migration"
+    sed -i -E '/^HOOKS=/ { s/[[:space:]]+kms\b//; s/\bkms[[:space:]]+//; s/  +/ /g }' "$conf"
+    mkdir -p /var/lib/shedos
+    : > /var/lib/shedos/.mkinitcpio-regen-needed
+    echo "shedos: removed kms from mkinitcpio HOOKS (firmware-slim initramfs)" >&2
+    hooks_line=$(grep -E '^HOOKS=' "$conf" | head -1 || true)
+fi
+
 if [[ $hooks_line == *systemd* && $hooks_line == *sd-vconsole* ]]; then
     exit 0
 fi
@@ -34,7 +50,7 @@ case " $hooks_line " in
     *) exit 0 ;;
 esac
 
-cp -a "$conf" "${conf}.shedos-pre-migration"
+[[ -e "${conf}.shedos-pre-migration" ]] || cp -a "$conf" "${conf}.shedos-pre-migration"
 
 # LUKS first: the classic `encrypt` hook is busybox-runtime and never
 # runs under the systemd initrd, and its replacement (sd-encrypt)

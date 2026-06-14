@@ -10,6 +10,14 @@
 # runtime drop-in — the machine comes up on the last-good system and
 # the desktop explains what happened (marker in /etc/shedos/).
 #
+# SCOPE: this catches boots that reach the initrd but never reach the
+# greeter — a broken userspace, a failed graphical target. It CANNOT
+# catch a panic before the counter runs: a Limine error (a missing or
+# truncated image on the ESP) or a kernel that can't mount root never
+# gets here, so those never increment and never roll back. Keeping the
+# ESP images intact (render-limine-config.sh) and the root driver in the
+# initramfs (linux-zen.preset) is what guards that earlier failure class.
+#
 # FAIL-OPEN BY DESIGN: any unexpected condition leaves the normal
 # boot untouched. Recovering wrongly is worse than not recovering.
 set -u
@@ -42,7 +50,10 @@ main() {
     raw=${raw//[!0-9]/}          # digits only — no `tr` in the initrd
     count=${raw:0:4}             # cap the width — no `head` in the initrd
     count=$(( 10#${count:-0} + 1 ))   # 10# so a leading zero isn't read as octal
-    printf '%s\n' "$count" > "$counter" 2>/dev/null
+    if ! printf '%s\n' "$count" > "$counter" 2>/dev/null; then
+        echo "shedos-recovery: WARNING: cannot write $counter — auto-rollback can't track failed boots" \
+            > /dev/kmsg 2>/dev/null || true
+    fi
 
     if (( count < THRESHOLD )); then
         umount "$MNT"; return 0

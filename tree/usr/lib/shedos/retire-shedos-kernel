@@ -48,6 +48,9 @@ rm -f /boot/initramfs-shedos-kernel.img /boot/initramfs-shedos-kernel-fallback.i
 
 # The 95-limine hook re-renders on the removal above; re-run explicitly as a
 # belt-and-suspenders so the dead shedos-kernel entry is gone for certain.
+# render-limine-config.sh also prunes shedos-kernel's now-orphaned vmlinuz/
+# initramfs copies off the FAT ESP (it keeps images only for installed
+# kernels), reclaiming the space the two-kernel migration window needed.
 [[ -x /usr/lib/shedos/render-limine-config.sh ]] && /usr/lib/shedos/render-limine-config.sh || true
 
 systemctl disable shedos-retire-kernel.service 2>/dev/null || true

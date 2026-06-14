@@ -1,0 +1,21 @@
+# Pairs with 05-shedos-mkinitcpio-migration.hook: that one (PreTransaction)
+# edits HOOKS, this one (PostTransaction) rebuilds the initramfs when the
+# migration flagged a change. Needed because the stock mkinitcpio + the
+# 95 limine hook are path-triggered on kernel/initcpio files, so a
+# shedos-system-only upgrade migrates HOOKS but never regenerates. Same
+# Target set as the migration hook. ensure-initramfs-current.sh no-ops
+# unless the sentinel is present, so this is cheap on every other upgrade.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = shedos-system
+Target = kbd
+Target = mkinitcpio
+Target = linux-zen
+Target = linux-zen-headers
+
+[Action]
+Description = Rebuilding initramfs for migrated mkinitcpio HOOKS...
+When = PostTransaction
+Exec = /usr/lib/shedos/ensure-initramfs-current.sh

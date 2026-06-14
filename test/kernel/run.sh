@@ -91,8 +91,11 @@ echo linux     > "$tmp/modules/9.9-stock/pkgbase"
 : > "$tmp/boot/initramfs-linux-zen.img"
 : > "$tmp/boot/initramfs-linux-zen-fallback.img"
 : > "$tmp/boot/initramfs-linux.img"   # default only; no -fallback
+# SHEDOS_ESP_DIRS points at an ESP-less dir so the renderer takes the
+# no-ESP path and never touches the host's real /boot/efi during the test.
 SHEDOS_LIMINE_CMDLINE="root=UUID=test rw quiet" \
 SHEDOS_BOOT_DIR="$tmp/boot" SHEDOS_MODULES_DIR="$tmp/modules" \
+SHEDOS_ESP_DIRS="$tmp/noesp" \
     bash "$renderer" >/dev/null 2>&1
 conf=$tmp/boot/limine.conf
 
@@ -117,6 +120,93 @@ else
     _fail K5_stock_fallback_omitted "stock linux entry wrong, or a dead fallback entry was emitted"
 fi
 rm -rf "$tmp"
+
+# ---------------------------------------------------------------------------
+# K6: the renderer prunes images for kernels no longer installed off the
+#     ESP (a retired shedos-kernel otherwise keeps the FAT volume full),
+#     and syncs the live kernel's images across byte-for-byte.
+# ---------------------------------------------------------------------------
+t6=$(mktemp -d)
+mkdir -p "$t6/modules/9.9-zen" "$t6/boot" "$t6/esp"
+echo linux-zen > "$t6/modules/9.9-zen/pkgbase"
+printf 'zen-vmlinuz\n'  > "$t6/boot/vmlinuz-linux-zen"
+printf 'zen-default\n'  > "$t6/boot/initramfs-linux-zen.img"
+printf 'zen-fallback\n' > "$t6/boot/initramfs-linux-zen-fallback.img"
+: > "$t6/esp/limine.conf"                          # marks $t6/esp as a live ESP
+printf 'stale\n' > "$t6/esp/vmlinuz-shedos-kernel"
+printf 'stale\n' > "$t6/esp/initramfs-shedos-kernel.img"
+printf 'stale\n' > "$t6/esp/initramfs-shedos-kernel-fallback.img"
+SHEDOS_LIMINE_CMDLINE="root=UUID=test rw quiet" \
+SHEDOS_BOOT_DIR="$t6/boot" SHEDOS_MODULES_DIR="$t6/modules" \
+SHEDOS_ESP_DIRS="$t6/esp" bash "$renderer" >/dev/null 2>&1
+if [[ ! -e "$t6/esp/vmlinuz-shedos-kernel" \
+   && ! -e "$t6/esp/initramfs-shedos-kernel.img" \
+   && ! -e "$t6/esp/initramfs-shedos-kernel-fallback.img" ]]; then
+    _ok K6_prunes_retired_kernel
+else
+    _fail K6_prunes_retired_kernel "stale shedos-kernel images left on the ESP"
+fi
+if cmp -s "$t6/boot/initramfs-linux-zen.img" "$t6/esp/initramfs-linux-zen.img"; then
+    _ok K6_syncs_live_kernel
+else
+    _fail K6_syncs_live_kernel "linux-zen image not synced intact to the ESP"
+fi
+rm -rf "$t6"
+
+# ---------------------------------------------------------------------------
+# K7: the regression that bricked the fleet — when an image won't fit, the
+#     renderer must FAIL LOUD (non-zero), never truncate the existing ESP
+#     image, and leave the last-good config untouched. SHEDOS_ESP_FAKE_AVAIL=0
+#     forces the out-of-space path deterministically.
+# ---------------------------------------------------------------------------
+t7=$(mktemp -d)
+mkdir -p "$t7/modules/9.9-zen" "$t7/boot" "$t7/esp"
+echo linux-zen > "$t7/modules/9.9-zen/pkgbase"
+printf 'NEW-bigger-content\n'         > "$t7/boot/vmlinuz-linux-zen"
+printf 'NEW-bigger-default-content\n' > "$t7/boot/initramfs-linux-zen.img"
+printf 'GOOD-config\n' > "$t7/esp/limine.conf"
+printf 'OLD\n' > "$t7/esp/vmlinuz-linux-zen"
+printf 'OLD\n' > "$t7/esp/initramfs-linux-zen.img"
+rc=0
+SHEDOS_LIMINE_CMDLINE="root=UUID=test rw quiet" \
+SHEDOS_BOOT_DIR="$t7/boot" SHEDOS_MODULES_DIR="$t7/modules" \
+SHEDOS_ESP_DIRS="$t7/esp" SHEDOS_ESP_FAKE_AVAIL=0 \
+    bash "$renderer" >/dev/null 2>&1 || rc=$?
+ok=1
+(( rc != 0 )) || ok=0
+[[ "$(cat "$t7/esp/vmlinuz-linux-zen")" == OLD ]] || ok=0
+[[ "$(cat "$t7/esp/initramfs-linux-zen.img")" == OLD ]] || ok=0
+[[ "$(cat "$t7/esp/limine.conf")" == GOOD-config ]] || ok=0
+if (( ok )); then
+    _ok K7_refuses_when_too_small
+else
+    _fail K7_refuses_when_too_small "out-of-space sync truncated the ESP or updated the config (rc=$rc)"
+fi
+rm -rf "$t7"
+
+# ---------------------------------------------------------------------------
+# K8: a second render with everything in place is a no-op that still exits
+#     0 (idempotent) and leaves the synced config byte-identical.
+# ---------------------------------------------------------------------------
+t8=$(mktemp -d)
+mkdir -p "$t8/modules/9.9-zen" "$t8/boot" "$t8/esp"
+echo linux-zen > "$t8/modules/9.9-zen/pkgbase"
+printf 'v\n' > "$t8/boot/vmlinuz-linux-zen"
+printf 'd\n' > "$t8/boot/initramfs-linux-zen.img"
+printf 'f\n' > "$t8/boot/initramfs-linux-zen-fallback.img"
+: > "$t8/esp/limine.conf"
+_run8() { SHEDOS_LIMINE_CMDLINE="root=UUID=test rw quiet" \
+    SHEDOS_BOOT_DIR="$t8/boot" SHEDOS_MODULES_DIR="$t8/modules" \
+    SHEDOS_ESP_DIRS="$t8/esp" bash "$renderer" >/dev/null 2>&1; }
+_run8; rc1=$?; sum1=$(cat "$t8/esp/limine.conf")
+_run8; rc2=$?; sum2=$(cat "$t8/esp/limine.conf")
+if (( rc1 == 0 && rc2 == 0 )) && [[ "$sum1" == "$sum2" ]] \
+   && cmp -s "$t8/boot/initramfs-linux-zen.img" "$t8/esp/initramfs-linux-zen.img"; then
+    _ok K8_idempotent_happy_path
+else
+    _fail K8_idempotent_happy_path "second render diverged or exited non-zero (rc1=$rc1 rc2=$rc2)"
+fi
+rm -rf "$t8"
 
 # ---------------------------------------------------------------------------
 # Summary

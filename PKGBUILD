@@ -166,6 +166,16 @@ package() {
     install -Dm755 tree/usr/lib/shedos/render-limine-config.sh \
         "$pkgdir/usr/lib/shedos/render-limine-config.sh"
 
+    # Live-ISO recovery for a box whose ESP overflowed and bricked the
+    # default kernel: clears the ESP, rebuilds slim, re-syncs, verifies.
+    install -Dm755 tree/usr/lib/shedos/recover-esp.sh \
+        "$pkgdir/usr/lib/shedos/recover-esp.sh"
+
+    # Rebuilds every kernel's initramfs, incl. the preset-less shedos-kernel
+    # during migration. Shared by the regen hook and recover-esp.sh.
+    install -Dm755 tree/usr/lib/shedos/rebuild-initramfs.sh \
+        "$pkgdir/usr/lib/shedos/rebuild-initramfs.sh"
+
     # First-boot one-shot that retires the legacy shedos-kernel once
     # linux-zen is confirmed booting (see shedos-retire-kernel.service).
     install -Dm755 tree/usr/lib/shedos/retire-shedos-kernel \
@@ -177,6 +187,26 @@ package() {
         "$pkgdir/usr/lib/shedos/migrate-mkinitcpio-hooks.sh"
     install -Dm644 tree/usr/share/libalpm/hooks/05-shedos-mkinitcpio-migration.hook \
         "$pkgdir/usr/share/libalpm/hooks/05-shedos-mkinitcpio-migration.hook"
+
+    # Rebuilds the initramfs when the migration above changes HOOKS in a
+    # transaction that wouldn't otherwise trigger mkinitcpio (e.g. a
+    # shedos-system-only upgrade).
+    install -Dm755 tree/usr/lib/shedos/ensure-initramfs-current.sh \
+        "$pkgdir/usr/lib/shedos/ensure-initramfs-current.sh"
+    install -Dm644 tree/usr/share/libalpm/hooks/96-shedos-mkinitcpio-regen.hook \
+        "$pkgdir/usr/share/libalpm/hooks/96-shedos-mkinitcpio-regen.hook"
+
+    # Cross-kernel hibernation guard: the check + the ExecCondition
+    # drop-ins that skip a hibernate when the running kernel isn't the
+    # default boot kernel (a resume image is read by whatever boots next).
+    install -Dm755 tree/usr/lib/shedos/hibernate-guard-check \
+        "$pkgdir/usr/lib/shedos/hibernate-guard-check"
+    install -Dm644 tree/usr/lib/systemd/system/systemd-hibernate.service.d/shedos-cross-kernel-guard.conf \
+        "$pkgdir/usr/lib/systemd/system/systemd-hibernate.service.d/shedos-cross-kernel-guard.conf"
+    install -Dm644 tree/usr/lib/systemd/system/systemd-suspend-then-hibernate.service.d/shedos-cross-kernel-guard.conf \
+        "$pkgdir/usr/lib/systemd/system/systemd-suspend-then-hibernate.service.d/shedos-cross-kernel-guard.conf"
+    install -Dm644 tree/usr/lib/systemd/system/systemd-hybrid-sleep.service.d/shedos-cross-kernel-guard.conf \
+        "$pkgdir/usr/lib/systemd/system/systemd-hybrid-sleep.service.d/shedos-cross-kernel-guard.conf"
 
     install -Dm755 tree/usr/lib/shedos/run-with-pause.sh \
         "$pkgdir/usr/lib/shedos/run-with-pause.sh"

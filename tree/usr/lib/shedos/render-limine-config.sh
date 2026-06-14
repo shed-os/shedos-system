@@ -106,9 +106,139 @@ _display_name() {
     esac
 }
 
+# ── ESP transport helpers ─────────────────────────────────────────────
+# Limine boots vmlinuz + initramfs AND reads its config from a FAT volume
+# (its drivers read only FAT/ISO9660; /boot on btrfs is invisible). We
+# copy both there. The ESP is small, so a copy that doesn't fit must fail
+# LOUD and leave the previous image intact — a silently truncated
+# initramfs is an unbootable default kernel (the bug this rewrite closes).
+
+# Free bytes on the filesystem holding $1's directory, via statfs (no df
+# parsing — df may be shell-aliased, statfs can't be). SHEDOS_ESP_FAKE_AVAIL
+# overrides it for tests that need to exercise the out-of-space refusal.
+_avail_bytes() {
+    [[ -n ${SHEDOS_ESP_FAKE_AVAIL:-} ]] && { echo "$SHEDOS_ESP_FAKE_AVAIL"; return; }
+    local d a s
+    d=$(dirname -- "$1")
+    a=$(stat -f -c %a -- "$d" 2>/dev/null) || return 1
+    s=$(stat -f -c %S -- "$d" 2>/dev/null) || return 1
+    echo $(( a * s ))
+}
+
+# Copy SRC→DST (mode $1) when they differ; refuse rather than truncate if
+# the ESP can't hold it, and verify the copy landed byte-for-byte. Never
+# leaves a partial file behind. Returns non-zero on any failure.
+_esp_put() {
+    local mode=$1 src=$2 dst=$3 need cur avail
+    cmp -s -- "$src" "$dst" 2>/dev/null && return 0
+    need=$(stat -c %s -- "$src")
+    cur=$(stat -c %s -- "$dst" 2>/dev/null || echo 0)
+    avail=$(_avail_bytes "$dst")
+    if [[ $avail =~ ^[0-9]+$ ]] && (( need - cur > avail )); then
+        printf 'render-limine-config: FATAL: %s is %s MiB short of fitting its ESP — refusing to write a truncated boot image\n' \
+            "${dst##*/}" "$(( (need - cur - avail + 1048575) / 1048576 ))" >&2
+        return 1
+    fi
+    if ! install -D -m "$mode" -- "$src" "$dst"; then
+        printf 'render-limine-config: FATAL: write of %s failed (ESP full?) — removed partial\n' "$dst" >&2
+        rm -f -- "$dst"
+        return 1
+    fi
+    if [[ "$(stat -c %s -- "$dst")" != "$need" ]] || ! cmp -s -- "$src" "$dst"; then
+        printf 'render-limine-config: FATAL: %s is truncated/corrupt after copy — removed it\n' "$dst" >&2
+        rm -f -- "$dst"
+        return 1
+    fi
+    return 0
+}
+
+_is_ordered() { local k; for k in "${ordered[@]}"; do [[ $1 == "$k" ]] && return 0; done; return 1; }
+
+# ESP image dirs (roots that already hold a limine config — we never
+# create a new ESP layout) and the config paths within them. Defaults to
+# the two real mount points, matching apply_core._ESP_LIMINE_MIRRORS;
+# SHEDOS_ESP_DIRS overrides the roots for tests.
+read -r -a _esp_candidates <<< "${SHEDOS_ESP_DIRS:-/boot/efi /efi}"
+esp_img_dirs=()
+esp_conf_paths=()
+for d in "${_esp_candidates[@]}"; do
+    if [[ -f $d/limine.conf || -f $d/EFI/limine/limine.conf ]]; then
+        esp_img_dirs+=("$d")
+    fi
+    [[ -f $d/EFI/limine/limine.conf ]] && esp_conf_paths+=("$d/EFI/limine/limine.conf")
+    [[ -f $d/limine.conf ]] && esp_conf_paths+=("$d/limine.conf")
+done
+
+failed=0
+
+# ── Reap stale images ─────────────────────────────────────────────────
+# Images for kernels no longer installed (a retired shedos-kernel) keep
+# the FAT volume full forever. Drop anything whose pkgbase isn't in the
+# live boot order, freeing space before the current set is copied in.
+for d in "${esp_img_dirs[@]}"; do
+    for img in "$d"/vmlinuz-* "$d"/initramfs-*.img; do
+        [[ -e $img ]] || continue
+        base=${img##*/}
+        case $base in
+            vmlinuz-*)                k=${base#vmlinuz-} ;;
+            initramfs-*-fallback.img) k=${base#initramfs-}; k=${k%-fallback.img} ;;
+            initramfs-*.img)          k=${base#initramfs-}; k=${k%.img} ;;
+            *) continue ;;
+        esac
+        if ! _is_ordered "$k"; then
+            rm -f -- "$img" && echo "render-limine-config: pruned stale $base from $d"
+        fi
+    done
+done
+
+# ── Sync the live kernels' images, shrink-first, fail loud ────────────
+# Bucket every needed copy by whether it grows or shrinks the ESP, then
+# do the shrinking/equal ones first. On a full ESP an in-place replace
+# only fits once the images it's replacing have freed their space, so a
+# growing default (truncated → full) must wait for a shrinking sibling.
+declare -a _shrink=() _grow=()
+for k in "${ordered[@]}"; do
+    for f in "vmlinuz-$k" "initramfs-$k.img" "initramfs-$k-fallback.img"; do
+        src=$BOOT_DIR/$f
+        [[ -f $src ]] || continue
+        for d in "${esp_img_dirs[@]}"; do
+            dst=$d/$f
+            cmp -s -- "$src" "$dst" 2>/dev/null && continue
+            need=$(stat -c %s -- "$src")
+            cur=$(stat -c %s -- "$dst" 2>/dev/null || echo 0)
+            if (( need <= cur )); then _shrink+=("$src|$dst"); else _grow+=("$src|$dst"); fi
+        done
+    done
+done
+for item in "${_shrink[@]}" "${_grow[@]}"; do
+    _esp_put 600 "${item%|*}" "${item#*|}" || failed=1
+done
+
+# A kernel variant is bootable only when vmlinuz AND its initramfs are
+# byte-identical to /boot on EVERY ESP. (With no ESP — fresh install
+# before the layout exists — the loop is empty and everything counts as
+# present, preserving the old "emit all entries" behaviour.)
+_on_all_esps() {
+    local f=$1 d
+    for d in "${esp_img_dirs[@]}"; do
+        cmp -s -- "$BOOT_DIR/$f" "$d/$f" 2>/dev/null || return 1
+    done
+    return 0
+}
+declare -A img_ok=()
+for k in "${ordered[@]}"; do
+    _on_all_esps "vmlinuz-$k" || continue
+    [[ -f $BOOT_DIR/initramfs-$k.img ]] && _on_all_esps "initramfs-$k.img" \
+        && img_ok[$k:default]=1
+    [[ -f $BOOT_DIR/initramfs-$k-fallback.img ]] && _on_all_esps "initramfs-$k-fallback.img" \
+        && img_ok[$k:fallback]=1
+done
+
+# ── Render the config, gating each entry on its image being present ───
 tmp=$(mktemp)
 trap 'rm -f -- "$tmp"' EXIT
 
+entries=0
 {
     echo "# Generated by /usr/lib/shedos/render-limine-config.sh."
     echo "# Edits to kernel_cmdline survive regeneration; entries are"
@@ -118,7 +248,8 @@ trap 'rm -f -- "$tmp"' EXIT
     echo
     for k in "${ordered[@]}"; do
         name=$(_display_name "$k")
-        cat <<EOF
+        if [[ -n ${img_ok[$k:default]:-} ]]; then
+            cat <<EOF
 /$name
     protocol: linux
     kernel_path: boot():/vmlinuz-$k
@@ -126,12 +257,12 @@ trap 'rm -f -- "$tmp"' EXIT
     module_path: boot():/initramfs-$k.img
 
 EOF
-        # Only emit the recovery entry when the fallback initramfs exists.
-        # mkinitcpio's stock preset template is default-only, so a kernel
-        # without a shipped both-presets file (e.g. the stock linux
-        # fallback) has no initramfs-$k-fallback.img — emitting the entry
-        # anyway would dead-end the boot.
-        if [[ -f $BOOT_DIR/initramfs-$k-fallback.img ]]; then
+            entries=$((entries + 1))
+        fi
+        # Recovery entry only when its fallback image is actually present
+        # on the ESP: a stock-linux kernel ships none, and a failed or
+        # oversized copy must never dead-end the boot.
+        if [[ -n ${img_ok[$k:fallback]:-} ]]; then
             cat <<EOF
 /$name (Fallback)
     protocol: linux
@@ -140,6 +271,7 @@ EOF
     module_path: boot():/initramfs-$k-fallback.img
 
 EOF
+            entries=$((entries + 1))
         fi
     done
 
@@ -153,46 +285,32 @@ EOF
     fi
 } > "$tmp"
 
-install -Dm644 "$tmp" "$LIMINE_CONF"
-echo "render-limine-config: wrote $LIMINE_CONF (${#ordered[@]} kernel(s), timeout=$TIMEOUT, default=${ordered[0]})"
+# Never overwrite a working menu with a dead one: if not a single kernel
+# image could be placed on a real ESP, keep the last-known-good config.
+if (( entries == 0 && ${#esp_img_dirs[@]} > 0 )); then
+    echo "render-limine-config: FATAL: no kernel image could be placed on the ESP — keeping the existing boot menu" >&2
+    exit 1
+fi
 
-# Mirror the freshly-rendered config into every existing ESP path.
-# Limine boots from the ESP, not from /boot/limine.conf, so any change
-# to the seed file must propagate or the firmware will load stale
-# entries (kernel cmdline drift, missing/extra kernel entries, etc.).
-# Mirror set matches apply_core._ESP_LIMINE_MIRRORS so the two writers
-# of /boot/limine.conf (apply_core's cmdline reconciler + this script)
-# stay in lockstep. install -Dm644 is idempotent; only existing ESP
-# files are touched (we don't create a new ESP layout).
-for esp in \
-    /boot/efi/EFI/limine/limine.conf \
-    /boot/efi/limine.conf \
-    /efi/EFI/limine/limine.conf \
-    /efi/limine.conf
-do
-    if [[ -f $esp ]]; then
-        install -Dm644 "$tmp" "$esp" 2>/dev/null \
-            && echo "render-limine-config: mirrored to $esp"
+if ! install -Dm644 "$tmp" "$LIMINE_CONF"; then
+    echo "render-limine-config: FATAL: failed to write $LIMINE_CONF" >&2
+    exit 1
+fi
+echo "render-limine-config: wrote $LIMINE_CONF ($entries entries, timeout=$TIMEOUT, default=${ordered[0]})"
+
+# Mirror the config to each ESP config path LAST — only after every image
+# it names is confirmed in place, so the firmware never reads a menu
+# pointing at a missing kernel.
+for esp in "${esp_conf_paths[@]}"; do
+    if _esp_put 644 "$tmp" "$esp"; then
+        echo "render-limine-config: mirrored config to $esp"
+    else
+        failed=1
     fi
 done
 
-# Limine boots the KERNELS from that FAT volume too (its own drivers
-# read only FAT/ISO9660 — /boot on btrfs is invisible to it), so the
-# freshly built vmlinuz/initramfs must follow the config. Without this
-# the ESP kept the install-day images forever: the first kernel
-# upgrade would boot the old kernel against the new modules tree.
-for esp_dir in /boot/efi /efi; do
-    [[ -f $esp_dir/limine.conf || -f $esp_dir/EFI/limine/limine.conf ]] \
-        || continue
-    for k in "${ordered[@]}"; do
-        for f in "vmlinuz-$k" "initramfs-$k.img" \
-                 "initramfs-$k-fallback.img"; do
-            src=$BOOT_DIR/$f
-            [[ -f $src ]] || continue
-            if ! cmp -s -- "$src" "$esp_dir/$f"; then
-                install -Dm600 "$src" "$esp_dir/$f" 2>/dev/null \
-                    && echo "render-limine-config: synced $f to $esp_dir"
-            fi
-        done
-    done
-done
+if (( failed )); then
+    echo "render-limine-config: ERROR: one or more ESP writes failed (see FATAL lines above)." >&2
+    echo "render-limine-config: the system still boots the entries that ARE present. Free ESP space (e.g. retire an old kernel) and re-run: sudo /usr/lib/shedos/render-limine-config.sh" >&2
+    exit 1
+fi

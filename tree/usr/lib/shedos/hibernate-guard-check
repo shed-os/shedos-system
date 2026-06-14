@@ -1,0 +1,50 @@
+#!/bin/bash
+# Block hibernation when the running kernel isn't the one the machine
+# boots by default. During the shedos-kernel→linux-zen migration every
+# Limine entry shares a single resume=UUID=, so a hibernation image
+# written under the running kernel would be read back by the DEFAULT
+# kernel on the next boot — a cross-kernel resume that corrupts memory or
+# panics. Blocking the hibernate is strictly safer than detecting a bad
+# image at resume time.
+#
+# Used as an ExecCondition= on systemd-hibernate / -suspend-then-hibernate
+# / -hybrid-sleep (exit 1 there cleanly SKIPS the sleep without marking
+# the unit failed) and by the power UIs to hide the Hibernate button.
+#
+# Exit 1 (block) only when the two are known to differ; exit 0 (allow)
+# otherwise, so a normal single-kernel box is never falsely blocked.
+#
+# The default-resolution priority MUST match render-limine-config.sh:
+# /var/lib/shedos/kernel-default (if it names an installed kernel), then
+# linux-zen, then linux, then the first pkgbase alphabetically.
+set -uo pipefail
+
+modules_dir=${SHEDOS_MODULES_DIR:-/usr/lib/modules}
+default_file=${SHEDOS_KERNEL_DEFAULT_FILE:-/var/lib/shedos/kernel-default}
+
+running=$(cat "$modules_dir/$(uname -r)/pkgbase" 2>/dev/null || true)
+[[ -n $running ]] || exit 0          # can't tell what's running → don't block
+
+mapfile -t pkgbases < <(
+    for f in "$modules_dir"/*/pkgbase; do
+        [[ -r $f ]] && cat "$f"
+    done | sort -u
+)
+(( ${#pkgbases[@]} )) || exit 0
+
+_have() { local n=$1 k; for k in "${pkgbases[@]}"; do [[ $k == "$n" ]] && return 0; done; return 1; }
+
+default=""
+if [[ -r $default_file ]]; then
+    d=$(<"$default_file")
+    _have "$d" && default=$d
+fi
+[[ -z $default ]] && _have linux-zen && default=linux-zen
+[[ -z $default ]] && _have linux && default=linux
+[[ -z $default ]] && default=${pkgbases[0]}
+
+if [[ $running != "$default" ]]; then
+    echo "shedos-hibernate-guard: blocking hibernation — running '$running' but the system boots '$default' by default; a resume image would be read by the wrong kernel. Reboot into '$default', or finish retiring the old kernel, before hibernating." >&2
+    exit 1
+fi
+exit 0

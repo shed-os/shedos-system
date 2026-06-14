@@ -25,5 +25,16 @@ fi
 
 default_image="/boot/initramfs-linux-zen.img"
 
+# Build the default image with every module (skip autodetect), like the
+# fallback. autodetect only bundles modules loaded at build time, which is
+# accurate solely when the building kernel is the booting kernel — false
+# during the shedos-kernel→linux-zen migration and on any cross-kernel
+# rebuild (a recovery chroot, an offline regen). A wrong guess drops the
+# SATA/AHCI root controller and the first boot panics with "Unable to
+# mount root". Every module costs ~40 MiB either way; the GPU firmware
+# that used to bloat this image is gone with the kms hook, not autodetect,
+# so there is no size win worth risking a missing root driver.
+default_options="-S autodetect"
+
 fallback_image="/boot/initramfs-linux-zen-fallback.img"
 fallback_options="-S autodetect"
