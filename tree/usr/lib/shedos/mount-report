@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+# Records auto fstab mounts that didn't mount this boot (a nofail disk that
+# was absent), so `shedman doctor` can surface them. Read-only, runs
+# After=local-fs.target. Fail-open: on error, leave no breadcrumb.
+import json
+import os
+import re
+import sys
+
+sys.path.insert(0, os.environ.get("SHEDOS_LIB_ROOT", "/usr/lib/shedos"))
+try:
+    import apply_core as ac
+except Exception:
+    sys.exit(0)
+
+STATE = os.environ.get("SHEDOS_MOUNT_REPORT_STATE",
+                       "/var/lib/shedos/mount-missed.json")
+PROC_MOUNTS = os.environ.get("SHEDOS_PROC_MOUNTS", "/proc/mounts")
+
+
+def _unescape(path):
+    # /proc/mounts octal-escapes space/tab/newline/backslash as \040 etc.
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), path)
+
+
+def _mounted_targets():
+    targets = set()
+    try:
+        with open(PROC_MOUNTS) as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) >= 2:
+                    targets.add(_unescape(parts[1]))
+    except OSError:
+        pass
+    return targets
+
+
+# Network mounts come up after network-online.target, after this runs, so a
+# healthy-but-slow share would look missed. Never a local-disk signal.
+_NETWORK_FSTYPES = {
+    "nfs", "nfs4", "cifs", "smbfs", "smb3", "sshfs", "fuse.sshfs", "ceph",
+    "glusterfs", "9p", "afs", "ncpfs", "davfs", "fuse.davfs2",
+}
+
+
+def missed_mounts():
+    try:
+        text = open(str(ac.fstab_path())).read()
+    except OSError:
+        return []
+    mounted = _mounted_targets()
+    missed = []
+    for e in ac._parse_fstab(text)[0]:
+        if e.target == "/" or e.fstype in ac._FSTAB_PSEUDO_FSTYPES:
+            continue
+        if e.fstype in _NETWORK_FSTYPES:
+            continue
+        opts = {t.split("=", 1)[0] for t in e.options.split(",") if t}
+        # noauto/automount/network/bind aren't missing-disk signals.
+        if opts & {"noauto", "x-systemd.automount", "_netdev", "bind", "rbind"}:
+            continue
+        # /proc/mounts is octal-escaped; unescape the fstab side to compare.
+        if _unescape(e.target) in mounted:
+            continue
+        missed.append({"target": e.target, "device": e.device,
+                       "fstype": e.fstype})
+    return missed
+
+
+def main():
+    missed = missed_mounts()
+    try:
+        os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    except OSError:
+        return 0
+    if missed:
+        try:
+            with open(STATE, "w") as fh:
+                json.dump({"missed": missed}, fh)
+        except OSError:
+            pass
+    else:
+        # All back -- clear a stale breadcrumb.
+        try:
+            os.unlink(STATE)
+        except OSError:
+            pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

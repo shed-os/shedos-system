@@ -18,6 +18,12 @@
 # ESP images intact (render-limine-config.sh) and the root driver in the
 # initramfs (linux-zen.preset) is what guards that earlier failure class.
 #
+# It also can't help an fstab emergency: every snapshot carries the same
+# /etc/fstab, so a missing-disk mount lands the rollback in the same
+# emergency. That class is handled instead by nofail-by-default (apply +
+# installer), the `shedman doctor` audit, and the guided emergency screen
+# (emergency-recovery). See docs/boot-safety.md.
+#
 # FAIL-OPEN BY DESIGN: any unexpected condition leaves the normal
 # boot untouched. Recovering wrongly is worse than not recovering.
 set -u

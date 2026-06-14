@@ -1,0 +1,11 @@
+[Unit]
+Description=Report fstab mounts that did not mount this boot
+After=local-fs.target
+# No Requires/Wants/Before on the boot path — a leaf reporter, never gates boot.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/shedos/mount-report
+
+[Install]
+WantedBy=multi-user.target

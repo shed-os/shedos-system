@@ -1,0 +1,32 @@
+#!/bin/bash
+# ExecStart for emergency.service/rescue.service (via a drop-in), in place of
+# the sulogin shell that dead-ends on a locked root. Runs the guided fstab
+# tool when a mount failed, otherwise opens a root shell. $1 = mode.
+set +e
+mode=${1:-emergency}
+
+# emergency inherits a minimal PATH; restore the full one so installed tools
+# resolve.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# A root shell (the service runs as root). Not sulogin first: its password
+# prompt is unusable on a locked root. execfail falls through a missing shell.
+_fallback() {
+    printf '\n  ShedOS recovery shell -- you are root.\n'
+    printf '  Fix the problem, then:  systemctl default   (continue booting)\n'
+    printf '                          reboot              (restart now)\n\n'
+    shopt -s execfail
+    exec /bin/bash -i
+    exec /bin/sh -i
+    exec /usr/lib/systemd/systemd-sulogin-shell "$mode"
+}
+
+# Run the guided tool; it renders only when fstab has a fixable mount and
+# exits 0 once it has handed off, else fall through to the shell. Gate on the
+# fstab audit (the tool), not the runtime failed-unit list — a device-timeout
+# mount doesn't reliably appear there.
+if command -v python3 >/dev/null 2>&1; then
+    python3 /usr/lib/shedos/emergency-recovery-ui.py
+    [[ $? -eq 0 ]] && exit 0
+fi
+_fallback

@@ -208,6 +208,23 @@ package() {
     install -Dm644 tree/usr/lib/systemd/system/systemd-hybrid-sleep.service.d/shedos-cross-kernel-guard.conf \
         "$pkgdir/usr/lib/systemd/system/systemd-hybrid-sleep.service.d/shedos-cross-kernel-guard.conf"
 
+    # Guided emergency recovery: drop-ins make the emergency/rescue shell
+    # reachable and hand it to the guided tool; the tool + its fail-open
+    # entrypoint; and the post-boot reporter that names a disk which
+    # silently didn't mount this boot.
+    install -Dm755 tree/usr/lib/shedos/emergency-recovery \
+        "$pkgdir/usr/lib/shedos/emergency-recovery"
+    install -Dm644 tree/usr/lib/shedos/emergency-recovery-ui.py \
+        "$pkgdir/usr/lib/shedos/emergency-recovery-ui.py"
+    install -Dm644 tree/usr/lib/systemd/system/emergency.service.d/50-shedos-guided.conf \
+        "$pkgdir/usr/lib/systemd/system/emergency.service.d/50-shedos-guided.conf"
+    install -Dm644 tree/usr/lib/systemd/system/rescue.service.d/50-shedos-guided.conf \
+        "$pkgdir/usr/lib/systemd/system/rescue.service.d/50-shedos-guided.conf"
+    install -Dm755 tree/usr/lib/shedos/mount-report \
+        "$pkgdir/usr/lib/shedos/mount-report"
+    install -Dm644 tree/usr/lib/systemd/system/shedos-mount-report.service \
+        "$pkgdir/usr/lib/systemd/system/shedos-mount-report.service"
+
     install -Dm755 tree/usr/lib/shedos/run-with-pause.sh \
         "$pkgdir/usr/lib/shedos/run-with-pause.sh"
 
