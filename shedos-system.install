@@ -56,21 +56,22 @@ EOF
     install -Dm644 "$tmp" "$pacman_conf"
     rm -f "$tmp"
 
-    # Also append a *commented-out* [shedos-testing] block so users who
+    # Also append a *commented-out* [shedostest] block so users who
     # want to opt into the canary channel can do so by uncommenting,
-    # without having to remember the URL or SigLevel.
-    if ! grep -q '^# >>> shedos-testing <<<' "$pacman_conf"; then
+    # without having to remember the URL or SigLevel. Match either the
+    # old or new marker so a migrated box never gets a duplicate.
+    if ! grep -qE '^# >>> (shedos-testing|shedostest) <<<' "$pacman_conf"; then
         cat >>"$pacman_conf" <<'EOF'
 
-# >>> shedos-testing <<<
+# >>> shedostest <<<
 # ShedOS canary channel; RC packages land here before reaching
 # [shedos]. Uncomment the four lines below to opt in. Stable cuts
 # also publish to /test/x86_64/, so opting in only changes
 # behavior during RC windows.
-#[shedos-testing]
+#[shedostest]
 #SigLevel = Required DatabaseRequired
 #Server = https://repo.shedos.org/test/$arch
-# <<< shedos-testing >>>
+# <<< shedostest >>>
 EOF
     fi
 }
@@ -78,12 +79,16 @@ EOF
 _migrate_repo_url() {
     # The literal `$arch` below is intentional: it's written into
     # /etc/pacman.conf, where pacman (not bash) expands it. Single quotes
-    # keep it literal.
+    # keep it literal. The shedos-testing → shedostest renames run before
+    # the URL fixups so the latter match the new markers; all idempotent.
     # shellcheck disable=SC2016
     sed -i \
         -e '/^# >>> shedos <<<$/,/^# <<< shedos >>>$/ s|^Server = https://repo\.shedos\.org/\$arch$|Server = https://repo.shedos.org/stable/$arch|' \
-        -e '/^# >>> shedos-testing <<<$/,/^# <<< shedos-testing >>>$/ s|^#Server = https://repo\.shedos\.org/\$arch-testing$|#Server = https://repo.shedos.org/test/$arch|' \
-        -e '/^# >>> shedos-testing <<<$/,/^# <<< shedos-testing >>>$/ s|/x86_64-testing/|/test/x86_64/|' \
+        -e 's|^# >>> shedos-testing <<<$|# >>> shedostest <<<|' \
+        -e 's|^# <<< shedos-testing >>>$|# <<< shedostest >>>|' \
+        -e 's|^\(#\?\)\[shedos-testing\]$|\1[shedostest]|' \
+        -e '/^# >>> shedostest <<<$/,/^# <<< shedostest >>>$/ s|^#Server = https://repo\.shedos\.org/\$arch-testing$|#Server = https://repo.shedos.org/test/$arch|' \
+        -e '/^# >>> shedostest <<<$/,/^# <<< shedostest >>>$/ s|/x86_64-testing/|/test/x86_64/|' \
         /etc/pacman.conf
 }
 
@@ -94,6 +99,10 @@ _remove_shedos_repo() {
     if grep -q '^# >>> shedos <<<' /etc/pacman.conf; then
         sed -i '/^# >>> shedos <<<$/,/^# <<< shedos >>>$/d' /etc/pacman.conf
     fi
+    if grep -q '^# >>> shedostest <<<' /etc/pacman.conf; then
+        sed -i '/^# >>> shedostest <<<$/,/^# <<< shedostest >>>$/d' /etc/pacman.conf
+    fi
+    # Older boxes removed before they ever upgraded carry the old marker.
     if grep -q '^# >>> shedos-testing <<<' /etc/pacman.conf; then
         sed -i '/^# >>> shedos-testing <<<$/,/^# <<< shedos-testing >>>$/d' /etc/pacman.conf
     fi

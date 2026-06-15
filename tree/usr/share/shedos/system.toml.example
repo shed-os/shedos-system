@@ -124,7 +124,7 @@ siglevel = "Required DatabaseRequired"
 # also publish to /test/x86_64/, so opting in only changes behavior
 # during RC windows.
 #
-# [pacman.repos.shedos-testing]
+# [pacman.repos.shedostest]
 # server   = "https://repo.shedos.org/test/$arch"
 # siglevel = "Required DatabaseRequired"
 
