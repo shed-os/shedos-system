@@ -18,8 +18,8 @@
 # leaves tty1 to agetty. agetty's banner + bash setlocale messages
 # on tty1 then leak into vcs1 and get painted by fbcon during
 # DRM-master gaps. Pinning vt = 1; paired with masking
-# getty@tty1 / autovt@tty1 in shedos-system.install; gives greetd
-# exclusive ownership of tty1 with no agetty contention.
+# getty@tty1 / autovt@tty1 in shedos_finalize (installed systems);
+# gives greetd exclusive ownership of tty1 with no agetty contention.
 vt = 1
 
 [default_session]
