@@ -1,4 +1,5 @@
 #%PAM-1.0
+# shedos-managed: greetd PAM; local edits land beside this as .shedosnew
 
 # pam_gnome_keyring.so must follow the password-asking include in
 # both auth and session phases; only after system-local-login has

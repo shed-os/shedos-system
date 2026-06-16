@@ -118,29 +118,17 @@ _render_theme() {
 }
 
 _bootstrap_greetd() {
-    # /etc/greetd/config.toml is shipped by the greetd package, so we
-    # can't ship our own at that path (pacman file conflict). Template
-    # lives under /usr/share/shedos/greetd/ and we copy it into place
-    # on every install + upgrade so a stray .pacnew from an upstream
-    # greetd update doesn't drift our defaults.
-    # Seed when missing; on upgrades leave a user-edited file alone and
-    # drop our new default beside it as .shedosnew (the same contract
-    # `shedman config --sync` uses). The old unconditional copy silently
-    # clobbered /etc/greetd + PAM edits on every upgrade.
-    local src dst
-    for src in /usr/share/shedos/greetd/config.toml \
-               /usr/share/shedos/greetd/greetd.pam; do
-        [[ -f $src ]] || continue
-        case $src in
-            */config.toml) dst=/etc/greetd/config.toml ;;
-            *)             dst=/etc/pam.d/greetd ;;
-        esac
-        if [[ ! -f $dst ]]; then
-            install -Dm644 "$src" "$dst"
-        elif ! cmp -s "$src" "$dst"; then
-            install -Dm644 "$src" "$dst.shedosnew"
+    # greetd reads our config via the drop-in; only PAM needs placing (its
+    # service name is hardcoded). The marker seeds onto stock + self-heals.
+    local pam_src=/usr/share/shedos/greetd/greetd.pam
+    local pam_dst=/etc/pam.d/greetd
+    if [[ -f $pam_src ]]; then
+        if [[ ! -f $pam_dst ]] || ! grep -q 'shedos-managed' "$pam_dst"; then
+            install -Dm644 "$pam_src" "$pam_dst"
+        elif ! cmp -s "$pam_src" "$pam_dst"; then
+            install -Dm644 "$pam_src" "$pam_dst.shedosnew"
         fi
-    done
+    fi
 
     # The `greeter` system user (created by greetd's sysusers.d) needs:
     #   - `seat` ; talk to seatd, acquire a Wayland seat for cage
@@ -157,18 +145,6 @@ _bootstrap_greetd() {
     groupadd -r -f video
     if id greeter &>/dev/null; then
         usermod -aG seat,video,input greeter 2>/dev/null || true
-    fi
-
-    # Mask getty@tty1.service and its autovt@tty1 alias so no agetty
-    # ever spawns on tty1. greetd's [terminal] vt = 1 pins greetd
-    # there exclusively; without the mask, getty@tty1 still runs
-    # briefly at boot (despite Conflicts=greetd), prints its banner
-    # + bash setlocale warnings to /dev/tty1 → vcs1, and that text
-    # is painted by fbcon during DRM-master gaps at compositor
-    # handoffs. Skip during pacstrap (no running systemd).
-    if [[ -d /run/systemd/system ]]; then
-        systemctl mask getty@tty1.service 2>/dev/null || true
-        systemctl mask autovt@tty1.service 2>/dev/null || true
     fi
 }
 
