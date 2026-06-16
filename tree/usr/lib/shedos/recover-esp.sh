@@ -45,16 +45,20 @@ for d in "${esp_dirs[@]}"; do
 done
 
 echo "recover-esp: rebuilding every kernel's initramfs (slim)..."
-/usr/lib/shedos/rebuild-initramfs.sh
+/usr/lib/shedos/rebuild-initramfs.sh \
+    || { echo "recover-esp: initramfs rebuild failed — aborting before reboot" >&2; exit 1; }
 
 echo "recover-esp: re-rendering Limine config and re-syncing the ESP..."
-/usr/lib/shedos/render-limine-config.sh
+/usr/lib/shedos/render-limine-config.sh \
+    || { echo "recover-esp: Limine re-render / ESP sync failed (ESP still too small?) — aborting before reboot" >&2; exit 1; }
 
 echo "recover-esp: verifying every ESP image matches /boot..."
 fail=0
+checked=0
 for d in "${esp_dirs[@]}"; do
     for img in "$d"/vmlinuz-* "$d"/initramfs-*.img; do
         [[ -e $img ]] || continue
+        checked=$((checked + 1))
         base=${img##*/}
         if cmp -s -- "/boot/$base" "$img"; then
             echo "  OK   $base"
@@ -65,6 +69,12 @@ for d in "${esp_dirs[@]}"; do
     done
 done
 
+# A forced wipe that left nothing to verify is failure, not success — the
+# re-sync placed no images and the box would reboot into the same brick.
+if (( checked == 0 )); then
+    echo "recover-esp: no images landed on the ESP after the wipe — it is still too small. Retire an old kernel to free space and re-run." >&2
+    exit 1
+fi
 if (( fail )); then
     echo "recover-esp: some images failed verification — the ESP may still be too small. Retire an old kernel to free space and re-run." >&2
     exit 1
