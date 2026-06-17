@@ -136,6 +136,11 @@ package() {
     install -Dm644 tree/usr/lib/shedos/apply_core.py \
         "$pkgdir/usr/lib/shedos/apply_core.py"
 
+    # Shared palette loader; the Textual TUIs add /usr/lib/shedos to
+    # sys.path and `import shedos_palette` to colour themselves live.
+    install -Dm644 tree/usr/lib/shedos/shedos_palette.py \
+        "$pkgdir/usr/lib/shedos/shedos_palette.py"
+
     # Theme reconciler: reads /etc/shedos/system.toml [theme] + the
     # named palette under /etc/shedos/themes/palettes/, renders into
     # /etc/shedos/themes/current/ (palette.conf, palette.css,
