@@ -271,6 +271,17 @@ package() {
     install -Dm644 tree/usr/share/polkit-1/rules.d/49-shedos-timedate.rules \
         "$pkgdir/usr/share/polkit-1/rules.d/49-shedos-timedate.rules"
 
+    # Lock-screen fast user switching: the root helper, its polkit action
+    # + grant, and the tmpfiles dir for the preselect handoff.
+    install -Dm755 tree/usr/lib/shedos/switch-user \
+        "$pkgdir/usr/lib/shedos/switch-user"
+    install -Dm644 tree/usr/share/polkit-1/actions/org.shedos.switch-user.policy \
+        "$pkgdir/usr/share/polkit-1/actions/org.shedos.switch-user.policy"
+    install -Dm644 tree/usr/share/polkit-1/rules.d/49-shedos-switch-user.rules \
+        "$pkgdir/usr/share/polkit-1/rules.d/49-shedos-switch-user.rules"
+    install -Dm644 tree/usr/lib/tmpfiles.d/shedos-switch-user.conf \
+        "$pkgdir/usr/lib/tmpfiles.d/shedos-switch-user.conf"
+
     # Bundled vendor-licensed AUR builds (fingerprint TOD stack; see
     # packages/aur-bundled.txt). scripts/build-shedos-packages.sh stages
     # them into tree/usr/share/shedos/aur-pkgs/ from archiso/shedos-repo/

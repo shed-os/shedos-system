@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Binds `pkexec /usr/lib/shedos/switch-user` to its own action so
+  49-shedos-switch-user.rules can grant it. Without this file pkexec
+  would fall back to org.freedesktop.policykit.exec.exec (admin auth).
+  The active-local-seat grant lives in the rule; auth_self here is the
+  safe fallback if the rule ever fails to load.
+-->
+<policyconfig>
+  <vendor>ShedOS</vendor>
+  <action id="org.shedos.switch-user">
+    <description>Start a parallel login for fast user switching</description>
+    <message>Authentication is required to switch users</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_self</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/shedos/switch-user</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">false</annotate>
+  </action>
+</policyconfig>

@@ -1,0 +1,10 @@
+// Fast user switching: let the active local-seat user start a parallel
+// login on a free VT. The action only spawns a greetd prompt — it grants
+// nothing without the target user's own password. A locked session is
+// still the active local seat, so this is reachable from the lock screen.
+polkit.addRule(function(action, subject) {
+    if (action.id === "org.shedos.switch-user" &&
+        subject.local && subject.active) {
+        return polkit.Result.YES;
+    }
+});

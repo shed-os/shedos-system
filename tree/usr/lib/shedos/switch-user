@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# /usr/lib/shedos/switch-user <username> <vt>
+#
+# Single capability: start a greetd login on a free VT for <username>,
+# then let greetd switch the seat to it. Authorized for the active local
+# seat by 49-shedos-switch-user.rules through the org.shedos.switch-user
+# polkit action. The helper never authenticates anyone — greetd does,
+# with the target's own password.
+
+set -euo pipefail
+
+PASSWD=${SHEDOS_PASSWD:-/etc/passwd}
+GREETD_BIN=${SHEDOS_GREETD_BIN:-/usr/bin/greetd}
+CONFIG=/usr/share/shedos/greetd/config.toml
+PRESELECT_DIR=/run/shedos
+PRESELECT_FILE=$PRESELECT_DIR/switch-preselect
+VT_FLOOR=7
+VT_CEILING=12
+
+die() { echo "switch-user: $1" >&2; exit "${2:-2}"; }
+
+user=${1:-}
+vt=${2:-}
+
+[[ -n $user ]] || die "missing username"
+
+# The target must byte-equal an enumerated regular user — the same filter
+# the dropdown uses (uid 1000..<65534, real login shell), minus ShedOS's
+# own accounts. Exact awk match; $user is never spliced into a command.
+valid=$(awk -F: -v u="$user" \
+    '$1==u && $3>=1000 && $3<65534 && $7!~"/(nologin|false)$" \
+     && $1!="shedos" && $1!="greeter" {print $1; exit}' "$PASSWD")
+[[ $valid == "$user" ]] || die "'$user' is not a switchable user"
+
+# Dry-run (tests): stop after validation, never touch VTs or spawn greetd.
+if [[ ${SHEDOS_SWITCH_USER_DRYRUN:-} == 1 ]]; then
+    echo "switch-user: would start a login for $user"
+    exit 0
+fi
+
+[[ $vt =~ ^[0-9]+$ ]] || die "vt '$vt' is not a number"
+(( vt >= VT_FLOOR && vt <= VT_CEILING )) || die "vt $vt outside ${VT_FLOOR}..${VT_CEILING}" 1
+
+# Re-validate the locker's proposed VT against reality: never the active
+# console, never one logind already has a session on. The locker only
+# proposes; this is where root decides.
+active=$(sed -n 's/^tty//p' /sys/class/tty/tty0/active 2>/dev/null || true)
+[[ $vt != "$active" ]] || die "vt $vt is the active console" 1
+for f in /run/systemd/sessions/*; do
+    [[ -f $f ]] || continue            # skip the .ref FIFOs — a read blocks
+    while IFS= read -r n; do
+        [[ $vt == "$n" ]] && die "vt $vt is already in use" 1
+    done < <(sed -n 's/^VTNr=//p' "$f")
+done
+
+# Hand the validated name to the greeter about to start. The dir is
+# greeter-owned (tmpfiles) so the greeter can clear it after reading.
+install -d -o greeter -g greeter -m 755 "$PRESELECT_DIR"
+printf '%s\n' "$user" >"$PRESELECT_FILE"
+chmod 644 "$PRESELECT_FILE"
+
+# Transient unit so logout reaps it cleanly — no orphan greetd or VT.
+# Reuses the boot greetd config; --vt overrides its vt=1 pin.
+exec systemd-run --collect --unit "shedos-switch-greetd@${vt}" \
+    "$GREETD_BIN" --config "$CONFIG" --vt "$vt"
