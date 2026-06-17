@@ -14,10 +14,11 @@ set -uo pipefail
 
 vt=${1:?usage: switch-greetd-once <vt>}
 CONFIG=/usr/share/shedos/greetd/config.toml
-GREETD_BIN=${SHEDOS_GREETD_BIN:-/usr/bin/greetd}
 POLL=2
 
-"$GREETD_BIN" --config "$CONFIG" --vt "$vt" &
+# Hardcoded, never from the environment: this runs as root, so an
+# env-controlled binary path would be a root-exec hole.
+/usr/bin/greetd --config "$CONFIG" --vt "$vt" &
 gpid=$!
 
 active_vt() { sed -n 's/^tty//p' /sys/class/tty/tty0/active 2>/dev/null; }

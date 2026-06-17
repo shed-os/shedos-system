@@ -9,12 +9,22 @@
 
 set -euo pipefail
 
-PASSWD=${SHEDOS_PASSWD:-/etc/passwd}
 SUPERVISOR=/usr/lib/shedos/switch-greetd-once
 PRESELECT_DIR=/run/shedos
 PRESELECT_FILE=$PRESELECT_DIR/switch-preselect
 VT_FLOOR=7
 VT_CEILING=12
+
+# SHEDOS_PASSWD / SHEDOS_SWITCH_USER_DRYRUN exist only for the unprivileged
+# test harness. When we are root (the pkexec path) never honour them —
+# pkexec already strips the caller's environment; this is defence in depth
+# so a root invocation can never be pointed at a forged passwd or muted.
+if [[ $(id -u) -eq 0 ]]; then
+    PASSWD=/etc/passwd
+    unset SHEDOS_SWITCH_USER_DRYRUN
+else
+    PASSWD=${SHEDOS_PASSWD:-/etc/passwd}
+fi
 
 die() { echo "switch-user: $1" >&2; exit "${2:-2}"; }
 
