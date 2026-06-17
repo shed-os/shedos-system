@@ -275,6 +275,8 @@ package() {
     # + grant, and the tmpfiles dir for the preselect handoff.
     install -Dm755 tree/usr/lib/shedos/switch-user \
         "$pkgdir/usr/lib/shedos/switch-user"
+    install -Dm755 tree/usr/lib/shedos/switch-greetd-once \
+        "$pkgdir/usr/lib/shedos/switch-greetd-once"
     install -Dm644 tree/usr/share/polkit-1/actions/org.shedos.switch-user.policy \
         "$pkgdir/usr/share/polkit-1/actions/org.shedos.switch-user.policy"
     install -Dm644 tree/usr/share/polkit-1/rules.d/49-shedos-switch-user.rules \

@@ -10,8 +10,7 @@
 set -euo pipefail
 
 PASSWD=${SHEDOS_PASSWD:-/etc/passwd}
-GREETD_BIN=${SHEDOS_GREETD_BIN:-/usr/bin/greetd}
-CONFIG=/usr/share/shedos/greetd/config.toml
+SUPERVISOR=/usr/lib/shedos/switch-greetd-once
 PRESELECT_DIR=/run/shedos
 PRESELECT_FILE=$PRESELECT_DIR/switch-preselect
 VT_FLOOR=7
@@ -43,15 +42,14 @@ fi
 
 # Re-validate the locker's proposed VT against reality: never the active
 # console, never one logind already has a session on. The locker only
-# proposes; this is where root decides.
+# proposes; this is where root decides. loginctl, not the session files —
+# those omit the VT number on current systemd.
 active=$(sed -n 's/^tty//p' /sys/class/tty/tty0/active 2>/dev/null || true)
 [[ $vt != "$active" ]] || die "vt $vt is the active console" 1
-for f in /run/systemd/sessions/*; do
-    [[ -f $f ]] || continue            # skip the .ref FIFOs — a read blocks
-    while IFS= read -r n; do
-        [[ $vt == "$n" ]] && die "vt $vt is already in use" 1
-    done < <(sed -n 's/^VTNr=//p' "$f")
-done
+if loginctl list-sessions --no-legend 2>/dev/null \
+        | awk '{print $7}' | grep -qx "tty$vt"; then
+    die "vt $vt is already in use" 1
+fi
 
 # Hand the validated name to the greeter about to start. The dir is
 # greeter-owned (tmpfiles) so the greeter can clear it after reading.
@@ -59,7 +57,8 @@ install -d -o greeter -g greeter -m 755 "$PRESELECT_DIR"
 printf '%s\n' "$user" >"$PRESELECT_FILE"
 chmod 644 "$PRESELECT_FILE"
 
-# Transient unit so logout reaps it cleanly — no orphan greetd or VT.
-# Reuses the boot greetd config; --vt overrides its vt=1 pin.
+# Transient unit running the supervisor, which starts greetd on the VT
+# and tears it down on logout (greetd itself would loop back to a greeter
+# and hold the VT). --collect reaps the unit when the supervisor exits.
 exec systemd-run --collect --unit "shedos-switch-greetd@${vt}" \
-    "$GREETD_BIN" --config "$CONFIG" --vt "$vt"
+    "$SUPERVISOR" "$vt"

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# /usr/lib/shedos/switch-greetd-once <vt>
+#
+# Runs greetd on <vt> for one fast-user-switch login, then tears it down.
+# greetd is a persistent display manager — after a session ends it loops
+# back to a greeter rather than exiting, so a plain `systemd-run greetd`
+# would leave an idle greeter holding the VT. This supervisor is the
+# transient unit's main process: it starts greetd, watches logind, and
+# kills greetd once the VT has no user session and is no longer the
+# foreground console. Its exit lets systemd --collect reap the unit and
+# free the VT.
+
+set -uo pipefail
+
+vt=${1:?usage: switch-greetd-once <vt>}
+CONFIG=/usr/share/shedos/greetd/config.toml
+GREETD_BIN=${SHEDOS_GREETD_BIN:-/usr/bin/greetd}
+POLL=2
+
+"$GREETD_BIN" --config "$CONFIG" --vt "$vt" &
+gpid=$!
+
+active_vt() { sed -n 's/^tty//p' /sys/class/tty/tty0/active 2>/dev/null; }
+
+# True while a real user session (not the greeter) sits on our VT.
+user_on_vt() {
+    loginctl list-sessions --no-legend 2>/dev/null \
+        | awk -v t="tty$vt" '$6=="user" && $7==t {f=1} END {exit !f}'
+}
+
+# Wait for greetd to take the VT at least once before arming teardown, so
+# the brief pre-handoff window (greetd not yet foreground) doesn't trip it.
+seen_active=0
+while kill -0 "$gpid" 2>/dev/null; do
+    sleep "$POLL"
+    [[ $(active_vt) == "$vt" ]] && seen_active=1
+    if (( seen_active )) && ! user_on_vt && [[ $(active_vt) != "$vt" ]]; then
+        break
+    fi
+done
+
+kill "$gpid" 2>/dev/null
+wait "$gpid" 2>/dev/null
+exit 0

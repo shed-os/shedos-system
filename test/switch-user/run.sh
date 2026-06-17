@@ -37,5 +37,10 @@ grep -q 'subject.local' "$rule" && grep -q 'subject.active' "$rule" && _ok rule-
 grep -q 'org.shedos.switch-user' "$policy" && _ok policy-action || _fail policy-action "action id missing"
 grep -q '/usr/lib/shedos/switch-user' "$policy" && _ok policy-exec-path || _fail policy-exec-path "exec.path annotation missing"
 
+# Teardown: the helper runs the supervisor in a collectible transient unit.
+grep -q 'systemd-run' "$helper" && grep -q -- '--collect' "$helper" && _ok collectible-unit || _fail collectible-unit "not a collectible transient unit"
+grep -q 'switch-greetd-once' "$helper" && _ok runs-supervisor || _fail runs-supervisor "helper does not run the supervisor"
+[[ -x $sys/usr/lib/shedos/switch-greetd-once ]] && _ok supervisor-present || _fail supervisor-present "supervisor missing or not executable"
+
 printf 'PASS %d/%d\n' "$pass" $((pass+fail))
 [[ $fail -eq 0 ]]
