@@ -165,6 +165,8 @@ package() {
     # greetd's IPC.
     install -Dm755 tree/usr/lib/shedos/start-hyprland-session.sh \
         "$pkgdir/usr/lib/shedos/start-hyprland-session.sh"
+    install -Dm755 tree/usr/lib/shedos/record-last-login \
+        "$pkgdir/usr/lib/shedos/record-last-login"
 
     # Limine multi-kernel renderer + the pacman hook that fires it on
     # every kernel install/upgrade/remove.

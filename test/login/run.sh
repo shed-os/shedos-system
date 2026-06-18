@@ -44,5 +44,15 @@ for flag in --complete-bash --complete-zsh --complete-fish; do
     [[ -n $out ]] && _ok "contract$flag" || _fail "contract$flag" "empty"
 done
 
+# --- record-last-login pam_exec marker (Task 10) ---
+marker=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/record-last-login
+export SHEDOS_LAST_LOGIN_FILE=$tmp/last-login
+PAM_TYPE=open_session PAM_USER=alice "$marker"
+[[ $(cat "$tmp/last-login" 2>/dev/null) == alice ]] && _ok marker-open || _fail marker-open "got: $(cat "$tmp/last-login" 2>/dev/null)"
+PAM_TYPE=close_session PAM_USER=bob "$marker"
+[[ $(cat "$tmp/last-login") == alice ]] && _ok marker-close-noop || _fail marker-close-noop "overwrote on close"
+PAM_TYPE=open_session PAM_USER= "$marker"
+[[ $(cat "$tmp/last-login") == alice ]] && _ok marker-empty-noop || _fail marker-empty-noop "wrote empty"
+
 printf 'PASS %d/%d\n' "$pass" $((pass+fail))
 [[ $fail -eq 0 ]]

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# pam_exec hook: record the user who just logged in. Runs as root on the
+# greetd session-open phase so the greeter can preselect the
+# last-logged-in user next time. Best-effort — never fails the session.
+
+set -u
+
+[[ ${PAM_TYPE:-} == open_session ]] || exit 0
+user=${PAM_USER:-}
+[[ -n $user ]] || exit 0
+
+target=${SHEDOS_LAST_LOGIN_FILE:-/var/lib/shedos/last-login}
+dir=$(dirname "$target")
+mkdir -p "$dir" 2>/dev/null || exit 0
+# Atomic replace so a concurrent reader never sees a half-written name.
+tmp=$(mktemp "$dir/.last-login.XXXXXX" 2>/dev/null) || exit 0
+printf '%s\n' "$user" >"$tmp" 2>/dev/null && mv -f "$tmp" "$target" 2>/dev/null
+rm -f "$tmp" 2>/dev/null
+exit 0
