@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# shedman login; toggle the username field on the greeter and lock screen.
+#
+# Sets [login].show_username in /etc/shedos/system.toml. The greeter and
+# lock screen read it on their next launch; one already on screen picks
+# it up the next time it starts.
+
+set -euo pipefail
+
+SYSTEM_TOML=${SHEDOS_SYSTEM_TOML:-/etc/shedos/system.toml}
+
+usage() {
+    cat <<'EOF'
+Usage: shedman login <option>
+
+Options:
+  --show-username   Show the username dropdown (default).
+  --hide-username   Hide it; the password box authenticates the
+                    configured user.
+  --status          Print whether the username field is shown.
+EOF
+}
+
+# tomlkit round-trips the file so the rest of system.toml is preserved.
+read_show() {
+    python3 - "$SYSTEM_TOML" <<'PYEOF'
+import sys
+from pathlib import Path
+try:
+    import tomlkit
+except ImportError:
+    print("python-tomlkit not installed", file=sys.stderr); sys.exit(1)
+p = Path(sys.argv[1])
+doc = tomlkit.parse(p.read_text()) if p.is_file() else tomlkit.document()
+login = doc.get("login", {}) or {}
+print("true" if login.get("show_username", True) else "false")
+PYEOF
+}
+
+write_show() {
+    local value=$1
+    local runner=(python3)
+    # The real file lives under /etc and needs root; a test override path
+    # (SHEDOS_SYSTEM_TOML) is writable as the invoking user.
+    if [[ $SYSTEM_TOML == /etc/* && $EUID -ne 0 ]]; then
+        runner=(sudo python3)
+    fi
+    "${runner[@]}" - "$SYSTEM_TOML" "$value" <<'PYEOF'
+import sys
+from pathlib import Path
+import tomlkit
+path, value = Path(sys.argv[1]), sys.argv[2] == "true"
+doc = tomlkit.parse(path.read_text()) if path.is_file() else tomlkit.document()
+login = doc.setdefault("login", tomlkit.table())
+login["show_username"] = value
+path.write_text(tomlkit.dumps(doc))
+print(f"set [login].show_username = {str(value).lower()}")
+PYEOF
+}
+
+case "${1:-}" in
+    --help-summary)
+        echo "show or hide the username field on the login and lock screens"
+        ;;
+    --complete-bash|--complete-zsh)
+        printf '%s\n' --show-username --hide-username --status --help -h
+        ;;
+    --complete-fish)
+        cat <<'EOF'
+--show-username	Show the username dropdown
+--hide-username	Hide the username field
+--status	Print whether the username field is shown
+--help	Show this help
+EOF
+        ;;
+    --show-username)
+        write_show true
+        ;;
+    --hide-username)
+        write_show false
+        ;;
+    --status)
+        if [[ $(read_show) == true ]]; then
+            echo "username field: shown (true)"
+        else
+            echo "username field: hidden (false)"
+        fi
+        ;;
+    ""|-h|--help|help)
+        usage
+        ;;
+    *)
+        echo "shedman login: unknown option '$1'" >&2
+        usage
+        exit 2
+        ;;
+esac
