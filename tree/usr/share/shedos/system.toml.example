@@ -1,13 +1,60 @@
-# system.toml.example; fully-commented template for /etc/shedos/system.toml
+# system.toml.example; the complete, commented reference for
+# /etc/shedos/system.toml
 #
-# Copy sections you want to customize into /etc/shedos/system.toml and run
-# `shedman apply` to reconcile. `shedman apply --dry-run` prints the plan
-# without touching anything; `shedman apply --validate` only checks syntax.
+# Every section ShedOS understands is documented here. Copy the ones you
+# want into /etc/shedos/system.toml and run `shedman apply` to reconcile.
+# `shedman apply --dry-run` prints the plan without touching anything;
+# `shedman apply --validate` only checks syntax.
 #
-# The schema version is frozen at 1. shedman apply refuses unknown versions
-# with a pointed error; safer than silent reinterpretation.
+# Two sections — [theme] and [login] — are NOT reconciled by `shedman
+# apply`. They are owned by their own subcommands (`shedman theme`,
+# `shedman login`) and read directly by the renderer and the login
+# screens; apply tolerates them in the file but never acts on them.
+#
+# The schema version is frozen at 1. shedman apply refuses unknown
+# versions with a pointed error; safer than silent reinterpretation. Any
+# top-level key not documented here is rejected as an unknown key.
 
 schema = 1
+
+# ---------------------------------------------------------------------------
+# [theme]; wallpaper + Catppuccin palette + fonts
+# ---------------------------------------------------------------------------
+#
+# Managed by `shedman theme`, NOT `shedman apply`. Set values with
+# `shedman theme set <key> <value>` (re-renders on success) or edit here
+# and run `shedman theme apply`. The renderer writes
+# /etc/shedos/themes/current/, so hyprland, waybar, walker, GTK, and the
+# greeter/lock screen all pick up the change.
+#
+# All four keys are optional; an omitted key falls back to the shown
+# default. `palette` must name a file under
+# /etc/shedos/themes/palettes/<name>.toml (see `shedman theme list`); a
+# missing palette file is an error. `wallpaper` must be a regular file.
+
+[theme]
+wallpaper = "/usr/share/shedos/wallpapers/lumen.png"  # symlinked sharp for the
+                                                      # desktop, blurred for the
+                                                      # greeter + lock screen
+palette   = "catppuccin-mocha-blue"                   # drives every color output
+font_ui   = "Inter 11"                                # UI + GNOME interface font
+font_mono = "JetBrainsMono Nerd Font"                 # terminals + mono slots
+
+# ---------------------------------------------------------------------------
+# [login]; the username field on the greeter and lock screen
+# ---------------------------------------------------------------------------
+#
+# Managed by `shedman login`, NOT `shedman apply`. Read directly by the
+# greeter and lock screen on their next launch.
+#
+# `show_username = true` (default) shows the username dropdown; `false`
+# hides it and the password box authenticates the configured user. Toggle
+# with `shedman login --hide-username` / `--show-username`. A missing or
+# garbled value falls back to true so a broken config never hides the
+# field.
+
+[login]
+show_username = true
 
 # ---------------------------------------------------------------------------
 # [systemd.system] / [systemd.user]
@@ -18,8 +65,12 @@ schema = 1
 # `disable`; units that should be disabled. Any enabled ones get
 #             disabled on apply.
 #
-# A unit appearing in both enable and disable is rejected at validation
-# time (there is no coherent meaning for "enable and disable").
+# Each unit name must end in a known suffix (.service, .timer, .socket,
+# .target, .mount, .path, .slice). A unit appearing in both enable and
+# disable is rejected at validation time (there is no coherent meaning for
+# "enable and disable"). Convergent against live systemctl; no baseline or
+# adoption — this section only states intent, it never adopts hand-enabled
+# units back into TOML.
 #
 # User units are reconciled via `systemctl --user --global` so they apply
 # to every user on this machine. Per-user exceptions are not in v1 scope.
@@ -54,7 +105,10 @@ disable = []
 # algos) is left untouched so snapper's own tooling stays authoritative.
 #
 # Omitting a subkey means "leave current value alone"; not "reset to
-# zero". The declarative layer is additive over what snapper ships.
+# zero". The declarative layer is additive over what snapper ships. If the
+# root config doesn't exist yet, apply emits a SKIP advising
+# `snapper create-config /` first. Keys are only ever set, never reverted
+# when you drop them from TOML.
 
 [snapper.timeline]
 enabled = true   # TIMELINE_CREATE
@@ -72,11 +126,13 @@ limit = 50       # NUMBER_LIMIT — max snapshots before oldest get culled
 # ---------------------------------------------------------------------------
 #
 # Keys are paths RELATIVE to /etc; they must contain at least one "/" and
-# end in a known config extension (.conf, .rules, .json, .cfg, ...).
-# Values are the full file content as a literal TOML string.
+# end in a known config extension (.conf, .json, .rules, .nsswitch, .hosts,
+# .cfg). No leading "/" and no ".." segments. Values are the full file
+# content as a literal TOML string.
 #
-# shedman apply tracks ownership of drop-ins in /var/lib/shedos/apply.state.json.
-# Removing a drop-in from here deletes the file on the next apply.
+# shedman apply tracks ownership of drop-ins in
+# /var/lib/shedos/apply.state.json. This is the ONE section with hard
+# removal: removing a drop-in from here deletes the file on the next apply.
 #
 # WARNING: do NOT declare drop-ins that are already managed by a package's
 # backup=() entry (sudoers.d/wheel, sddm.conf.d/theme.conf, etc.) —
@@ -134,37 +190,26 @@ siglevel = "Required DatabaseRequired"
 # siglevel = "Optional TrustAll"
 
 # ---------------------------------------------------------------------------
-# [services.postgresql]; declarative wrapper over the bootstrap units
+# [services.postgresql] / [services.docker] / [services.sshd]
 # ---------------------------------------------------------------------------
 #
-# Flips below desugar to ordinary systemctl enable/disable on the two
-# shedos-pg-* units. Convenience-named so users who don't run Postgres
-# don't have to think about the underlying service names.
+# Convenience wrappers that desugar to ordinary systemctl enable/disable
+# on the named units, so users don't have to memorise the service names.
+# Every flag is optional; an omitted flag leaves that unit untouched
+# (unmanaged), it does not force a default.
 #
-# Setting `auto-init = false` stops /var/lib/postgres/data from being
-# initialized on next boot. Setting `per-user-db = false` skips the
-# per-Linux-user role+database bootstrap.
+#   [services.postgresql]
+#     auto-init   ; true/false → shedos-pg-initdb.service
+#     per-user-db ; true/false → shedos-pg-user-bootstrap.service
+#   [services.docker].enable ; true/false → docker.service
+#   [services.sshd].enable   ; true/false → sshd.service
 
 [services.postgresql]
-auto-init   = true   # controls shedos-pg-initdb.service
-per-user-db = true   # controls shedos-pg-user-bootstrap.service
-
-# ---------------------------------------------------------------------------
-# [services.docker]; declarative wrapper over docker.service
-# ---------------------------------------------------------------------------
-#
-# Docker is enabled at install time. Set `enable = false` and run
-# `shedman apply` to mask docker.service on systems that don't need it.
+auto-init   = true   # initialize /var/lib/postgres/data on next boot
+per-user-db = true   # bootstrap a per-Linux-user role + database
 
 [services.docker]
 enable = true
-
-# ---------------------------------------------------------------------------
-# [services.sshd]; declarative wrapper over sshd.service
-# ---------------------------------------------------------------------------
-#
-# OpenSSH is enabled by default. Set `enable = false` and run
-# `shedman apply` to mask sshd.service on systems that don't need it.
 
 [services.sshd]
 enable = true
@@ -175,49 +220,48 @@ enable = true
 #
 # UFW ships installed but disabled-by-default on ShedOS; uncomment and
 # set `enabled = true` to opt in. ShedOS never enables the firewall for
-# you.
+# you. Merely declaring the [network.firewall] section (even empty)
+# engages the reconciler.
 #
 # Adoption model: rules added via raw `ufw allow|deny` get adopted into
-# this section on the next `shedman apply`. So the TOML and `ufw`
-# remain a coherent single source of truth; edit either, the file
-# always reflects current intent.
+# this section on the next `shedman apply`. So the TOML and `ufw` remain a
+# coherent single source of truth; edit either, the file always reflects
+# current intent.
 #
 # Safety: removing a rule from TOML deletes it from ufw on apply.
-# Removing the entire `[network.firewall]` section makes the
-# reconciler invisible (it stops managing the firewall, including
-# adoption). On first apply, any pre-existing ufw rules are silently
-# adopted; preview with `shedman apply --dry-run` if that matters.
+# Removing the entire `[network.firewall]` section makes the reconciler
+# invisible (it stops managing the firewall, including adoption). On first
+# apply the baseline is the EMPTY set, so any pre-existing ufw rules are
+# adopted (not protected); preview with `shedman apply --dry-run` if that
+# matters. State lives in /var/lib/shedos/firewall.{state,baseline}.json.
 #
 # Defaults & service flag (incoming/outgoing/routed/enabled) are only
-# applied when declared. Omit them to leave any user-set defaults
-# alone.
+# applied when declared. Omit them to leave any user-set values alone.
+# Each default policy is one of: allow | deny | reject.
 #
-# Rule grammar mirrors `man ufw` ("RULE SYNTAX"):
+# Rule grammar (the union of `man ufw` "RULE SYNTAX"):
 #
 #   action     allow | deny | reject | limit          (required)
-#   direction  in | out                               (default: in)
+#   direction  in | out | fwd                          (default: in)
 #   interface  on <iface>                              (optional)
 #   log        log | log-all                           (optional)
 #   from       <addr> | <CIDR> | "any"                 (optional)
 #   to         <addr> | <CIDR> | "any"                 (optional)
-#   from-port  <N>                                     (paired with `from`)
-#   to-port    <N>                                     (paired with `to`)
-#   port       <N>                                     (shorthand)
-#   proto      tcp | udp | ah | esp | …                (with `port` or
-#                                                       `from`/`to`)
+#   from-port  <N> | "<low:high>"                      (requires `from`)
+#   to-port    <N> | "<low:high>"                      (requires `to`)
+#   port       <N> | "<low:high>"                      (range needs `proto`)
+#   proto      tcp | udp | ah | esp | ipv6 | igmp | gre
 #   app        <profile name>                          (mutually exclusive
-#                                                       with port/proto)
-#   comment    <text>                                  (informational)
-#
-# Flag combining note for bash callers: `app` cannot pair with
-# `port`/`proto`/`from-port`/`to-port`; the validator rejects that
-# combination.
+#                                                       with port/proto/
+#                                                       from-port/to-port)
+#   comment    <text>                                  (informational; not
+#                                                       part of rule identity)
 
 # [network.firewall]
-# enabled  = false        # opt-in
-# incoming = "deny"       # default policy: deny | allow | reject
-# outgoing = "allow"
-# routed   = "deny"
+# enabled  = false        # opt-in; toggles ufw.service + `ufw enable`
+# incoming = "deny"       # default incoming policy
+# outgoing = "allow"      # default outgoing policy
+# routed   = "deny"       # default routed (forward) policy
 #
 # [[network.firewall.rules]]
 # action  = "allow"
@@ -242,23 +286,24 @@ enable = true
 # [security.keyring]; declarative pacman-key trust
 # ---------------------------------------------------------------------------
 #
-# Each fingerprint is a 40-char upper-hex string with no spaces. To
+# Each fingerprint is a 40-char upper-hex string (spaces are stripped). To
 # trust a key:
 #   1. Import the public key:  sudo pacman-key --add /path/to/key.gpg
 #   2. Add the fingerprint to the array below.
-#   3. Run `shedman apply`.
+#   3. Run `shedman apply` (locally-signs it via `pacman-key --lsign-key`).
 #
-# Adoption: keys you locally-sign by hand (`pacman-key --lsign-key
-# <fp>`) get adopted into this array on the next apply.
+# Adoption: keys you locally-sign by hand (`pacman-key --lsign-key <fp>`)
+# get adopted into this array on the next apply.
 #
 # Safety: removing a fingerprint from the array does NOT auto-revoke
 # trust. The reconciler emits a ⚠ warning; revoke by hand with
-# `sudo pacman-key --delete <fingerprint>`. Keyring revocation
-# requires an explicit user gesture, by design.
+# `sudo pacman-key --delete <fingerprint>`. Keyring revocation requires an
+# explicit user gesture, by design.
 #
-# Baseline: every fingerprint trusted on first apply (including
-# shedos's own install-time chain) is permanently invisible to the
-# reconciler; never adopted into TOML, never warned about.
+# Baseline: every fingerprint trusted on first apply (including shedos's
+# own install-time chain) is permanently invisible to the reconciler;
+# never adopted into TOML, never warned about. State lives in
+# /var/lib/shedos/keyring.{state,baseline}.json.
 
 # [security.keyring]
 # trusted = [
@@ -271,32 +316,42 @@ enable = true
 # ---------------------------------------------------------------------------
 #
 # Each table below becomes one fstab line inside a marker fence at the
-# tail of /etc/fstab. Calamares-shipped entries (root, home, boot,
-# swap) are baseline-protected: they live OUTSIDE the fence and are
-# never touched, never adopted into TOML, never removed when TOML
-# shrinks.
+# tail of /etc/fstab. Calamares-shipped entries (root, home, boot, swap)
+# are baseline-protected: they live OUTSIDE the fence and are never
+# touched, never adopted into TOML, never removed when TOML shrinks.
 #
-# Adoption: hand-edited fstab entries (`vi /etc/fstab`, save) are
-# adopted into [[fs.mounts]] on the next `shedman apply`. The `name`
-# is auto-derived from the target's last path component; collisions
-# get a numeric suffix.
+# Adoption: hand-edited fstab entries (`vi /etc/fstab`, save) are adopted
+# into [[fs.mounts]] on the next `shedman apply`. The `name` is
+# auto-derived from the target's last path component; collisions get a
+# numeric suffix.
 #
-# Identity tuple: (device, target). Changing options/fstype/dump/pass
-# is an in-place update.
+# Identity tuple: (device, target). Changing options/fstype/dump/pass is
+# an in-place update. State lives in
+# /var/lib/shedos/mounts.{state,baseline}.json.
 #
 # Required: name, device, target, fstype.
-# Optional: options (default "defaults"), dump (0), pass (0).
+# Optional:
+#   options  ; mount options (default "defaults")
+#   required ; bool (default false). Boot safety: non-root entries get
+#              `nofail` + `x-systemd.device-timeout=5s` folded in
+#              automatically so a missing device can't wedge boot. Set
+#              `required = true` to OPT OUT — then an absent device blocks
+#              boot (intentional). The `/` mount is always required.
+#   dump     ; fstab dump field (default 0)
+#   pass     ; fstab fsck order (default 0)
 #
 # v1: no automatic mount activation. Reboot or `mount -a` to activate
 # new entries.
 
 # [[fs.mounts]]
-# name    = "data"
-# device  = "UUID=DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF"
-# target  = "/mnt/data"
-# fstype  = "btrfs"
-# options = "noatime,compress=zstd:3,subvol=@data"
-# pass    = 2
+# name     = "data"
+# device   = "UUID=DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF"
+# target   = "/mnt/data"
+# fstype   = "btrfs"
+# options  = "noatime,compress=zstd:3,subvol=@data"
+# required = false   # leave boot-safe (nofail) — the default
+# dump     = 0
+# pass     = 2
 
 # [[fs.mounts]]
 # name    = "nfs-home"
@@ -311,23 +366,23 @@ enable = true
 #
 # `append` is a list of tokens to ensure-present in the default Limine
 # entry's cmdline= line. Each token is either a flag (`quiet`) or a
-# `key=value` pair (`nvidia_drm.modeset=1`); whitespace inside a token
-# is rejected.
+# `key=value` pair (`nvidia_drm.modeset=1`); whitespace inside a token is
+# rejected.
 #
-# Adoption: tokens added by hand-editing /boot/limine.conf get pulled
-# into `append` on the next `shedman apply`.
+# Adoption: tokens added by hand-editing /boot/limine.conf get pulled into
+# `append` on the next `shedman apply`.
 #
 # Baseline: every cmdline token present on first apply is permanently
 # invisible. The installer-baked baseline includes hardware essentials
 # (root=, rootflags=, rootfstype=, rw, optional cryptdevice= and
 # nvidia_drm.modeset=1) and the UX-critical tokens that suppress the
-# first-boot console flash (quiet, splash, loglevel=3,
-# rd.udev.log_level=3, fbcon=nodefer). Removing a baseline
-# token from `append` is a no-op; baseline tokens stay in the live
-# cmdline forever.
+# first-boot console flash (quiet, splash, loglevel=3, rd.udev.log_level=3,
+# fbcon=nodefer). Removing a baseline token from `append` is a no-op;
+# baseline tokens stay in the live cmdline forever. State lives in
+# /var/lib/shedos/cmdline.{state,baseline}.json.
 #
-# Reboot required: every change reaches the kernel only on the next
-# boot. Plan output marks the Change with a "reboot to apply" hint.
+# Reboot required: every change reaches the kernel only on the next boot.
+# Plan output marks the Change with a "reboot to apply" hint.
 
 # [kernel.cmdline]
 # append = [
@@ -339,40 +394,42 @@ enable = true
 # [[groups]] / [[users]]; declarative groups + users
 # ---------------------------------------------------------------------------
 #
-# Strictly additive, by design. ShedOS NEVER deletes a user or group
-# from declarative state; removing a TOML entry only emits a ⚠
-# warning. Use `sudo userdel`/`sudo groupdel` by hand if you really
-# mean it.
+# Strictly additive, by design. ShedOS NEVER deletes a user or group from
+# declarative state; removing a TOML entry only emits a ⚠ warning. Use
+# `sudo userdel`/`sudo groupdel` by hand if you really mean it.
 #
 # What's declarative:
 #   - Group existence (`[[groups]] name = "docker"`)
+#   - Group system flag (`system = true` → `groupadd --system`; creation only)
 #   - User existence (`[[users]] name = "shedrack"`)
 #   - User shell (at create-time only; `useradd -s ...`)
 #   - Group memberships (additive; never `gpasswd -d`)
 #
 # What's NOT declarative (deferred):
-#   - User UID, primary GID, home directory path, password; install-
-#     time properties, owned by Calamares.
+#   - User UID, primary GID, home directory path, password; install-time
+#     properties, owned by Calamares.
 #   - User deletion / home cleanup.
-#   - Re-adding-with-different-shell on existing users.
+#   - Re-adding-with-different-shell on existing users (shell is creation-only).
 #
-# Adoption: `sudo usermod -aG <group> <user>` typed at the shell
-# gets pulled into the user's `groups` list on the next apply.
-# `sudo groupadd <name>` is adopted into [[groups]]. Hand-created
-# users are adopted into [[users]].
+# Adoption: `sudo usermod -aG <group> <user>` typed at the shell gets
+# pulled into the user's `groups` list on the next apply. `sudo groupadd
+# <name>` is adopted into [[groups]]. Hand-created users are adopted into
+# [[users]].
 #
 # Baseline: every user/group/membership present on first apply
-# (Calamares-created primary user, packages' install-scriptlet
-# groups like `docker` / `libvirt`, the `wheel` membership) is
-# permanently invisible to the reconciler.
+# (Calamares-created primary user, packages' install-scriptlet groups like
+# `docker` / `libvirt`, the `wheel` membership) is permanently invisible
+# to the reconciler. State lives in /var/lib/shedos/{groups,users,
+# users-memberships}.{state,baseline}.json.
 
 # [[groups]]
 # name   = "docker"
+# system = false      # true → create with `groupadd --system`
 #
 # [[groups]]
 # name   = "libvirt"
 #
 # [[users]]
 # name   = "shedrack"
-# shell  = "/usr/bin/zsh"
+# shell  = "/usr/bin/zsh"          # absolute path; applied only at creation
 # groups = ["wheel", "docker", "libvirt"]
