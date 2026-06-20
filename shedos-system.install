@@ -241,6 +241,7 @@ post_install() {
     _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens
     _backfill_apparmor_lsm
+    _backfill_luks_tries
     _fix_locale_conf_encoding
     _retire_legacy_kernel_setup
 
@@ -596,6 +597,138 @@ PY
     : > "$sentinel"
 }
 
+_backfill_luks_tries() {
+    # Existing encrypted installs that are already sd-encrypt (rd.luks.name in
+    # the cmdline, from an FDE rc install) carry rd.luks.options=discard with no
+    # tries= — so systemd-cryptsetup defaults to 3 attempts and then dead-ends
+    # on a blank screen with no feedback. Fresh installs bake tries=0 in via the
+    # installer, and the busybox->sd-encrypt migration adds it too; this is the
+    # safety net for the boxes that are already sd-encrypt and pass through
+    # neither path. tries=0 prompts forever. Gated on rd.luks.name so an
+    # unencrypted system is a no-op. Idempotent via the sentinel.
+    local sentinel=/var/lib/shedos/.luks-tries0-applied
+    [[ -f $sentinel ]] && return 0
+
+    local conf=/boot/limine.conf
+    [[ -f $conf ]] || return 0
+
+    # For every kernel_cmdline that unlocks a LUKS root, append ,tries=0 to an
+    # existing rd.luks.options= value (via sub so the rest of the line and its
+    # indentation survive) unless it already carries a tries= option, or add
+    # rd.luks.options=tries=0 when rd.luks.name is present but rd.luks.options
+    # is not.
+    local tmp
+    tmp=$(mktemp)
+    if ! awk '
+        /^[[:space:]]*kernel_cmdline:/ {
+            line = $0
+            n = split(line, f, /[[:space:]]+/)
+            has_name = 0; has_opts = 0; opts_tries = 0
+            for (i = 1; i <= n; i++) {
+                if (f[i] ~ /^rd\.luks\.name=/) has_name = 1
+                if (f[i] ~ /^rd\.luks\.options=/) {
+                    has_opts = 1
+                    if (f[i] ~ /[=,]tries=/) opts_tries = 1
+                }
+            }
+            if (has_name && !opts_tries) {
+                if (has_opts) {
+                    sub(/rd\.luks\.options=[^[:space:]]*/, "&,tries=0", line)
+                } else {
+                    line = line " rd.luks.options=tries=0"
+                }
+            }
+            print line
+            next
+        }
+        { print }
+    ' "$conf" > "$tmp"; then
+        rm -f "$tmp"
+        echo "shedos-system: LUKS tries=0 backfill skipped — awk failed on $conf" >&2
+        return 0
+    fi
+
+    if ! cmp -s "$tmp" "$conf"; then
+        install -Dm644 "$tmp" "$conf"
+        echo "  → set rd.luks.options tries=0 (unlimited unlock retries) in $conf"
+        # Mirror to whichever ESP path Limine boots from. Set matches
+        # apply_core._ESP_LIMINE_MIRRORS; keep in sync.
+        local esp
+        for esp in \
+            /boot/efi/EFI/limine/limine.conf \
+            /boot/efi/limine.conf \
+            /efi/EFI/limine/limine.conf \
+            /efi/limine.conf
+        do
+            [[ -f $esp ]] || continue
+            install -Dm644 "$conf" "$esp" 2>/dev/null \
+                && echo "  → mirrored to $esp"
+        done
+    fi
+    rm -f "$tmp"
+
+    # Keep the apply baseline in step so `shedman apply` treats the tries=0
+    # form as protected and never reverts it: apply the same transform to the
+    # baseline's rd.luks.options token (or add one). Atomic via tempfile +
+    # os.replace, mirroring _backfill_apparmor_lsm.
+    local baseline=/var/lib/shedos/cmdline.baseline.json
+    if [[ -f $baseline && -x /usr/bin/python3 ]]; then
+        /usr/bin/python3 - "$baseline" <<'PY' || true
+import json
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+baseline_path = Path(sys.argv[1])
+doc = json.loads(baseline_path.read_text())
+items = [list(it) for it in doc.get("items", [])]
+
+has_name = any(len(it) == 1 and it[0].startswith("rd.luks.name=") for it in items)
+has_opts = False
+changed = False
+for it in items:
+    if len(it) == 1 and it[0].startswith("rd.luks.options="):
+        has_opts = True
+        if not re.search(r"[=,]tries=", it[0]):
+            it[0] = it[0] + ",tries=0"
+            changed = True
+if has_name and not has_opts:
+    items.append(["rd.luks.options=tries=0"])
+    changed = True
+if not changed:
+    sys.exit(0)
+
+seen = set()
+uniq = []
+for it in items:
+    key = tuple(it)
+    if key not in seen:
+        seen.add(key)
+        uniq.append(it)
+doc["items"] = sorted(uniq)
+payload = json.dumps(doc, indent=2) + "\n"
+
+fd, tmp = tempfile.mkstemp(dir=str(baseline_path.parent), prefix=".luks-tries0-")
+try:
+    with os.fdopen(fd, "w") as f:
+        f.write(payload)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, baseline_path)
+except Exception:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+PY
+    fi
+
+    mkdir -p "$(dirname "$sentinel")"
+    : > "$sentinel"
+}
+
 _fix_locale_conf_encoding() {
     # Calamares sometimes wrote /etc/locale.conf with bare locale names
     # (`LANG=en_NG`, `LC_TIME=en_NG`) instead of the encoding-qualified
@@ -739,6 +872,7 @@ post_upgrade() {
     _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens
     _backfill_apparmor_lsm
+    _backfill_luks_tries
     _fix_locale_conf_encoding
     _retire_legacy_kernel_setup
 

@@ -70,7 +70,12 @@ if [[ $hooks_line == *encrypt* && $hooks_line != *sd-encrypt* ]]; then
     uuid=${spec%%:*}; uuid=${uuid#UUID=}
     rest=${spec#*:}; name=${rest%%:*}
     rdluks="rd.luks.name=${uuid}=${name}"
-    [[ $spec == *:allow-discards* ]] && rdluks="$rdluks rd.luks.options=discard"
+    # tries=0 prompts forever; the default of 3 dead-ends in a blank screen.
+    if [[ $spec == *:allow-discards* ]]; then
+        rdluks="$rdluks rd.luks.options=discard,tries=0"
+    else
+        rdluks="$rdluks rd.luks.options=tries=0"
+    fi
     if ! grep -q 'rd\.luks\.name=' "$limine_conf"; then
         cp -a "$limine_conf" "${limine_conf}.shedos-pre-migration"
         sed -i "s|cryptdevice=|${rdluks} cryptdevice=|" "$limine_conf"
