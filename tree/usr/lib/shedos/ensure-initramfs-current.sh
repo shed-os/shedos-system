@@ -27,9 +27,19 @@ if ! /usr/lib/shedos/rebuild-initramfs.sh; then
     exit 1
 fi
 
-# The initramfs now matches the migrated HOOKS — the sentinel's job is
-# done even if the ESP sync below trips. render-limine-config.sh is loud
-# and non-zero on a full ESP; let that surface rather than masking it,
-# but don't re-run the rebuild for it.
+# The rebuilt initramfs has to be re-bundled (and re-signed where keys exist)
+# into the UKI before the menu points at it — Limine chainloads the signed UKI
+# off the ESP, so it must be in place first. build-uki is loud and non-zero on
+# a full ESP or a verify miss; keep the sentinel so a failure retries next
+# transaction.
+if ! /usr/lib/shedos/build-uki.sh --rebuild; then
+    echo "shedos: UKI rebuild failed; will retry next transaction" >&2
+    exit 1
+fi
+
+# The initramfs + UKI now match the migrated HOOKS — the sentinel's job is done
+# even if the ESP re-render below trips. render-limine-config.sh is loud and
+# non-zero on a full ESP; let that surface rather than masking it, but don't
+# re-run the rebuild for it.
 rm -f "$sentinel"
 exec /usr/lib/shedos/render-limine-config.sh

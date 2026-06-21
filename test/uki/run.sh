@@ -234,6 +234,21 @@ else
     _fail U12_sbctl_signer_masked "sbctl post-hook mask missing/non-exec or does not no-op"
 fi
 
+# ---------------------------------------------------------------------------
+# U13: ensure-initramfs-current.sh rebuilds + re-signs the UKI between the
+#      initramfs rebuild and the limine re-render, so a HOOKS migration never
+#      leaves the menu pointing at a UKI built from the old initramfs.
+# ---------------------------------------------------------------------------
+ensure=$tree/usr/lib/shedos/ensure-initramfs-current.sh
+l_rebuild=$(grep -n 'rebuild-initramfs.sh' "$ensure" | tail -1 | cut -d: -f1)
+l_uki=$(grep -n 'build-uki.sh' "$ensure" | head -1 | cut -d: -f1)
+l_render=$(grep -n 'render-limine-config.sh' "$ensure" | tail -1 | cut -d: -f1)
+if [[ -n $l_uki ]] && (( l_rebuild < l_uki && l_uki < l_render )); then
+    _ok U13_ensure_builds_uki_between_rebuild_and_render
+else
+    _fail U13_ensure_builds_uki_between_rebuild_and_render "ordering wrong: rebuild=$l_rebuild uki=$l_uki render=$l_render"
+fi
+
 total=$((pass + fail))
 echo
 echo "uki pipeline: $pass/$total passed"
