@@ -1,0 +1,4 @@
+# Fallback / recovery kernel command line (verbose boot — quiet and splash
+# stripped). The installer overwrites this; the sentinel below guards an
+# unwritten placeholder the same way as the default cmdline.
+SHEDOS_PLACEHOLDER_CMDLINE

@@ -15,6 +15,8 @@ Target = usr/src/*/dkms.conf
 Target = usr/lib/systemd/systemd
 Target = usr/bin/cryptsetup
 Target = usr/bin/lvm
+Target = boot/intel-ucode.img
+Target = boot/amd-ucode.img
 
 # AbortOnFail: the transaction is already committed by PostTransaction, so
 # this can't roll back — but it turns a failed ESP sync (a full FAT volume

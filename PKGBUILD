@@ -57,6 +57,7 @@ depends=(
     'sbctl'            # secureboot verb manages the SB key set + verifies
     'tpm2-tools'       # tpm2 verb's TPM2 unlock primitives
     'systemd-ukify'    # single UKI signer (sbsign + PCR-11 .pcrsig, one pass)
+    'sbsigntools'      # sbverify gates each UKI placement onto the ESP
 )
 # Hard conflict with power-profiles-daemon: it competes with tlp for
 # CPU governor ownership. `replaces=` lets pacman do a transactional
@@ -78,6 +79,9 @@ backup=(
     'etc/os-release'
     'etc/shedos/system.toml'
     'etc/shedos/review-exclude.toml'
+    'etc/kernel/uki.conf'
+    'etc/kernel/cmdline'
+    'etc/kernel/cmdline-fallback'
 )
 install=shedos-system.install
 
@@ -192,6 +196,25 @@ package() {
         "$pkgdir/usr/lib/shedos/retire-shedos-kernel"
     install -Dm644 tree/usr/share/libalpm/hooks/95-shedos-limine-update.hook \
         "$pkgdir/usr/share/libalpm/hooks/95-shedos-limine-update.hook"
+
+    # FDE Phase 2 UKI pipeline: the keyless ukify signer config (enrollment
+    # rewrites it with the per-box keys), the cmdline files the installer
+    # overwrites, the placer + its shared atomic-place lib, the recovery-image
+    # builder, and the hook that runs them between mkinitcpio and the menu.
+    install -Dm644 tree/etc/kernel/uki.conf \
+        "$pkgdir/etc/kernel/uki.conf"
+    install -Dm644 tree/etc/kernel/cmdline \
+        "$pkgdir/etc/kernel/cmdline"
+    install -Dm644 tree/etc/kernel/cmdline-fallback \
+        "$pkgdir/etc/kernel/cmdline-fallback"
+    install -Dm644 tree/usr/lib/shedos/uki-place.sh \
+        "$pkgdir/usr/lib/shedos/uki-place.sh"
+    install -Dm755 tree/usr/lib/shedos/build-uki.sh \
+        "$pkgdir/usr/lib/shedos/build-uki.sh"
+    install -Dm755 tree/usr/lib/shedos/build-recovery-uki.sh \
+        "$pkgdir/usr/lib/shedos/build-recovery-uki.sh"
+    install -Dm644 tree/usr/share/libalpm/hooks/94-shedos-uki-build.hook \
+        "$pkgdir/usr/share/libalpm/hooks/94-shedos-uki-build.hook"
 
     install -Dm755 tree/usr/lib/shedos/migrate-mkinitcpio-hooks.sh \
         "$pkgdir/usr/lib/shedos/migrate-mkinitcpio-hooks.sh"

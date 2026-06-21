@@ -38,3 +38,16 @@ default_options="-S autodetect"
 
 fallback_image="/boot/initramfs-linux-zen-fallback.img"
 fallback_options="-S autodetect"
+
+# Stage a Unified Kernel Image next to each raw initramfs, on btrfs /boot —
+# NOT on the FAT ESP. mkinitcpio shells out to ukify (see /etc/kernel/uki.conf)
+# to bundle kernel+initramfs+cmdline into the .efi and sign it when the box has
+# keys. The placer (build-uki.sh, run by the 94 hook) then atomically moves the
+# .efi to the ESP's /EFI/Linux/ with the space-aware fail-loud discipline;
+# writing the ESP directly would risk a torn image on a full FAT volume. The
+# raw .img above stays for the BIOS boot path. The cmdline is baked from these
+# files; the installer writes the real per-box root= / rd.luks.name= content.
+default_uki="/boot/shedos-linux-zen.efi"
+default_cmdline="/etc/kernel/cmdline"
+fallback_uki="/boot/shedos-linux-zen-fallback.efi"
+fallback_cmdline="/etc/kernel/cmdline-fallback"

@@ -1,0 +1,5 @@
+# Per-box kernel command line, baked into the signed UKI. The installer
+# (bootloader.py) overwrites this with the real root= / rd.luks.name= line;
+# the sentinel below marks it unwritten so the UKI placer refuses to ship a
+# placeholder image over a good one.
+SHEDOS_PLACEHOLDER_CMDLINE

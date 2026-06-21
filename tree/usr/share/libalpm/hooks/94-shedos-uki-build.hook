@@ -1,0 +1,23 @@
+# Build + place the Unified Kernel Images after the stock mkinitcpio hook (90)
+# has staged them on btrfs /boot, and before render-limine-config (95) re-emits
+# the menu. Same trigger set as 90-mkinitcpio plus the microcode images: a ucode
+# upgrade does not fire the stock hook, so build-uki.sh rebuilds the staged UKI
+# when it finds it stale. The builders are atomic and fail-loud; AbortOnFail
+# turns a failed ESP placement into a visible pacman error rather than a green
+# light over a half-placed boot volume.
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Target = usr/lib/modules/*/vmlinuz
+Target = usr/lib/initcpio/*
+Target = usr/lib/firmware/*
+Target = boot/intel-ucode.img
+Target = boot/amd-ucode.img
+
+[Action]
+Description = Building + placing signed kernel images on the ESP...
+When = PostTransaction
+Exec = /bin/sh -c '/usr/lib/shedos/build-uki.sh && /usr/lib/shedos/build-recovery-uki.sh'
+AbortOnFail
