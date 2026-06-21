@@ -240,6 +240,9 @@ post_install() {
     _strip_leaked_installer_launcher
     _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens
+    # Lift the cmdline into /etc/kernel/cmdline for the signed-UKI boot path;
+    # idempotent, no-op until a _uki preset is in place.
+    /usr/lib/shedos/backfill-uki-cmdline.py || true
     _backfill_apparmor_lsm
     _backfill_luks_tries
     _fix_locale_conf_encoding
@@ -871,6 +874,9 @@ post_upgrade() {
     # Must precede anything that could re-trigger mkinitcpio.
     _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens
+    # Lift the cmdline into /etc/kernel/cmdline for the signed-UKI boot path;
+    # idempotent, no-op until a _uki preset is in place.
+    /usr/lib/shedos/backfill-uki-cmdline.py || true
     _backfill_apparmor_lsm
     _backfill_luks_tries
     _fix_locale_conf_encoding
