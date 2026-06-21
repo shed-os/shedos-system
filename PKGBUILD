@@ -215,6 +215,11 @@ package() {
         "$pkgdir/usr/lib/shedos/build-recovery-uki.sh"
     install -Dm644 tree/usr/share/libalpm/hooks/94-shedos-uki-build.hook \
         "$pkgdir/usr/share/libalpm/hooks/94-shedos-uki-build.hook"
+    # Mask sbctl's mkinitcpio post-hook signer — ukify (uki.conf) is the single
+    # signer, so sbctl must not also sign (a second signature is sbverify-dirty).
+    # Found first on mkinitcpio's post-hook path, so this no-op wins.
+    install -Dm755 tree/etc/initcpio/post/sbctl \
+        "$pkgdir/etc/initcpio/post/sbctl"
 
     install -Dm755 tree/usr/lib/shedos/migrate-mkinitcpio-hooks.sh \
         "$pkgdir/usr/lib/shedos/migrate-mkinitcpio-hooks.sh"

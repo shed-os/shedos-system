@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Masks sbctl's /usr/lib/initcpio/post/sbctl auto-signer. ShedOS signs every
+# UKI in one pass via ukify (/etc/kernel/uki.conf) at build time — sbsign + the
+# PCR-11 .pcrsig together — so sbctl must NOT also sign: a second signature
+# leaves the image sbverify-dirty (sbsign appends) and risks firmware rejection.
+# mkinitcpio searches /etc/initcpio/post before /usr/lib/initcpio/post and runs
+# each hook name once, so this same-named no-op wins and sbctl's never runs.
+exit 0
