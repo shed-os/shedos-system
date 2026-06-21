@@ -249,6 +249,36 @@ else
     _fail U13_ensure_builds_uki_between_rebuild_and_render "ordering wrong: rebuild=$l_rebuild uki=$l_uki render=$l_render"
 fi
 
+# ---------------------------------------------------------------------------
+# recover-esp.sh operates on the signed-UKI surface, not the retired raw
+# kernel/initramfs ESP copies the pre-UKI tool wiped.
+# ---------------------------------------------------------------------------
+recover=$tree/usr/lib/shedos/recover-esp.sh
+
+# R1: it globs the /EFI/Linux UKI surface.
+if grep -q 'EFI/Linux/shedos-\*\.efi' "$recover"; then
+    _ok R1_recover_targets_uki
+else
+    _fail R1_recover_targets_uki "recover-esp.sh does not glob /EFI/Linux/shedos-*.efi"
+fi
+
+# R2: the legacy kms refusal + vmlinuz/initramfs wipe are gone.
+if grep -qE "'kms'|vmlinuz-\*|initramfs-\*\.img" "$recover"; then
+    _fail R2_recover_legacy_dropped "recover-esp.sh still references kms / vmlinuz-* / initramfs-*.img"
+else
+    _ok R2_recover_legacy_dropped
+fi
+
+# R3: it rebuilds via build-uki.sh --rebuild and verifies with sbverify against
+#     the box db cert (the reconciled /var/lib/sbctl path, not cmp-vs-/boot).
+if grep -q 'build-uki.sh --rebuild' "$recover" \
+   && grep -q 'sbverify' "$recover" \
+   && grep -q '/var/lib/sbctl/keys/db/db.pem' "$recover"; then
+    _ok R3_recover_rebuild_and_sbverify
+else
+    _fail R3_recover_rebuild_and_sbverify "missing build-uki.sh --rebuild / sbverify / db.pem in recover-esp.sh"
+fi
+
 total=$((pass + fail))
 echo
 echo "uki pipeline: $pass/$total passed"
