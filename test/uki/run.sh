@@ -39,10 +39,18 @@ _mk_keys() {
 # A real PE (the stub) signed with the db key in $1, written to $2.
 _sign_dummy() { sbsign --key "$1/db.key" --cert "$1/db.pem" --output "$2" "$stub" >/dev/null 2>&1; }
 # The placer, run against a sandbox: no rebuild, lib + cert + dirs overridden.
-_run_placer() { # $1=boot $2=esp $3=cert $4=cmdline
-    SHEDOS_UKI_NO_REBUILD=1 SHEDOS_UKI_PLACE_LIB="$lib" \
+# A throwaway modules dir gives the placer one kernel (linux-zen) to discover,
+# unless the caller passes its own via $5.
+_run_placer() { # $1=boot $2=esp $3=cert $4=cmdline [$5=modules_dir]
+    local mods=${5:-} own="" rc
+    if [[ -z $mods ]]; then
+        mods=$(mktemp -d); own=$mods
+        mkdir -p "$mods/9.9-zen"; echo linux-zen > "$mods/9.9-zen/pkgbase"
+    fi
+    SHEDOS_UKI_NO_REBUILD=1 SHEDOS_UKI_PLACE_LIB="$lib" SHEDOS_MODULES_DIR="$mods" \
     SHEDOS_BOOT_DIR="$1" SHEDOS_ESP_DIRS="$2" SHEDOS_DB_CERT="$3" \
     SHEDOS_KERNEL_CMDLINE_FILE="$4" bash "$placer" >/dev/null 2>&1
+    rc=$?; [[ -n $own ]] && rm -rf "$own"; return $rc
 }
 
 # ---------------------------------------------------------------------------
@@ -193,6 +201,37 @@ if grep -qF 'Target = boot/intel-ucode.img' "$h95" \
     _ok U10_95_microcode_targets
 else
     _fail U10_95_microcode_targets "95 hook missing microcode targets or changed Exec"
+fi
+
+# ---------------------------------------------------------------------------
+# U11: multi-kernel — when both linux-zen and stock linux have staged UKIs the
+#      placer places both (Option B: stock linux as a different-kernel fallback).
+# ---------------------------------------------------------------------------
+t11=$(mktemp -d); _mk_keys "$t11/sb"
+mkdir -p "$t11/boot" "$t11/esp" "$t11/mods/9.9-zen" "$t11/mods/8.8-linux"
+echo linux-zen > "$t11/mods/9.9-zen/pkgbase"
+echo linux > "$t11/mods/8.8-linux/pkgbase"
+: > "$t11/esp/limine.conf"; printf 'root=UUID=test rw quiet\n' > "$t11/cmdline"
+_sign_dummy "$t11/sb" "$t11/boot/shedos-linux-zen.efi"
+_sign_dummy "$t11/sb" "$t11/boot/shedos-linux.efi"
+_run_placer "$t11/boot" "$t11/esp" "$t11/sb/db.pem" "$t11/cmdline" "$t11/mods"; rc=$?
+if (( rc == 0 )) && [[ -f $t11/esp/EFI/Linux/shedos-linux-zen.efi ]] \
+   && [[ -f $t11/esp/EFI/Linux/shedos-linux.efi ]]; then
+    _ok U11_multi_kernel_places_both
+else
+    _fail U11_multi_kernel_places_both "stock linux UKI not placed alongside linux-zen (rc=$rc)"
+fi
+rm -rf "$t11"
+
+# ---------------------------------------------------------------------------
+# U12: sbctl's mkinitcpio post-hook signer is masked (ukify is the single
+#      signer; a second sbctl signature would leave the UKI sbverify-dirty).
+# ---------------------------------------------------------------------------
+mask=$tree/etc/initcpio/post/sbctl
+if [[ -x $mask ]] && bash "$mask" >/dev/null 2>&1; then
+    _ok U12_sbctl_signer_masked
+else
+    _fail U12_sbctl_signer_masked "sbctl post-hook mask missing/non-exec or does not no-op"
 fi
 
 total=$((pass + fail))
