@@ -93,7 +93,7 @@ echo linux     > "$tmp/modules/9.9-stock/pkgbase"
 : > "$tmp/boot/initramfs-linux.img"   # default only; no -fallback
 # SHEDOS_ESP_DIRS points at an ESP-less dir so the renderer takes the
 # no-ESP path and never touches the host's real /boot/efi during the test.
-SHEDOS_LIMINE_CMDLINE="root=UUID=test rw quiet" \
+SHEDOS_LIMINE_CMDLINE="root=UUID=test rw quiet" SHEDOS_FIRMWARE=bios \
 SHEDOS_BOOT_DIR="$tmp/boot" SHEDOS_MODULES_DIR="$tmp/modules" \
 SHEDOS_ESP_DIRS="$tmp/noesp" \
     bash "$renderer" >/dev/null 2>&1
@@ -136,7 +136,7 @@ printf 'zen-fallback\n' > "$t6/boot/initramfs-linux-zen-fallback.img"
 printf 'stale\n' > "$t6/esp/vmlinuz-shedos-kernel"
 printf 'stale\n' > "$t6/esp/initramfs-shedos-kernel.img"
 printf 'stale\n' > "$t6/esp/initramfs-shedos-kernel-fallback.img"
-SHEDOS_LIMINE_CMDLINE="root=UUID=test rw quiet" \
+SHEDOS_LIMINE_CMDLINE="root=UUID=test rw quiet" SHEDOS_FIRMWARE=bios \
 SHEDOS_BOOT_DIR="$t6/boot" SHEDOS_MODULES_DIR="$t6/modules" \
 SHEDOS_ESP_DIRS="$t6/esp" bash "$renderer" >/dev/null 2>&1
 if [[ ! -e "$t6/esp/vmlinuz-shedos-kernel" \
@@ -168,7 +168,7 @@ printf 'GOOD-config\n' > "$t7/esp/limine.conf"
 printf 'OLD\n' > "$t7/esp/vmlinuz-linux-zen"
 printf 'OLD\n' > "$t7/esp/initramfs-linux-zen.img"
 rc=0
-SHEDOS_LIMINE_CMDLINE="root=UUID=test rw quiet" \
+SHEDOS_LIMINE_CMDLINE="root=UUID=test rw quiet" SHEDOS_FIRMWARE=bios \
 SHEDOS_BOOT_DIR="$t7/boot" SHEDOS_MODULES_DIR="$t7/modules" \
 SHEDOS_ESP_DIRS="$t7/esp" SHEDOS_ESP_FAKE_AVAIL=0 \
     bash "$renderer" >/dev/null 2>&1 || rc=$?
@@ -195,7 +195,7 @@ printf 'v\n' > "$t8/boot/vmlinuz-linux-zen"
 printf 'd\n' > "$t8/boot/initramfs-linux-zen.img"
 printf 'f\n' > "$t8/boot/initramfs-linux-zen-fallback.img"
 : > "$t8/esp/limine.conf"
-_run8() { SHEDOS_LIMINE_CMDLINE="root=UUID=test rw quiet" \
+_run8() { SHEDOS_LIMINE_CMDLINE="root=UUID=test rw quiet" SHEDOS_FIRMWARE=bios \
     SHEDOS_BOOT_DIR="$t8/boot" SHEDOS_MODULES_DIR="$t8/modules" \
     SHEDOS_ESP_DIRS="$t8/esp" bash "$renderer" >/dev/null 2>&1; }
 _run8; rc1=$?; sum1=$(cat "$t8/esp/limine.conf")
@@ -207,6 +207,122 @@ else
     _fail K8_idempotent_happy_path "second render diverged or exited non-zero (rc1=$rc1 rc2=$rc2)"
 fi
 rm -rf "$t8"
+
+# ---------------------------------------------------------------------------
+# K9: UEFI — a placed UKI yields an efi_chainload entry (no protocol:linux,
+#     no cmdline); the fallback UKI gets its own entry.
+# ---------------------------------------------------------------------------
+t9=$(mktemp -d)
+mkdir -p "$t9/modules/9.9-zen" "$t9/boot" "$t9/esp/EFI/Linux"
+echo linux-zen > "$t9/modules/9.9-zen/pkgbase"
+: > "$t9/esp/limine.conf"
+: > "$t9/esp/EFI/Linux/shedos-linux-zen.efi"
+: > "$t9/esp/EFI/Linux/shedos-linux-zen-fallback.efi"
+SHEDOS_FIRMWARE=uefi SHEDOS_BOOT_DIR="$t9/boot" SHEDOS_MODULES_DIR="$t9/modules" \
+    SHEDOS_ESP_DIRS="$t9/esp" bash "$renderer" >/dev/null 2>&1
+c9=$t9/esp/limine.conf
+if grep -qF 'protocol: efi_chainload' "$c9" \
+   && grep -qF 'image_path: boot():/EFI/Linux/shedos-linux-zen.efi' "$c9" \
+   && ! grep -qF 'protocol: linux' "$c9" && ! grep -qF 'kernel_cmdline:' "$c9"; then
+    _ok K9_uefi_chainloads_uki
+else
+    _fail K9_uefi_chainloads_uki "UEFI render did not emit a clean efi_chainload entry"
+fi
+if grep -qF '/ShedOS Linux (Fallback)' "$c9" \
+   && grep -qF 'image_path: boot():/EFI/Linux/shedos-linux-zen-fallback.efi' "$c9"; then
+    _ok K9_uefi_fallback_entry
+else
+    _fail K9_uefi_fallback_entry "fallback UKI entry missing or mispathed"
+fi
+rm -rf "$t9"
+
+# ---------------------------------------------------------------------------
+# K10: UEFI — an entry is gated on its UKI; a default UKI with no -fallback
+#      gets a boot entry but no fallback one.
+# ---------------------------------------------------------------------------
+t10=$(mktemp -d)
+mkdir -p "$t10/modules/9.9-zen" "$t10/boot" "$t10/esp/EFI/Linux"
+echo linux-zen > "$t10/modules/9.9-zen/pkgbase"
+: > "$t10/esp/limine.conf"; : > "$t10/esp/EFI/Linux/shedos-linux-zen.efi"
+SHEDOS_FIRMWARE=uefi SHEDOS_BOOT_DIR="$t10/boot" SHEDOS_MODULES_DIR="$t10/modules" \
+    SHEDOS_ESP_DIRS="$t10/esp" bash "$renderer" >/dev/null 2>&1
+if grep -qF '/ShedOS Linux' "$t10/esp/limine.conf" \
+   && ! grep -qF '/ShedOS Linux (Fallback)' "$t10/esp/limine.conf"; then
+    _ok K10_uefi_gates_missing_fallback
+else
+    _fail K10_uefi_gates_missing_fallback "fallback entry emitted without its UKI on the ESP"
+fi
+rm -rf "$t10"
+
+# ---------------------------------------------------------------------------
+# K11: UEFI — no UKI on a live ESP means zero entries → last-known-good guard
+#      fires (non-zero exit, existing config untouched).
+# ---------------------------------------------------------------------------
+t11=$(mktemp -d)
+mkdir -p "$t11/modules/9.9-zen" "$t11/boot" "$t11/esp/EFI/Linux"
+echo linux-zen > "$t11/modules/9.9-zen/pkgbase"
+printf 'GOOD-config\n' > "$t11/esp/limine.conf"
+rc=0
+SHEDOS_FIRMWARE=uefi SHEDOS_BOOT_DIR="$t11/boot" SHEDOS_MODULES_DIR="$t11/modules" \
+    SHEDOS_ESP_DIRS="$t11/esp" bash "$renderer" >/dev/null 2>&1 || rc=$?
+if (( rc != 0 )) && [[ "$(cat "$t11/esp/limine.conf")" == GOOD-config ]]; then
+    _ok K11_uefi_guard_keeps_last_good
+else
+    _fail K11_uefi_guard_keeps_last_good "missing UKI did not trip the last-known-good guard (rc=$rc)"
+fi
+rm -rf "$t11"
+
+# ---------------------------------------------------------------------------
+# K12: UEFI — a present recovery UKI gets its own entry, and it does NOT
+#      satisfy the guard on its own (recovery without a kernel keeps last-good).
+# ---------------------------------------------------------------------------
+t12=$(mktemp -d)
+mkdir -p "$t12/modules/9.9-zen" "$t12/boot" "$t12/esp/EFI/Linux"
+echo linux-zen > "$t12/modules/9.9-zen/pkgbase"
+: > "$t12/esp/limine.conf"
+: > "$t12/esp/EFI/Linux/shedos-linux-zen.efi"
+: > "$t12/esp/EFI/Linux/shedos-recovery.efi"
+SHEDOS_FIRMWARE=uefi SHEDOS_BOOT_DIR="$t12/boot" SHEDOS_MODULES_DIR="$t12/modules" \
+    SHEDOS_ESP_DIRS="$t12/esp" bash "$renderer" >/dev/null 2>&1
+if grep -qF '/ShedOS Recovery' "$t12/esp/limine.conf" \
+   && grep -qF 'image_path: boot():/EFI/Linux/shedos-recovery.efi' "$t12/esp/limine.conf"; then
+    _ok K12_uefi_recovery_entry
+else
+    _fail K12_uefi_recovery_entry "recovery UKI entry missing"
+fi
+# recovery-only (no kernel UKI) keeps last-known-good
+t12b=$(mktemp -d); mkdir -p "$t12b/modules/9.9-zen" "$t12b/boot" "$t12b/esp/EFI/Linux"
+echo linux-zen > "$t12b/modules/9.9-zen/pkgbase"
+printf 'GOOD\n' > "$t12b/esp/limine.conf"; : > "$t12b/esp/EFI/Linux/shedos-recovery.efi"
+rc=0
+SHEDOS_FIRMWARE=uefi SHEDOS_BOOT_DIR="$t12b/boot" SHEDOS_MODULES_DIR="$t12b/modules" \
+    SHEDOS_ESP_DIRS="$t12b/esp" bash "$renderer" >/dev/null 2>&1 || rc=$?
+if (( rc != 0 )) && [[ "$(cat "$t12b/esp/limine.conf")" == GOOD ]]; then
+    _ok K12b_recovery_only_keeps_last_good
+else
+    _fail K12b_recovery_only_keeps_last_good "recovery-only menu overwrote the good config (rc=$rc)"
+fi
+rm -rf "$t12" "$t12b"
+
+# ---------------------------------------------------------------------------
+# K13: UEFI — the verbatim extra-entries append (Windows chainload) still
+#      lands after the efi_chainload kernel entries.
+# ---------------------------------------------------------------------------
+t13=$(mktemp -d)
+mkdir -p "$t13/modules/9.9-zen" "$t13/boot" "$t13/esp/EFI/Linux"
+echo linux-zen > "$t13/modules/9.9-zen/pkgbase"
+: > "$t13/esp/limine.conf"; : > "$t13/esp/EFI/Linux/shedos-linux-zen.efi"
+printf '/Windows\n    protocol: efi_chainload\n    image_path: uuid(AAAA):/EFI/Microsoft/Boot/bootmgfw.efi\n' \
+    > "$t13/extra.conf"
+SHEDOS_FIRMWARE=uefi SHEDOS_EXTRA_ENTRIES="$t13/extra.conf" \
+    SHEDOS_BOOT_DIR="$t13/boot" SHEDOS_MODULES_DIR="$t13/modules" \
+    SHEDOS_ESP_DIRS="$t13/esp" bash "$renderer" >/dev/null 2>&1
+if grep -qF '/Windows' "$t13/esp/limine.conf"; then
+    _ok K13_uefi_windows_append
+else
+    _fail K13_uefi_windows_append "Windows chainload entry not appended on the UEFI path"
+fi
+rm -rf "$t13"
 
 # ---------------------------------------------------------------------------
 # SB1: Secure Boot / TPM2 / UKI tooling is in the base closure roots so it

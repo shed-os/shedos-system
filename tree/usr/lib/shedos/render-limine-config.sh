@@ -32,6 +32,13 @@ LIMINE_CONF=$BOOT_DIR/limine.conf
 DEFAULT_FILE=${SHEDOS_KERNEL_DEFAULT_FILE:-/var/lib/shedos/kernel-default}
 TIMEOUT=${SHEDOS_LIMINE_TIMEOUT:-3}
 
+# uefi → efi_chainload a signed UKI (build-uki.sh placed + verified it on the
+# ESP; its presence here IS the verified contract — the renderer never copies
+# or re-verifies it). bios → copy raw vmlinuz/initramfs and boot protocol:
+# linux. The installer passes the target's firmware explicitly; a bare run
+# self-detects from the running host.
+FIRMWARE=${SHEDOS_FIRMWARE:-$([[ -d /sys/firmware/efi ]] && echo uefi || echo bios)}
+
 # Discover installed kernel pkgbases.
 mapfile -t pkgbases < <(
     for f in "$MODULES_DIR"/*/pkgbase; do
@@ -77,26 +84,29 @@ for k in "${pkgbases[@]}"; do
     _add "$k"
 done
 
-# Resolve cmdline.
-cmdline=${SHEDOS_LIMINE_CMDLINE:-}
-if [[ -z $cmdline && -f $LIMINE_CONF ]]; then
-    cmdline=$(awk '
-        /^[[:space:]]*kernel_cmdline:/ {
-            sub(/^[[:space:]]*kernel_cmdline:[[:space:]]*/, "", $0)
-            print
-            exit
-        }' "$LIMINE_CONF")
+# Resolve cmdline. UEFI bakes it into the signed UKI, so this is BIOS-only.
+cmdline=""
+cmdline_fallback=""
+if [[ $FIRMWARE == bios ]]; then
+    cmdline=${SHEDOS_LIMINE_CMDLINE:-}
+    if [[ -z $cmdline && -f $LIMINE_CONF ]]; then
+        cmdline=$(awk '
+            /^[[:space:]]*kernel_cmdline:/ {
+                sub(/^[[:space:]]*kernel_cmdline:[[:space:]]*/, "", $0)
+                print
+                exit
+            }' "$LIMINE_CONF")
+    fi
+    if [[ -z $cmdline ]]; then
+        echo "render-limine-config: no cmdline available — set SHEDOS_LIMINE_CMDLINE or seed $LIMINE_CONF first" >&2
+        exit 1
+    fi
+    # Fallback entries strip quiet/splash so the boot log is visible. Use
+    # word-boundary matches so removing `quiet` doesn't consume the trailing
+    # space `splash` would otherwise match against.
+    cmdline_fallback=$(printf '%s\n' "$cmdline" \
+        | sed -E 's/\<(quiet|splash)\>//g; s/[[:space:]]+/ /g; s/^ //; s/ $//')
 fi
-if [[ -z $cmdline ]]; then
-    echo "render-limine-config: no cmdline available — set SHEDOS_LIMINE_CMDLINE or seed $LIMINE_CONF first" >&2
-    exit 1
-fi
-
-# Fallback entries strip quiet/splash so the boot log is visible.
-# Use word-boundary matches so removing `quiet` doesn't consume the
-# trailing space `splash` would otherwise match against.
-cmdline_fallback=$(printf '%s\n' "$cmdline" \
-    | sed -E 's/\<(quiet|splash)\>//g; s/[[:space:]]+/ /g; s/^ //; s/ $//')
 
 _display_name() {
     case "$1" in
@@ -176,6 +186,7 @@ failed=0
 # the FAT volume full forever. Drop anything whose pkgbase isn't in the
 # live boot order, freeing space before the current set is copied in.
 for d in "${esp_img_dirs[@]}"; do
+    [[ $FIRMWARE == bios ]] || continue   # UEFI ships UKIs, not raw images
     for img in "$d"/vmlinuz-* "$d"/initramfs-*.img; do
         [[ -e $img ]] || continue
         base=${img##*/}
@@ -198,6 +209,7 @@ done
 # growing default (truncated → full) must wait for a shrinking sibling.
 declare -a _shrink=() _grow=()
 for k in "${ordered[@]}"; do
+    [[ $FIRMWARE == bios ]] || continue   # UEFI: build-uki.sh owns ESP placement
     for f in "vmlinuz-$k" "initramfs-$k.img" "initramfs-$k-fallback.img"; do
         src=$BOOT_DIR/$f
         [[ -f $src ]] || continue
@@ -225,14 +237,33 @@ _on_all_esps() {
     done
     return 0
 }
+# A UEFI UKI is bootable when build-uki.sh has placed it on EVERY ESP. The
+# renderer never copies or re-verifies it — its presence is the contract.
+_uki_on_all_esps() {
+    local f=$1 d
+    for d in "${esp_img_dirs[@]}"; do
+        [[ -f $d/EFI/Linux/$f ]] || return 1
+    done
+    (( ${#esp_img_dirs[@]} > 0 ))
+}
 declare -A img_ok=()
-for k in "${ordered[@]}"; do
-    _on_all_esps "vmlinuz-$k" || continue
-    [[ -f $BOOT_DIR/initramfs-$k.img ]] && _on_all_esps "initramfs-$k.img" \
-        && img_ok[$k:default]=1
-    [[ -f $BOOT_DIR/initramfs-$k-fallback.img ]] && _on_all_esps "initramfs-$k-fallback.img" \
-        && img_ok[$k:fallback]=1
-done
+if [[ $FIRMWARE == bios ]]; then
+    for k in "${ordered[@]}"; do
+        _on_all_esps "vmlinuz-$k" || continue
+        [[ -f $BOOT_DIR/initramfs-$k.img ]] && _on_all_esps "initramfs-$k.img" \
+            && img_ok[$k:default]=1
+        [[ -f $BOOT_DIR/initramfs-$k-fallback.img ]] && _on_all_esps "initramfs-$k-fallback.img" \
+            && img_ok[$k:fallback]=1
+    done
+else
+    for k in "${ordered[@]}"; do
+        _uki_on_all_esps "shedos-$k.efi" && img_ok[$k:default]=1
+        _uki_on_all_esps "shedos-$k-fallback.efi" && img_ok[$k:fallback]=1
+    done
+fi
+# The recovery UKI (when present) is its own entry — see the render loop.
+recovery_ok=""
+_uki_on_all_esps "shedos-recovery.efi" && recovery_ok=1
 
 # ── Render the config, gating each entry on its image being present ───
 tmp=$(mktemp)
@@ -249,7 +280,15 @@ entries=0
     for k in "${ordered[@]}"; do
         name=$(_display_name "$k")
         if [[ -n ${img_ok[$k:default]:-} ]]; then
-            cat <<EOF
+            if [[ $FIRMWARE == uefi ]]; then
+                cat <<EOF
+/$name
+    protocol: efi_chainload
+    image_path: boot():/EFI/Linux/shedos-$k.efi
+
+EOF
+            else
+                cat <<EOF
 /$name
     protocol: linux
     kernel_path: boot():/vmlinuz-$k
@@ -257,13 +296,22 @@ entries=0
     module_path: boot():/initramfs-$k.img
 
 EOF
+            fi
             entries=$((entries + 1))
         fi
-        # Recovery entry only when its fallback image is actually present
-        # on the ESP: a stock-linux kernel ships none, and a failed or
-        # oversized copy must never dead-end the boot.
+        # Fallback entry only when its image/UKI is on the ESP: a stock-linux
+        # kernel ships none, and a failed or oversized copy must never
+        # dead-end the boot.
         if [[ -n ${img_ok[$k:fallback]:-} ]]; then
-            cat <<EOF
+            if [[ $FIRMWARE == uefi ]]; then
+                cat <<EOF
+/$name (Fallback)
+    protocol: efi_chainload
+    image_path: boot():/EFI/Linux/shedos-$k-fallback.efi
+
+EOF
+            else
+                cat <<EOF
 /$name (Fallback)
     protocol: linux
     kernel_path: boot():/vmlinuz-$k
@@ -271,14 +319,28 @@ EOF
     module_path: boot():/initramfs-$k-fallback.img
 
 EOF
+            fi
             entries=$((entries + 1))
         fi
     done
 
+    # The pinned recovery UKI (UEFI), reachable when a kernel/config update
+    # leaves the primary menu broken. It does NOT count toward `entries`:
+    # recovery supplements the kernel menu, it never justifies overwriting a
+    # good menu with a recovery-only one (the entries==0 guard below).
+    if [[ -n $recovery_ok ]]; then
+        cat <<EOF
+/ShedOS Recovery
+    protocol: efi_chainload
+    image_path: boot():/EFI/Linux/shedos-recovery.efi
+
+EOF
+    fi
+
     # Verbatim extra entries (e.g. the Windows chainload the installer
     # writes on dual-boot machines). Appended on every render so they
     # survive the wholesale rewrite above.
-    extra=/etc/shedos/limine-extra-entries.conf
+    extra=${SHEDOS_EXTRA_ENTRIES:-/etc/shedos/limine-extra-entries.conf}
     if [[ -f $extra ]]; then
         echo
         cat "$extra"
