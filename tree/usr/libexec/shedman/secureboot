@@ -1,22 +1,31 @@
 #!/usr/bin/env bash
-# shedman secureboot; manage this machine's Secure Boot signing keys.
+# shedman secureboot; report this machine's Secure Boot state and verify the
+# signed boot images Limine chainloads.
 
 set -uo pipefail
 
 PROG="shedman secureboot"
+# The per-box Secure Boot db keypair lives in sbctl's store; build-uki.sh
+# verifies every UKI against db.pem, so we use the same anchor here.
+KEYDIR=${SHEDOS_SECUREBOOT_KEYDIR:-/var/lib/sbctl/keys/db}
+BOOTCTL=${SHEDOS_SECUREBOOT_BOOTCTL:-bootctl}
+SBVERIFY=${SHEDOS_SECUREBOOT_SBVERIFY:-sbverify}
+# ESP roots that hold the signed UKIs, same discovery the placer/renderer use.
+ESP_DIRS=${SHEDOS_ESP_DIRS:-/boot/efi /efi}
 
 case "${1:-}" in
     --help-summary)
-        echo "manage Secure Boot keys and signing for the boot chain"
+        echo "report Secure Boot state and verify the signed boot images"
         exit 0
         ;;
     --complete-bash|--complete-zsh)
-        printf '%s\n' --status --help -h
+        printf '%s\n' status verify --help -h
         exit 0
         ;;
     --complete-fish)
         cat <<'EOF'
---status	show Secure Boot enrollment and signing status
+status	show Secure Boot state, key setup, and image signatures
+verify	check every boot image signature and the Secure Boot state
 --help	show usage
 -h	show usage
 EOF
@@ -24,17 +33,122 @@ EOF
         ;;
     --help|-h|"")
         cat <<EOF
-Usage: sudo $PROG --status
+Usage: $PROG status
+       $PROG verify
 
-Manages this machine's Secure Boot signing keys and verifies the boot
-chain is signed. Full enrollment lands in a later release.
+Reports this machine's Secure Boot state and checks that the signed boot
+images Limine loads are intact. Key enrollment and re-signing land in a
+later release.
 
-  --status                     show enrollment and signing status
+  status                       show Secure Boot state, keys, and signatures
+  verify                       check every image signature and the live
+                               Secure Boot state; exits non-zero if anything
+                               is wrong
   -h, --help                   show this help
 EOF
         exit 0
         ;;
 esac
 
-echo "$PROG: Secure Boot management is not yet wired on this release." >&2
-exit 0
+_die() { echo "$PROG: $1" >&2; exit "${2:-1}"; }
+
+# BIOS boxes have no Secure Boot at all. FORCE_BIOS/FORCE_UEFI let the tests
+# pin the firmware mode regardless of the host's own efivars.
+_is_uefi() {
+    [[ -n ${SHEDOS_SECUREBOOT_FORCE_BIOS:-} ]] && return 1
+    [[ -d /sys/firmware/efi/efivars || -n ${SHEDOS_SECUREBOOT_FORCE_UEFI:-} ]]
+}
+
+# Parse `bootctl status` -> on | off | setup. setup = firmware in Setup Mode
+# (platform key cleared, ready to enroll).
+_sb_state() {
+    local line
+    line=$("$BOOTCTL" status 2>/dev/null | grep -i 'Secure Boot:')
+    if grep -qi 'setup' <<<"$line"; then echo setup
+    elif grep -qiE 'enabled|active' <<<"$line"; then echo on
+    else echo off
+    fi
+}
+
+_keys_present() { [[ -s $KEYDIR/db.pem && -s $KEYDIR/db.key ]]; }
+
+# First ESP root that holds an /EFI/Linux UKI directory.
+_esp_root() {
+    local d
+    for d in $ESP_DIRS; do
+        [[ -d $d/EFI/Linux ]] && { echo "$d"; return 0; }
+    done
+    return 1
+}
+
+_list_ukis() {
+    local root
+    root=$(_esp_root) || return 0
+    shopt -s nullglob
+    printf '%s\n' "$root"/EFI/Linux/shedos-*.efi
+    shopt -u nullglob
+}
+
+_cmd_status() {
+    local state; state=$(_sb_state)
+    case "$state" in
+        on)    echo "Secure Boot: on" ;;
+        setup) echo "Secure Boot: off (firmware in Setup Mode — ready to enroll)" ;;
+        *)     echo "Secure Boot: off" ;;
+    esac
+    if _keys_present; then
+        echo "keys: set up for this machine"
+    else
+        echo "keys: not set up for this machine"
+    fi
+    local u count=0 bad=0
+    while IFS= read -r u; do
+        [[ -z $u ]] && continue
+        ((count++))
+        "$SBVERIFY" --cert "$KEYDIR/db.pem" "$u" >/dev/null 2>&1 || ((bad++))
+    done < <(_list_ukis)
+    if (( count == 0 )); then
+        echo "boot images: none placed yet"
+    elif (( bad == 0 )); then
+        echo "boot images: $count signed and valid"
+    else
+        echo "boot images: $bad of $count NOT valid"
+    fi
+}
+
+# verify: the doctor/CI primitive. Refuse on BIOS (rc 2). Exit 1 when Secure
+# Boot is off while keys are enrolled, or any placed UKI fails its signature;
+# exit 0 only when the whole chain is sound.
+_cmd_verify() {
+    _is_uefi || _die "this is a BIOS box — Secure Boot does not apply" 2
+    local state; state=$(_sb_state)
+    local rc=0
+    if _keys_present && [[ $state != on ]]; then
+        echo "$PROG: Secure Boot is off but this box has keys enrolled" >&2
+        rc=1
+    fi
+    local u count=0 bad=0
+    while IFS= read -r u; do
+        [[ -z $u ]] && continue
+        ((count++))
+        if "$SBVERIFY" --cert "$KEYDIR/db.pem" "$u" >/dev/null 2>&1; then
+            echo "ok: $(basename "$u")"
+        else
+            echo "$PROG: NOT valid: $(basename "$u")" >&2
+            ((bad++))
+        fi
+    done < <(_list_ukis)
+    (( bad > 0 )) && rc=1
+    (( rc == 0 )) && echo "boot chain verified: Secure Boot on, $count image(s) valid"
+    return $rc
+}
+
+case "$1" in
+    status) _cmd_status ;;
+    verify) _cmd_verify ;;
+    *)
+        echo "$PROG: unknown subcommand: $1" >&2
+        echo "Try: $PROG --help" >&2
+        exit 2
+        ;;
+esac
