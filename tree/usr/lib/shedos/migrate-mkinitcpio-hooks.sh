@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-conf=/etc/mkinitcpio.conf
+conf=${SHEDOS_MKINITCPIO_CONF:-/etc/mkinitcpio.conf}
 [[ -f $conf ]] || exit 0
 
 hooks_line=$(grep -E '^HOOKS=' "$conf" | head -1 || true)
@@ -34,6 +34,19 @@ if [[ " $hooks_line " == *' kms '* ]]; then
     mkdir -p /var/lib/shedos
     : > /var/lib/shedos/.mkinitcpio-regen-needed
     echo "shedos: removed kms from mkinitcpio HOOKS (firmware-slim initramfs)" >&2
+    hooks_line=$(grep -E '^HOOKS=' "$conf" | head -1 || true)
+fi
+
+# A Unified Kernel Image is one signed file, so CPU microcode can no longer
+# ride as a separate Limine module — it has to be bundled into the initramfs
+# via the `microcode` hook. Insert it before `block` (it must precede the
+# rootfs setup). Runs on already-systemd boxes too, so it sits before the exit
+# below. Idempotent; flags a regen so the next build re-bundles the ucode.
+if [[ " $hooks_line " != *' microcode '* ]]; then
+    [[ -e "${conf}.shedos-pre-migration" ]] || cp -a "$conf" "${conf}.shedos-pre-migration"
+    sed -i -E '/^HOOKS=/ s/\bblock\b/microcode block/' "$conf"
+    mkdir -p /var/lib/shedos 2>/dev/null && : > /var/lib/shedos/.mkinitcpio-regen-needed 2>/dev/null || true
+    echo "shedos: added microcode to mkinitcpio HOOKS (bundles CPU microcode into the UKI)" >&2
     hooks_line=$(grep -E '^HOOKS=' "$conf" | head -1 || true)
 fi
 
