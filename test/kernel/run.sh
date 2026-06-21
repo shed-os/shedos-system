@@ -209,6 +209,52 @@ fi
 rm -rf "$t8"
 
 # ---------------------------------------------------------------------------
+# SB1: Secure Boot / TPM2 / UKI tooling is in the base closure roots so it
+#      lands on every install — sbctl + tpm2-tools backends, and systemd-ukify
+#      the single signer that sbsigns + PCR-11-signs the UKI.
+# ---------------------------------------------------------------------------
+for pkg in sbctl tpm2-tools systemd-ukify; do
+    if grep -qxF "$pkg" "$base_txt"; then
+        _ok "SB1_base_has_$pkg"
+    else
+        _fail "SB1_base_has_$pkg" "missing from packages/official/base.txt"
+    fi
+done
+
+# ---------------------------------------------------------------------------
+# SB2: shedos-system declares the same three as runtime depends so they're
+#      present when the secureboot/tpm2 verbs shell out to them.
+# ---------------------------------------------------------------------------
+sys_pkgbuild=$repo_root/packaging/shedos-system/PKGBUILD
+for pkg in sbctl tpm2-tools systemd-ukify; do
+    if grep -qE "^\s*'$pkg'" "$sys_pkgbuild"; then
+        _ok "SB2_depends_has_$pkg"
+    else
+        _fail "SB2_depends_has_$pkg" "missing from shedos-system depends()"
+    fi
+done
+
+# ---------------------------------------------------------------------------
+# SB3: the secureboot + tpm2 verbs are allowlisted AND their executables exist
+#      — the package() install loop fails the build if a name has no tree/
+#      file, so assert both halves together.
+# ---------------------------------------------------------------------------
+libexec_sys=$repo_root/packaging/shedos-system/tree/usr/libexec/shedman
+for verb in secureboot tpm2; do
+    if awk '/_libexec_shedman=\(/,/^[[:space:]]*\)/' "$sys_pkgbuild" \
+            | grep -qE "(^|[[:space:]])$verb([[:space:]]|\$)"; then
+        _ok "SB3_allowlist_has_$verb"
+    else
+        _fail "SB3_allowlist_has_$verb" "not in _libexec_shedman allowlist"
+    fi
+    if [[ -x $libexec_sys/$verb ]]; then
+        _ok "SB3_verb_file_$verb"
+    else
+        _fail "SB3_verb_file_$verb" "missing or non-executable $libexec_sys/$verb"
+    fi
+done
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 total=$((pass + fail))

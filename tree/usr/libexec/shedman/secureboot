@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# shedman secureboot; manage this machine's Secure Boot signing keys.
+
+set -uo pipefail
+
+PROG="shedman secureboot"
+
+case "${1:-}" in
+    --help-summary)
+        echo "manage Secure Boot keys and signing for the boot chain"
+        exit 0
+        ;;
+    --complete-bash|--complete-zsh)
+        printf '%s\n' --status --help -h
+        exit 0
+        ;;
+    --complete-fish)
+        cat <<'EOF'
+--status	show Secure Boot enrollment and signing status
+--help	show usage
+-h	show usage
+EOF
+        exit 0
+        ;;
+    --help|-h|"")
+        cat <<EOF
+Usage: sudo $PROG --status
+
+Manages this machine's Secure Boot signing keys and verifies the boot
+chain is signed. Full enrollment lands in a later release.
+
+  --status                     show enrollment and signing status
+  -h, --help                   show this help
+EOF
+        exit 0
+        ;;
+esac
+
+echo "$PROG: Secure Boot management is not yet wired on this release." >&2
+exit 0

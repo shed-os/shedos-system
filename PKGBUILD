@@ -54,6 +54,9 @@ depends=(
     'imagemagick'      # theme_renderer.py shells out to `magick` to
                        # generate wallpaper-blurred.png when a user-set
                        # wallpaper has no shipped -blurred companion
+    'sbctl'            # secureboot verb manages the SB key set + verifies
+    'tpm2-tools'       # tpm2 verb's TPM2 unlock primitives
+    'systemd-ukify'    # single UKI signer (sbsign + PCR-11 .pcrsig, one pass)
 )
 # Hard conflict with power-profiles-daemon: it competes with tlp for
 # CPU governor ownership. `replaces=` lets pacman do a transactional
@@ -103,7 +106,7 @@ package() {
     install -d "$pkgdir/usr/libexec/shedman"
     local _libexec_shedman=(
         apply config conflicts datetime db dock doctor fingerprint health install kernel lock login logs
-        rollback services snapshot status theme uninstall update updates upgrade-history
+        rollback secureboot services snapshot status theme tpm2 uninstall update updates upgrade-history
         _config-sync _config-review
     )
     local _name

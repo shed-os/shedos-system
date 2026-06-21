@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# shedman tpm2; manage TPM2-backed disk unlock for the encrypted root.
+
+set -uo pipefail
+
+PROG="shedman tpm2"
+
+case "${1:-}" in
+    --help-summary)
+        echo "manage TPM2-backed unlock for the encrypted disk"
+        exit 0
+        ;;
+    --complete-bash|--complete-zsh)
+        printf '%s\n' --status --help -h
+        exit 0
+        ;;
+    --complete-fish)
+        cat <<'EOF'
+--status	show TPM2 unlock enrollment status
+--help	show usage
+-h	show usage
+EOF
+        exit 0
+        ;;
+    --help|-h|"")
+        cat <<EOF
+Usage: sudo $PROG --status
+
+Manages TPM2-backed unlock so the encrypted disk opens without typing a
+passphrase on a trusted boot. The passphrase and recovery key always stay
+enrolled as fallback. Full enrollment lands in a later release.
+
+  --status                     show TPM2 unlock enrollment status
+  -h, --help                   show this help
+EOF
+        exit 0
+        ;;
+esac
+
+echo "$PROG: TPM2 unlock management is not yet wired on this release." >&2
+exit 0
