@@ -105,6 +105,20 @@ if (( rc == 2 )) && grep -qi 'BIOS' <<<"$out"; then _ok C4_verify_bios_refuses
 else _fail C4_verify_bios_refuses "rc=$rc out=$out (expected 2)"; fi
 rm -rf "$t"
 
+# --- C5: verify with no placed images fails loud, never a vacuous pass -------
+# (the root-only ESP means a non-root run finds zero — must not report success)
+t=$(mktemp -d)
+mkdir -p "$t/keys" "$t/stubs" "$t/esp/EFI/Linux"
+_stub_bootctl "$t/stubs/bootctl" enabled user
+_stub_sbverify "$t/stubs/sbverify"
+: > "$t/keys/db.pem"; : > "$t/keys/db.key"
+_env "$t"
+out=$(env "${E[@]}" SHEDOS_SECUREBOOT_FORCE_UEFI=1 "$tool" verify 2>&1); rc=$?
+if (( rc == 1 )) && grep -qi 'no boot images' <<<"$out" \
+   && ! grep -qi 'verified' <<<"$out"; then _ok C5_verify_no_images_not_vacuous
+else _fail C5_verify_no_images_not_vacuous "rc=$rc out=$out (expected 1, no vacuous pass)"; fi
+rm -rf "$t"
+
 total=$((pass + fail))
 echo
 echo "secureboot: $pass/$total passed"

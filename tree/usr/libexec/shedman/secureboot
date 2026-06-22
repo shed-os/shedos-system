@@ -139,6 +139,12 @@ _cmd_verify() {
         fi
     done < <(_list_ukis)
     (( bad > 0 )) && rc=1
+    # Never claim a verified chain with nothing to verify — the ESP is root-only,
+    # so a non-root run finds zero and would otherwise report a false success.
+    if (( count == 0 )); then
+        echo "$PROG: no boot images found on the ESP — run with sudo if Secure Boot is set up here" >&2
+        return 1
+    fi
     (( rc == 0 )) && echo "boot chain verified: Secure Boot on, $count image(s) valid"
     return $rc
 }
