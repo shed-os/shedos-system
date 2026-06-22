@@ -228,6 +228,79 @@ _cmd_change_passphrase() {
     echo "$PROG: done. TPM2 unlock (if enrolled) is unaffected — no re-enrol needed."
 }
 
+# An older box installed before tokens shipped has untagged recovery slots.
+# Find them by testing each slot against the current recovery key and tag them,
+# so rotation can target exactly the recovery slots and nothing else.
+_backfill_recovery_tokens() {  # $1=dev $2=current-recovery-key
+    local dev=$1 oldkey=$2 slot
+    for slot in $(_active_slots "$dev"); do
+        if printf '%s' "$oldkey" | cryptsetup open --test-passphrase --key-slot "$slot" --key-file=- "$dev" 2>/dev/null; then
+            _tag_slot "$dev" "$slot" shedos-recovery
+        fi
+    done
+}
+
+_cmd_rotate_recovery() {
+    _require_root rotate-recovery
+    _load_containers
+    local pass dev newkey oldrec=""
+    pass=$(_read_secret "Current passphrase: ")
+
+    # Tag the recovery slots on any container that isn't labelled yet.
+    for dev in "${CONTAINERS[@]}"; do
+        if [[ -z $(_slots_with_token "$dev" shedos-recovery) ]]; then
+            [[ -n $oldrec ]] || oldrec=$(_read_secret "Current recovery key (to locate the old slots): ")
+            _backfill_recovery_tokens "$dev" "$oldrec"
+        fi
+    done
+
+    newkey=$(_gen_recovery)
+    cat <<EOF
+
+  Your new recovery key:
+
+      $newkey
+
+  Write it down and keep it somewhere safe, separate from this machine. The old
+  recovery key stops working once you confirm.
+
+EOF
+    _confirm "Type 'yes' once you have written it down: "
+
+    local -a forms
+    mapfile -t forms < <(_recovery_forms "$newkey")
+    for dev in "${CONTAINERS[@]}"; do
+        local before old_slots f kf s
+        before=$(_active_slots "$dev")
+        old_slots=$(_slots_with_token "$dev" shedos-recovery)
+        # ADD every new form first (authorized by the passphrase), so the old key
+        # keeps working until the new one is proven.
+        for f in "${forms[@]}"; do
+            kf=$(_mk_keyfile "$f")
+            if ! printf '%s' "$pass" | cryptsetup luksAddKey --key-file=- "$dev" "$kf" 2>/dev/null; then
+                rm -f "$kf"
+                _die "could not add the new recovery key to $dev — nothing was removed; your old key still works" 1
+            fi
+            rm -f "$kf"
+        done
+        # Tag the newly-added slots.
+        for s in $(comm -13 <(printf '%s\n' "$before") <(_active_slots "$dev")); do
+            _tag_slot "$dev" "$s" shedos-recovery
+        done
+        # Prove a new form opens the disk before retiring anything.
+        if ! printf '%s' "${forms[0]}" | cryptsetup open --test-passphrase --key-file=- "$dev" 2>/dev/null; then
+            _die "the new recovery key did not verify on $dev — the old key was left intact" 1
+        fi
+        # Retire the old recovery slots and clear their now-dangling tokens.
+        for s in $old_slots; do
+            printf '%s' "$pass" | cryptsetup luksKillSlot --key-file=- "$dev" "$s" 2>/dev/null
+            _untag_slot "$dev" "$s"
+        done
+        echo "$PROG: recovery key rotated on $dev"
+    done
+    echo "$PROG: done. Store the new recovery key somewhere safe."
+}
+
 # When sourced (the unit tests do this to reach the functions above), stop here
 # with the functions defined; only a direct run reaches the help + dispatch.
 [[ ${BASH_SOURCE[0]} == "${0}" ]] || return 0

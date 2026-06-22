@@ -121,6 +121,20 @@ _untag_slot /dev/x 1   # token "0" references slot 1
 if grep -q 'token remove --token-id 0 /dev/x' "$d/cryptsetup.log" 2>/dev/null; then _ok TK3_untag; else _fail TK3_untag "$(grep token "$d/cryptsetup.log" 2>/dev/null)"; fi
 PATH=$_tk_old; unset DUMP_JSON
 
+# R1-R3: rotate-recovery command structure (the full proof is the real-container
+# run in the Makefile/dev box; the static stub can only check the sequence).
+d=$(_mk_sandbox); printf '/dev/mapper/root\n' > "$d/containers"
+rjson='{"keyslots":{"0":{},"1":{},"2":{}},"tokens":{"0":{"type":"shedos-recovery","keyslots":["1"]},"1":{"type":"shedos-recovery","keyslots":["2"]}}}'
+printf 'pw\n' | DUMP_JSON="$rjson" _run "$d" rotate-recovery --yes >/dev/null 2>&1
+addline=$(grep -n luksAddKey "$d/cryptsetup.log" 2>/dev/null | tail -1 | cut -d: -f1)
+killline=$(grep -n luksKillSlot "$d/cryptsetup.log" 2>/dev/null | head -1 | cut -d: -f1)
+if [[ -z $killline || ( -n $addline && $addline -lt $killline ) ]]; then _ok R1_add_before_kill; else _fail R1_add_before_kill "add@$addline kill@$killline"; fi
+if grep -qE 'luksKillSlot.* 1$' "$d/cryptsetup.log" 2>/dev/null && grep -qE 'luksKillSlot.* 2$' "$d/cryptsetup.log" 2>/dev/null; then _ok R2_kills_old_recovery; else _fail R2_kills_old_recovery "$(grep luksKillSlot "$d/cryptsetup.log" 2>/dev/null)"; fi
+# R3: an untagged box triggers the backfill (test-passphrase per slot).
+d=$(_mk_sandbox); printf '/dev/mapper/root\n' > "$d/containers"
+printf 'pw\noldrec\n' | DUMP_JSON='{"keyslots":{"0":{},"1":{}},"tokens":{}}' _run "$d" rotate-recovery --yes >/dev/null 2>&1
+if grep -q -- '--test-passphrase --key-slot' "$d/cryptsetup.log" 2>/dev/null; then _ok R3_backfill; else _fail R3_backfill "$(grep -i test "$d/cryptsetup.log" 2>/dev/null)"; fi
+
 total=$((pass + fail))
 echo
 echo "key: $pass/$total passed"
