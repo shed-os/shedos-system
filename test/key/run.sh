@@ -170,6 +170,11 @@ if [[ $out == *"shedman tpm2"* ]] && ! grep -q luksKillSlot "$d/cryptsetup.log" 
 d=$(_mk_sandbox); printf '/dev/mapper/root\n' > "$d/containers"
 out=$(DUMP_JSON='{"keyslots":{"0":{},"5":{}},"tokens":{"0":{"type":"systemd-tpm2","keyslots":["5"]}}}' _run "$d" remove-key 0 --yes 2>&1); rc=$?
 if [[ $rc -eq 1 && $out == *last* ]] && ! grep -q luksKillSlot "$d/cryptsetup.log" 2>/dev/null; then _ok RM4_last_durable; else _fail RM4_last_durable "rc=$rc out=$out"; fi
+# RM5: a FIDO2 slot is removed by remove-key itself — no raw-tool defer, and the
+# last-durable guard does not fire on it (the passphrase remains).
+d=$(_mk_sandbox); printf '/dev/mapper/root\n' > "$d/containers"
+out=$(printf 'authpw\n' | DUMP_JSON='{"keyslots":{"0":{},"5":{}},"tokens":{"0":{"type":"systemd-fido2","keyslots":["5"]}}}' _run "$d" remove-key 5 --yes 2>&1)
+if grep -q 'luksKillSlot --key-file=- /dev/mapper/root 5' "$d/cryptsetup.log" 2>/dev/null && [[ $out != *systemd-cryptenroll* ]]; then _ok RM5_fido2_removed; else _fail RM5_fido2_removed "$out | $(cat "$d/cryptsetup.log" 2>/dev/null)"; fi
 
 total=$((pass + fail))
 echo

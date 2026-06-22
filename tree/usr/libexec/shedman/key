@@ -361,21 +361,23 @@ _cmd_remove_key() {
         (( ${#slots[@]} <= 1 )) && _die "removing your last keyslot on $dev would lock you out — nothing to fall back to" 1
         printf '%s\n' "${slots[@]}" | grep -qx "$sel" || _die "no slot $sel on $dev (see: $PROG --status)" 1
         role=$(_role_in_json "$json" "$sel")
-        case "$role" in
-            systemd-tpm2)  _die "slot $sel is the TPM2 unlock slot — remove it with: shedman tpm2 remove" 1 ;;
-            systemd-fido2) _die "slot $sel is a FIDO2 slot — remove it with: systemd-cryptenroll --wipe-slot=$sel $dev" 1 ;;
-        esac
-        # Never strip the last interactive way in: a TPM2/FIDO2 slot can fail
-        # (firmware update, lost key), so keep at least one passphrase or
-        # recovery key. tpm2/fido2 slots were already refused above.
-        durable=0
-        for s in "${slots[@]}"; do
-            case "$(_role_in_json "$json" "$s")" in
-                systemd-tpm2|systemd-fido2) ;;
-                *) durable=$((durable + 1)) ;;
-            esac
-        done
-        (( durable <= 1 )) && _die "slot $sel is your last passphrase or recovery key on $dev — keep one (a TPM2 or FIDO2 slot alone can fail); add a new key first" 1
+        # A TPM2 slot is rotated through its own verb; everything else —
+        # passphrase, recovery, added, or a FIDO2 hardware key — remove-key
+        # handles directly.
+        [[ $role == systemd-tpm2 ]] && _die "slot $sel is the TPM2 unlock slot — remove it with: shedman tpm2 remove" 1
+        # Never strip the last interactive way in. A TPM2 or FIDO2 slot can fail
+        # (firmware update, lost key), so only a passphrase or recovery key
+        # counts — and only refuse when the slot being removed is one of those.
+        if [[ $role != systemd-fido2 ]]; then
+            durable=0
+            for s in "${slots[@]}"; do
+                case "$(_role_in_json "$json" "$s")" in
+                    systemd-tpm2|systemd-fido2) ;;
+                    *) durable=$((durable + 1)) ;;
+                esac
+            done
+            (( durable <= 1 )) && _die "slot $sel is your last passphrase or recovery key on $dev — keep one (a TPM2 or FIDO2 slot alone can fail); add a new key first" 1
+        fi
     done
     local auth; auth=$(_read_secret "An existing passphrase or recovery key (to authorize): ")
     _confirm "Type 'yes' to remove keyslot $sel from all encrypted disks: "
