@@ -301,6 +301,28 @@ EOF
     echo "$PROG: done. Store the new recovery key somewhere safe."
 }
 
+_cmd_add_key() {
+    _require_root add-key
+    _load_containers
+    local auth new dev
+    auth=$(_read_secret "An existing passphrase (to authorize): ")
+    new=$(_read_new_secret "passphrase to add")
+    _confirm "Type 'yes' to add a passphrase keyslot to all encrypted disks: "
+    for dev in "${CONTAINERS[@]}"; do
+        local before kf s
+        before=$(_active_slots "$dev")
+        kf=$(_mk_keyfile "$new")
+        if ! printf '%s' "$auth" | cryptsetup luksAddKey --key-file=- "$dev" "$kf" 2>/dev/null; then
+            rm -f "$kf"
+            _die "could not add a keyslot to $dev (is the authorizing passphrase correct?)" 1
+        fi
+        rm -f "$kf"
+        s=$(_new_slot_after "$dev" "$before"); [[ -n $s ]] && _tag_slot "$dev" "$s" shedos-added
+        echo "$PROG: added a passphrase keyslot on $dev"
+    done
+    echo "$PROG: done. The new passphrase unlocks every disk at boot."
+}
+
 # When sourced (the unit tests do this to reach the functions above), stop here
 # with the functions defined; only a direct run reaches the help + dispatch.
 [[ ${BASH_SOURCE[0]} == "${0}" ]] || return 0

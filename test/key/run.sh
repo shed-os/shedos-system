@@ -135,6 +135,15 @@ d=$(_mk_sandbox); printf '/dev/mapper/root\n' > "$d/containers"
 printf 'pw\noldrec\n' | DUMP_JSON='{"keyslots":{"0":{},"1":{}},"tokens":{}}' _run "$d" rotate-recovery --yes >/dev/null 2>&1
 if grep -q -- '--test-passphrase --key-slot' "$d/cryptsetup.log" 2>/dev/null; then _ok R3_backfill; else _fail R3_backfill "$(grep -i test "$d/cryptsetup.log" 2>/dev/null)"; fi
 
+# A1-A2: add-key adds a passphrase slot on every container (the shedos-added
+# tagging is proven by the real-container run; a static stub can't show the new
+# slot appearing).
+d=$(_mk_sandbox); printf '/dev/mapper/root\n/dev/mapper/swap\n' > "$d/containers"
+printf 'authpw\nnewpw\nnewpw\n' | DUMP_JSON='{"keyslots":{"0":{}},"tokens":{}}' _run "$d" add-key --yes >/dev/null 2>&1
+c=$(grep -c luksAddKey "$d/cryptsetup.log" 2>/dev/null)
+if [[ $c -eq 2 ]]; then _ok A1_addkey_each; else _fail A1_addkey_each "count=$c"; fi
+if grep -qE 'authpw|newpw' "$d/cryptsetup.log" 2>/dev/null; then _fail A2_no_secret_argv "secret on argv"; else _ok A2_no_secret_argv; fi
+
 total=$((pass + fail))
 echo
 echo "key: $pass/$total passed"
