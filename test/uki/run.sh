@@ -40,17 +40,30 @@ _mk_keys() {
 _sign_dummy() { sbsign --key "$1/db.key" --cert "$1/db.pem" --output "$2" "$stub" >/dev/null 2>&1; }
 # The placer, run against a sandbox: no rebuild, lib + cert + dirs overridden.
 # A throwaway modules dir gives the placer one kernel (linux-zen) to discover,
-# unless the caller passes its own via $5.
-_run_placer() { # $1=boot $2=esp $3=cert $4=cmdline [$5=modules_dir]
-    local mods=${5:-} own="" rc
+# unless the caller passes its own via $5. The placer gates sbverify on uki.conf
+# being in signing form (not on the cert file existing), so synthesize one to
+# match: signing when a real db cert is in play, keyless otherwise. UKI_FORM
+# forces the divergent disable case — db.pem on disk yet a keyless conf.
+_run_placer() { # $1=boot $2=esp $3=cert $4=cmdline [$5=modules_dir]; env: UKI_FORM=signing|keyless
+    local mods=${5:-} own="" rc form conf
+    form=${UKI_FORM:-}
+    [[ -z $form ]] && { [[ -f $3 ]] && form=signing || form=keyless; }
+    conf=$(mktemp)
+    if [[ $form == signing ]]; then
+        printf '[UKI]\nStub=%s\nSecureBootPrivateKey=%s\nSecureBootCertificate=%s\n' \
+            "$stub" "${3%.pem}.key" "$3" > "$conf"
+    else
+        printf '[UKI]\nStub=%s\n' "$stub" > "$conf"
+    fi
     if [[ -z $mods ]]; then
         mods=$(mktemp -d); own=$mods
         mkdir -p "$mods/9.9-zen"; echo linux-zen > "$mods/9.9-zen/pkgbase"
     fi
     SHEDOS_UKI_NO_REBUILD=1 SHEDOS_UKI_PLACE_LIB="$lib" SHEDOS_MODULES_DIR="$mods" \
+    SHEDOS_UKI_CONF="$conf" \
     SHEDOS_BOOT_DIR="$1" SHEDOS_ESP_DIRS="$2" SHEDOS_DB_CERT="$3" \
     SHEDOS_KERNEL_CMDLINE_FILE="$4" bash "$placer" >/dev/null 2>&1
-    rc=$?; [[ -n $own ]] && rm -rf "$own"; return $rc
+    rc=$?; rm -f "$conf"; [[ -n $own ]] && rm -rf "$own"; return $rc
 }
 
 # ---------------------------------------------------------------------------
@@ -180,6 +193,24 @@ else
     _fail U7_sb_off_places_unsigned "no-key box did not place the unsigned UKI (rc=$rc)"
 fi
 rm -rf "$t7"
+
+# ---------------------------------------------------------------------------
+# U7b: the disable case — db.pem left on disk but a keyless uki.conf. The placer
+#      must FOLLOW uki.conf, not the cert file: skip sbverify and place the
+#      unsigned UKI, so kernel updates after `shedman secureboot disable` keep
+#      working. The old db.pem-presence gate rejected this — the bug fixed here.
+# ---------------------------------------------------------------------------
+t7b=$(mktemp -d); _mk_keys "$t7b/sb"; mkdir -p "$t7b/boot" "$t7b/esp"
+: > "$t7b/esp/limine.conf"; printf 'root=UUID=test rw\n' > "$t7b/cmdline"
+printf 'unsigned-uki\n' > "$t7b/boot/shedos-linux-zen.efi"
+UKI_FORM=keyless _run_placer "$t7b/boot" "$t7b/esp" "$t7b/sb/db.pem" "$t7b/cmdline"; rc=$?
+if (( rc == 0 )) && [[ -f $t7b/sb/db.pem ]] \
+   && cmp -s "$t7b/boot/shedos-linux-zen.efi" "$t7b/esp/EFI/Linux/shedos-linux-zen.efi"; then
+    _ok U7b_keyless_conf_places_unsigned_despite_db_cert
+else
+    _fail U7b_keyless_conf_places_unsigned_despite_db_cert "keyless uki.conf with db.pem present did not place the unsigned UKI (rc=$rc)"
+fi
+rm -rf "$t7b"
 
 # ---------------------------------------------------------------------------
 # U9/U10: the hooks are wired — 94 runs both builders PostTransaction with the

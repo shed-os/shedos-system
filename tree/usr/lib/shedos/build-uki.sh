@@ -13,8 +13,8 @@
 #   build-uki.sh --rebuild   force a full rebuild first (a caller changed the
 #                            cmdline: the apply reconciler, the backfill, recover-esp)
 #
-# Degrades on a non-Secure-Boot box (no db cert): places the unsigned UKI and
-# skips the signature check; never bricks the box.
+# Degrades on a non-Secure-Boot box (keyless uki.conf): places the unsigned UKI
+# and skips the signature check; never bricks the box.
 set -uo pipefail
 
 BOOT_DIR=${SHEDOS_BOOT_DIR:-/boot}
