@@ -144,6 +144,16 @@ c=$(grep -c luksAddKey "$d/cryptsetup.log" 2>/dev/null)
 if [[ $c -eq 2 ]]; then _ok A1_addkey_each; else _fail A1_addkey_each "count=$c"; fi
 if grep -qE 'authpw|newpw' "$d/cryptsetup.log" 2>/dev/null; then _fail A2_no_secret_argv "secret on argv"; else _ok A2_no_secret_argv; fi
 
+# F1-F2: add-key --fido2 enrolls a FIDO2 token on every container and leaves
+# crypttab alone. ShedOS unlocks from rd.luks.name on the cmdline, and
+# systemd-cryptsetup auto-tries the enrolled header token at boot (proven against
+# a software TPM), so there is nothing to wire into crypttab.
+d=$(_mk_sandbox); printf '/dev/mapper/root\n' > "$d/containers"
+printf 'orig-crypttab\n' > "$d/crypttab"
+printf 'authpw\n' | _run "$d" add-key --fido2 --yes >/dev/null 2>&1
+if grep -q -- '--fido2-device=auto /dev/mapper/root' "$d/enroll.log" 2>/dev/null; then _ok F1_fido2_enroll; else _fail F1_fido2_enroll "$(cat "$d/enroll.log" 2>/dev/null)"; fi
+if [[ "$(cat "$d/crypttab" 2>/dev/null)" == 'orig-crypttab' ]]; then _ok F2_crypttab_untouched; else _fail F2_crypttab_untouched "$(cat "$d/crypttab" 2>/dev/null)"; fi
+
 total=$((pass + fail))
 echo
 echo "key: $pass/$total passed"

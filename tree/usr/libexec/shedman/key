@@ -304,6 +304,7 @@ EOF
 _cmd_add_key() {
     _require_root add-key
     _load_containers
+    [[ -n ${FIDO2:-} ]] && { _cmd_add_fido2; return; }
     local auth new dev
     auth=$(_read_secret "An existing passphrase (to authorize): ")
     new=$(_read_new_secret "passphrase to add")
@@ -321,6 +322,25 @@ _cmd_add_key() {
         echo "$PROG: added a passphrase keyslot on $dev"
     done
     echo "$PROG: done. The new passphrase unlocks every disk at boot."
+}
+
+# Enroll a FIDO2/YubiKey on every container. systemd-cryptenroll prompts for an
+# existing passphrase to authorize (same as the tpm2 verb) and the token lands
+# in the LUKS2 header. No crypttab or cmdline wiring: ShedOS unlocks from
+# rd.luks.name on the kernel cmdline, and systemd-cryptsetup auto-tries enrolled
+# header tokens at boot — so the key just prompts for a touch. Called only from
+# _cmd_add_key, with root + CONTAINERS already established.
+_cmd_add_fido2() {
+    local dev
+    _confirm "Type 'yes' to enroll a FIDO2 key on all encrypted disks (touch it when it blinks): "
+    for dev in "${CONTAINERS[@]}"; do
+        if systemd-cryptenroll --fido2-device=auto "$dev"; then
+            echo "$PROG: enrolled FIDO2 unlock on $dev"
+        else
+            _die "FIDO2 enrollment failed on $dev (is the key plugged in?)" 1
+        fi
+    done
+    echo "$PROG: done. Reboot and touch your key when the unlock prompt appears."
 }
 
 # When sourced (the unit tests do this to reach the functions above), stop here
@@ -377,10 +397,12 @@ esac
 
 action=${1:-}; shift || true
 ASSUME_YES=
+FIDO2=
 args=()
 for arg in "$@"; do
     case "$arg" in
         --yes|-y) ASSUME_YES=1 ;;
+        --fido2)  FIDO2=1 ;;
         *)        args+=("$arg") ;;
     esac
 done

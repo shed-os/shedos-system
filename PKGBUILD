@@ -56,6 +56,9 @@ depends=(
                        # wallpaper has no shipped -blurred companion
     'sbctl'            # secureboot verb manages the SB key set + verifies
     'tpm2-tools'       # tpm2 verb's TPM2 unlock primitives
+    'libfido2'         # key add-key --fido2 enrollment, and the sd-encrypt
+                       # initramfs hook only bundles it for boot unlock when
+                       # it is present on the box at build time
     'systemd-ukify'    # single UKI signer (sbsign + PCR-11 .pcrsig, one pass)
     'sbsigntools'      # sbverify gates each UKI placement onto the ESP
 )
