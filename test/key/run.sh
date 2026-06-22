@@ -154,6 +154,23 @@ printf 'authpw\n' | _run "$d" add-key --fido2 --yes >/dev/null 2>&1
 if grep -q -- '--fido2-device=auto /dev/mapper/root' "$d/enroll.log" 2>/dev/null; then _ok F1_fido2_enroll; else _fail F1_fido2_enroll "$(cat "$d/enroll.log" 2>/dev/null)"; fi
 if [[ "$(cat "$d/crypttab" 2>/dev/null)" == 'orig-crypttab' ]]; then _ok F2_crypttab_untouched; else _fail F2_crypttab_untouched "$(cat "$d/crypttab" 2>/dev/null)"; fi
 
+# RM1-RM4: remove-key kills the named slot (auth over stdin, untags it) and
+# refuses to strand the user — last keyslot, the tpm2 slot, or the last
+# passphrase/recovery slot when only a tpm2/fido2 slot would remain.
+d=$(_mk_sandbox); printf '/dev/mapper/root\n' > "$d/containers"
+printf 'authpw\n' | DUMP_JSON='{"keyslots":{"0":{},"3":{}},"tokens":{"0":{"type":"shedos-added","keyslots":["3"]}}}' _run "$d" remove-key 3 --yes >/dev/null 2>&1
+if grep -q 'luksKillSlot --key-file=- /dev/mapper/root 3' "$d/cryptsetup.log" 2>/dev/null; then _ok RM1_kills; else _fail RM1_kills "$(cat "$d/cryptsetup.log" 2>/dev/null)"; fi
+if grep -q 'authpw' "$d/cryptsetup.log" 2>/dev/null; then _fail RM1_no_secret_argv "secret on argv"; else _ok RM1_no_secret_argv; fi
+d=$(_mk_sandbox); printf '/dev/mapper/root\n' > "$d/containers"
+out=$(DUMP_JSON='{"keyslots":{"0":{}},"tokens":{}}' _run "$d" remove-key 0 --yes 2>&1); rc=$?
+if [[ $rc -eq 1 && $out == *last* ]] && ! grep -q luksKillSlot "$d/cryptsetup.log" 2>/dev/null; then _ok RM2_last_guard; else _fail RM2_last_guard "rc=$rc out=$out"; fi
+d=$(_mk_sandbox); printf '/dev/mapper/root\n' > "$d/containers"
+out=$(DUMP_JSON='{"keyslots":{"0":{},"5":{}},"tokens":{"0":{"type":"systemd-tpm2","keyslots":["5"]}}}' _run "$d" remove-key 5 --yes 2>&1)
+if [[ $out == *"shedman tpm2"* ]] && ! grep -q luksKillSlot "$d/cryptsetup.log" 2>/dev/null; then _ok RM3_tpm2_defer; else _fail RM3_tpm2_defer "$out"; fi
+d=$(_mk_sandbox); printf '/dev/mapper/root\n' > "$d/containers"
+out=$(DUMP_JSON='{"keyslots":{"0":{},"5":{}},"tokens":{"0":{"type":"systemd-tpm2","keyslots":["5"]}}}' _run "$d" remove-key 0 --yes 2>&1); rc=$?
+if [[ $rc -eq 1 && $out == *last* ]] && ! grep -q luksKillSlot "$d/cryptsetup.log" 2>/dev/null; then _ok RM4_last_durable; else _fail RM4_last_durable "rc=$rc out=$out"; fi
+
 total=$((pass + fail))
 echo
 echo "key: $pass/$total passed"

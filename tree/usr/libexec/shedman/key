@@ -94,10 +94,7 @@ _cmd_status() {
         json=$(_dump_json "$dev")
         slots=$(jq -r '.keyslots | keys[]' <<<"$json" 2>/dev/null | sort -n)
         for s in $slots; do
-            role=$(jq -r --arg s "$s" '
-                (.tokens // {}) | to_entries
-                | map(select(.value.keyslots | index($s)))
-                | (.[0].value.type // "")' <<<"$json" 2>/dev/null)
+            role=$(_role_in_json "$json" "$s")
             case "$role" in
                 shedos-recovery) role=recovery ;;
                 shedos-added)    role="added passphrase" ;;
@@ -208,6 +205,14 @@ _untag_slot() {  # $1=dev $2=slot
 _new_slot_after() {  # $1=dev $2=before-list
     comm -13 <(printf '%s\n' "$2" | sort -n) <(_active_slots "$1") | head -n1
 }
+
+# The token type tagged on a slot (shedos-recovery, systemd-tpm2, …) or "" if
+# untagged. _role_in_json reads an already-dumped header (no extra luksDump);
+# _role_of_slot dumps first.
+_role_in_json() {  # $1=json $2=slot
+    jq -r --arg s "$2" '(.tokens//{})|to_entries|map(select(.value.keyslots|index($s)))|(.[0].value.type//"")' <<<"$1" 2>/dev/null
+}
+_role_of_slot() { _role_in_json "$(_dump_json "$1")" "$2"; }
 
 _cmd_change_passphrase() {
     _require_root change-passphrase
@@ -341,6 +346,46 @@ _cmd_add_fido2() {
         fi
     done
     echo "$PROG: done. Reboot and touch your key when the unlock prompt appears."
+}
+
+_cmd_remove_key() {
+    local sel=$1
+    _require_root remove-key
+    [[ -n $sel ]] || _die "say which keyslot to remove (a slot number; see: $PROG --status)" 2
+    _load_containers
+    local dev
+    for dev in "${CONTAINERS[@]}"; do
+        local json slots role durable s
+        json=$(_dump_json "$dev")
+        mapfile -t slots < <(jq -r '.keyslots|keys[]' <<<"$json" 2>/dev/null | sort -n)
+        (( ${#slots[@]} <= 1 )) && _die "removing your last keyslot on $dev would lock you out — nothing to fall back to" 1
+        printf '%s\n' "${slots[@]}" | grep -qx "$sel" || _die "no slot $sel on $dev (see: $PROG --status)" 1
+        role=$(_role_in_json "$json" "$sel")
+        case "$role" in
+            systemd-tpm2)  _die "slot $sel is the TPM2 unlock slot — remove it with: shedman tpm2 remove" 1 ;;
+            systemd-fido2) _die "slot $sel is a FIDO2 slot — remove it with: systemd-cryptenroll --wipe-slot=$sel $dev" 1 ;;
+        esac
+        # Never strip the last interactive way in: a TPM2/FIDO2 slot can fail
+        # (firmware update, lost key), so keep at least one passphrase or
+        # recovery key. tpm2/fido2 slots were already refused above.
+        durable=0
+        for s in "${slots[@]}"; do
+            case "$(_role_in_json "$json" "$s")" in
+                systemd-tpm2|systemd-fido2) ;;
+                *) durable=$((durable + 1)) ;;
+            esac
+        done
+        (( durable <= 1 )) && _die "slot $sel is your last passphrase or recovery key on $dev — keep one (a TPM2 or FIDO2 slot alone can fail); add a new key first" 1
+    done
+    local auth; auth=$(_read_secret "An existing passphrase or recovery key (to authorize): ")
+    _confirm "Type 'yes' to remove keyslot $sel from all encrypted disks: "
+    for dev in "${CONTAINERS[@]}"; do
+        if ! printf '%s' "$auth" | cryptsetup luksKillSlot --key-file=- "$dev" "$sel" 2>/dev/null; then
+            _die "could not remove slot $sel from $dev (is the passphrase correct?)" 1
+        fi
+        _untag_slot "$dev" "$sel"   # clear the token cryptsetup leaves dangling
+        echo "$PROG: removed keyslot $sel from $dev"
+    done
 }
 
 # When sourced (the unit tests do this to reach the functions above), stop here
