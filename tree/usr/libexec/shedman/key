@@ -166,6 +166,49 @@ _recovery_forms() {
     done
 }
 
+# --- LUKS2 token helpers: slots carry a token naming their ShedOS role -------
+
+_active_slots() { _dump_json "$1" | jq -r '.keyslots | keys[]' 2>/dev/null | sort -n; }
+
+# Slots carrying a token of the given type (e.g. shedos-recovery), one per line.
+_slots_with_token() {  # $1=dev $2=type
+    _dump_json "$1" | jq -r --arg t "$2" '
+        (.tokens // {}) | to_entries | map(select(.value.type == $t))
+        | map(.value.keyslots[]) | .[]' 2>/dev/null | sort -n
+}
+
+# Attach a custom-type LUKS2 token to a slot — a pure role label. The JSON goes
+# through a file because `token import` will not read it from a pipe; it is not
+# secret, but reuse the private tmpdir anyway.
+_tag_slot() {  # $1=dev $2=slot $3=type
+    local jf rc
+    jf=$(mktemp -p "${SHEDMAN_KEY_TMPDIR:-/run}" shedos-tok.XXXXXX) || _die "could not create a temp file" 1
+    printf '{"type":"%s","keyslots":["%s"]}' "$3" "$2" > "$jf"
+    cryptsetup token import --json-file="$jf" "$1" 2>/dev/null; rc=$?
+    rm -f "$jf"
+    return $rc
+}
+
+# The token-id whose keyslots references a slot, or empty. Used to clean up the
+# token cryptsetup leaves behind after luksKillSlot.
+_token_id_of_slot() {  # $1=dev $2=slot
+    _dump_json "$1" | jq -r --arg s "$2" '
+        (.tokens // {}) | to_entries
+        | map(select(.value.keyslots | index($s))) | (.[0].key // "")' 2>/dev/null
+}
+
+# Remove the (now dangling) token for a slot, if any.
+_untag_slot() {  # $1=dev $2=slot
+    local id; id=$(_token_id_of_slot "$1" "$2")
+    [[ -n $id ]] && cryptsetup token remove --token-id "$id" "$1" 2>/dev/null
+    return 0
+}
+
+# The single slot that appeared since a newline-list snapshot of _active_slots.
+_new_slot_after() {  # $1=dev $2=before-list
+    comm -13 <(printf '%s\n' "$2" | sort -n) <(_active_slots "$1") | head -n1
+}
+
 _cmd_change_passphrase() {
     _require_root change-passphrase
     _load_containers

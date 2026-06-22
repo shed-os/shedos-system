@@ -110,6 +110,17 @@ got=$(printf '%s\n' "${forms[@]}" | sort | tr '\n' ' ')
 want=$(printf '%s\n' AB-CD ABCD ab-cd abcd | sort | tr '\n' ' ')
 if [[ $got == "$want" ]]; then _ok G3_forms; else _fail G3_forms "got=$got"; fi
 
+# TK1-TK3: token helpers (cryptsetup stubbed via PATH; luksDump prints $DUMP_JSON).
+d=$(_mk_sandbox); _tk_old=$PATH; PATH="$d/bin:$PATH"
+export DUMP_JSON='{"keyslots":{"0":{},"1":{},"2":{}},"tokens":{"0":{"type":"shedos-recovery","keyslots":["1"]},"1":{"type":"shedos-recovery","keyslots":["2"]}}}'
+got=$(_slots_with_token /dev/x shedos-recovery | tr '\n' ' ')
+if [[ $got == "1 2 " ]]; then _ok TK1_slots_with_token; else _fail TK1_slots_with_token "$got"; fi
+SHEDMAN_KEY_TMPDIR=$d _tag_slot /dev/x 3 shedos-recovery
+if grep -q 'token import --json-file=' "$d/cryptsetup.log" 2>/dev/null; then _ok TK2_tag_json_file; else _fail TK2_tag_json_file "$(cat "$d/cryptsetup.log" 2>/dev/null)"; fi
+_untag_slot /dev/x 1   # token "0" references slot 1
+if grep -q 'token remove --token-id 0 /dev/x' "$d/cryptsetup.log" 2>/dev/null; then _ok TK3_untag; else _fail TK3_untag "$(grep token "$d/cryptsetup.log" 2>/dev/null)"; fi
+PATH=$_tk_old; unset DUMP_JSON
+
 total=$((pass + fail))
 echo
 echo "key: $pass/$total passed"
