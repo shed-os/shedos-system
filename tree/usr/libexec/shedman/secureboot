@@ -1,31 +1,53 @@
 #!/usr/bin/env bash
-# shedman secureboot; report this machine's Secure Boot state and verify the
-# signed boot images Limine chainloads.
+# shedman secureboot; manage this machine's Secure Boot keys and the signed
+# boot images Limine chainloads, and verify the boot chain is intact.
+#
+# The mutating verbs (enroll/sign/repair/disable) touch the LIVE firmware and
+# ESP. The governing rule is ARM-LAST + VERIFY-BEFORE-ARM: enroll provisions
+# keys, signs every UKI and Limine copy, and only enrolls the platform key into
+# firmware AFTER sbverify confirms the whole chain — so any failure leaves
+# Secure Boot off and the box still bootable. A brick must always be recoverable
+# (clear the keys in firmware setup -> Setup Mode -> boots unsigned).
 
 set -uo pipefail
 
 PROG="shedman secureboot"
-# The per-box Secure Boot db keypair lives in sbctl's store; build-uki.sh
-# verifies every UKI against db.pem, so we use the same anchor here.
+# The per-box Secure Boot db keypair lives in sbctl's store; build-uki.sh signs
+# and verifies every UKI against db.pem, so we use the same anchor here.
 KEYDIR=${SHEDOS_SECUREBOOT_KEYDIR:-/var/lib/sbctl/keys/db}
+PCR_DIR=${SHEDOS_SECUREBOOT_PCR_DIR:-/etc/shedos/secureboot}
+UKI_CONF=${SHEDOS_SECUREBOOT_UKI_CONF:-/etc/kernel/uki.conf}
+STUB=${SHEDOS_SECUREBOOT_STUB:-/usr/lib/systemd/boot/efi/linuxx64.efi.stub}
 BOOTCTL=${SHEDOS_SECUREBOOT_BOOTCTL:-bootctl}
+SBCTL=${SHEDOS_SECUREBOOT_SBCTL:-sbctl}
 SBVERIFY=${SHEDOS_SECUREBOOT_SBVERIFY:-sbverify}
+OPENSSL=${SHEDOS_SECUREBOOT_OPENSSL:-openssl}
+BUILD_UKI=${SHEDOS_SECUREBOOT_BUILD_UKI:-/usr/lib/shedos/build-uki.sh}
+# SetupMode EFI var (1 = firmware in Setup Mode, platform key cleared).
+SETUP_EFIVAR=${SHEDOS_SECUREBOOT_SETUP_EFIVAR:-/sys/firmware/efi/efivars/SetupMode-8be4df61-93ca-11d2-aa0d-00e098032b8c}
 # ESP roots that hold the signed UKIs, same discovery the placer/renderer use.
 ESP_DIRS=${SHEDOS_ESP_DIRS:-/boot/efi /efi}
 
 case "${1:-}" in
     --help-summary)
-        echo "report Secure Boot state and verify the signed boot images"
+        echo "manage Secure Boot keys and the signed boot images"
         exit 0
         ;;
     --complete-bash|--complete-zsh)
-        printf '%s\n' status verify --help -h
+        printf '%s\n' status verify enroll sign repair disable --shedos-only --keyless --yes -y --help -h
         exit 0
         ;;
     --complete-fish)
         cat <<'EOF'
 status	show Secure Boot state, key setup, and image signatures
 verify	check every boot image signature and the Secure Boot state
+enroll	enroll this box's keys into firmware and sign the boot chain
+sign	re-sign the boot images after a key change
+repair	rebuild and re-sign a missing or unsigned boot image
+disable	stop firmware from enforcing Secure Boot (keys cleared)
+--shedos-only	enroll without the Microsoft CA (option ROMs may not init)
+--keyless	on disable, also make future images unsigned
+--yes	skip the confirmation prompt
 --help	show usage
 -h	show usage
 EOF
@@ -35,15 +57,27 @@ EOF
         cat <<EOF
 Usage: $PROG status
        $PROG verify
+       sudo $PROG enroll [--shedos-only] [--yes]
+       sudo $PROG sign
+       sudo $PROG repair
+       sudo $PROG disable [--keyless] [--yes]
 
-Reports this machine's Secure Boot state and checks that the signed boot
-images Limine loads are intact. Key enrollment and re-signing land in a
-later release.
+Manages this machine's own Secure Boot keys and the signed boot images Limine
+chainloads. enroll arms firmware only after the whole chain verifies, so a
+failure never leaves an unbootable box.
 
   status                       show Secure Boot state, keys, and signatures
-  verify                       check every image signature and the live
-                               Secure Boot state; exits non-zero if anything
-                               is wrong
+  verify                       check every image signature and the live Secure
+                               Boot state; exits non-zero if anything is wrong
+  enroll                       sign the boot chain and enroll this box's keys
+                               into firmware (needs root + firmware Setup Mode)
+  sign                         re-sign the boot images after a key change
+  repair                       rebuild and re-sign a missing or unsigned image
+  disable                      clear this box's keys so firmware stops enforcing
+                               Secure Boot; the signed images still boot
+  --shedos-only                enroll without the Microsoft CA (advanced)
+  --keyless                    disable: also make future images unsigned
+  -y, --yes                    skip the confirmation prompt
   -h, --help                   show this help
 EOF
         exit 0
@@ -52,15 +86,27 @@ esac
 
 _die() { echo "$PROG: $1" >&2; exit "${2:-1}"; }
 
-# BIOS boxes have no Secure Boot at all. FORCE_BIOS/FORCE_UEFI let the tests
-# pin the firmware mode regardless of the host's own efivars.
+_need_root() {
+    # id -u (not $EUID) so a PATH-stubbed id can fake root in the hermetic
+    # unprivileged test suite, matching the other shedman verbs.
+    [[ "$(id -u)" -eq 0 ]] || _die "$1 requires root" 1
+}
+
+# BIOS boxes have no Secure Boot at all. FORCE_BIOS/FORCE_UEFI let the tests pin
+# the firmware mode regardless of the host's own efivars.
 _is_uefi() {
     [[ -n ${SHEDOS_SECUREBOOT_FORCE_BIOS:-} ]] && return 1
     [[ -d /sys/firmware/efi/efivars || -n ${SHEDOS_SECUREBOOT_FORCE_UEFI:-} ]]
 }
 
-# Parse `bootctl status` -> on | off | setup. setup = firmware in Setup Mode
-# (platform key cleared, ready to enroll).
+# Firmware in Setup Mode = platform key cleared, so our keys can be enrolled
+# without a physical key-clear. The var is a 4-byte attr prefix + 1 bool byte.
+_setup_mode() {
+    [[ -r $SETUP_EFIVAR ]] || return 1
+    [[ "$(od -An -j4 -N1 -tu1 "$SETUP_EFIVAR" 2>/dev/null | tr -d ' ')" == 1 ]]
+}
+
+# Parse `bootctl status` -> on | off | setup.
 _sb_state() {
     local line
     line=$("$BOOTCTL" status 2>/dev/null | grep -i 'Secure Boot:')
@@ -72,7 +118,9 @@ _sb_state() {
 
 _keys_present() { [[ -s $KEYDIR/db.pem && -s $KEYDIR/db.key ]]; }
 
-# First ESP root that holds an /EFI/Linux UKI directory.
+# This box is on the signed-UKI boot path (so there is something to enroll).
+_on_uki_path() { [[ -f $UKI_CONF && -x $BUILD_UKI ]]; }
+
 _esp_root() {
     local d
     for d in $ESP_DIRS; do
@@ -89,6 +137,36 @@ _list_ukis() {
     shopt -u nullglob
 }
 
+# The two Limine EFI binaries firmware loads first. Overridable for tests.
+_limine_copies() {
+    if [[ -n ${SHEDOS_SECUREBOOT_LIMINE_COPIES:-} ]]; then
+        local -a copies
+        read -r -a copies <<< "$SHEDOS_SECUREBOOT_LIMINE_COPIES"
+        printf '%s\n' "${copies[@]}"
+        return
+    fi
+    local root
+    root=$(_esp_root) || return 0
+    local c
+    for c in "$root/EFI/BOOT/BOOTX64.EFI" "$root/EFI/limine/BOOTX64.EFI"; do
+        [[ -f $c ]] && printf '%s\n' "$c"
+    done
+}
+
+# An explicit yes, with the recovery path named first. Non-TTY refuses unless
+# --yes was passed; we never auto-confirm a firmware change.
+_confirm() {
+    local prompt=$1
+    [[ -n ${ASSUME_YES:-} ]] && return 0
+    if [[ ! -t 0 ]]; then
+        _die "refusing to continue without confirmation; pass --yes to proceed non-interactively" 1
+    fi
+    local answer
+    read -r -p "$prompt" answer
+    [[ $answer == yes ]] || _die "aborted" 1
+}
+
+# ── read-only verbs ───────────────────────────────────────────────────────
 _cmd_status() {
     local state; state=$(_sb_state)
     case "$state" in
@@ -96,29 +174,19 @@ _cmd_status() {
         setup) echo "Secure Boot: off (firmware in Setup Mode — ready to enroll)" ;;
         *)     echo "Secure Boot: off" ;;
     esac
-    if _keys_present; then
-        echo "keys: set up for this machine"
-    else
-        echo "keys: not set up for this machine"
-    fi
+    if _keys_present; then echo "keys: set up for this machine"
+    else echo "keys: not set up for this machine"; fi
     local u count=0 bad=0
     while IFS= read -r u; do
         [[ -z $u ]] && continue
         ((count++))
         "$SBVERIFY" --cert "$KEYDIR/db.pem" "$u" >/dev/null 2>&1 || ((bad++))
     done < <(_list_ukis)
-    if (( count == 0 )); then
-        echo "boot images: none placed yet"
-    elif (( bad == 0 )); then
-        echo "boot images: $count signed and valid"
-    else
-        echo "boot images: $bad of $count NOT valid"
-    fi
+    if (( count == 0 )); then echo "boot images: none placed yet"
+    elif (( bad == 0 )); then echo "boot images: $count signed and valid"
+    else echo "boot images: $bad of $count NOT valid"; fi
 }
 
-# verify: the doctor/CI primitive. Refuse on BIOS (rc 2). Exit 1 when Secure
-# Boot is off while keys are enrolled, or any placed UKI fails its signature;
-# exit 0 only when the whole chain is sound.
 _cmd_verify() {
     _is_uefi || _die "this is a BIOS box — Secure Boot does not apply" 2
     local state; state=$(_sb_state)
@@ -149,11 +217,178 @@ _cmd_verify() {
     return $rc
 }
 
-case "$1" in
-    status) _cmd_status ;;
-    verify) _cmd_verify ;;
+# ── signing primitives ────────────────────────────────────────────────────
+# Reuse the box db keypair if present (regenerating invalidates anything already
+# signed); else mint it. Always ensure the PCR-11 signing key exists.
+_ensure_keys() {
+    if ! _keys_present; then
+        "$SBCTL" create-keys || _die "could not create this machine's Secure Boot keys" 1
+    fi
+    if [[ ! -s $PCR_DIR/pcr-private.pem ]]; then
+        mkdir -p "$PCR_DIR"
+        "$OPENSSL" genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
+            -out "$PCR_DIR/pcr-private.pem" \
+            || _die "could not create the measured-boot signing key" 1
+        "$OPENSSL" rsa -pubout -in "$PCR_DIR/pcr-private.pem" \
+            -out "$PCR_DIR/pcr-public.pem" >/dev/null 2>&1
+        chmod 600 "$PCR_DIR/pcr-private.pem"
+    fi
+}
+
+# Rewrite the keyless uki.conf to the signing form so ukify signs every UKI.
+_rewrite_uki_conf_signing() {
+    mkdir -p "$(dirname "$UKI_CONF")"
+    cat >"$UKI_CONF" <<EOF
+# Rewritten by 'shedman secureboot enroll' once per-box keys exist. ukify signs
+# every UKI with the box db key and a PCR-11 prediction.
+[UKI]
+Stub=$STUB
+SecureBootPrivateKey=/var/lib/sbctl/keys/db/db.key
+SecureBootCertificate=/var/lib/sbctl/keys/db/db.pem
+PCRBanks=sha256
+
+[PCRSignature:initrd]
+PCRPrivateKey=/etc/shedos/secureboot/pcr-private.pem
+PCRPublicKey=/etc/shedos/secureboot/pcr-public.pem
+Phases=enter-initrd
+EOF
+}
+
+# Revert to the keyless form so FUTURE builds are unsigned. Never triggers a
+# rebuild — the caller (disable) only does this after enforcement has stopped.
+_rewrite_uki_conf_keyless() {
+    mkdir -p "$(dirname "$UKI_CONF")"
+    cat >"$UKI_CONF" <<EOF
+# Keyless: a box with no enrolled Secure Boot keys builds an UNSIGNED UKI that
+# still boots. 'shedman secureboot enroll' rewrites this to the signing form.
+[UKI]
+Stub=$STUB
+EOF
+}
+
+_sign_limine() {
+    local c
+    while IFS= read -r c; do
+        [[ -z $c ]] && continue
+        "$SBCTL" sign -s "$c" >/dev/null 2>&1 \
+            || echo "$PROG: signing $c reported an error" >&2
+    done < <(_limine_copies)
+}
+
+# THE gate: every placed UKI AND every Limine copy must validate against the box
+# db cert before we arm. Any miss returns 1 and the caller must NOT arm.
+_verify_all() {
+    local f n=0 bad=0
+    while IFS= read -r f; do
+        [[ -z $f ]] && continue
+        ((n++))
+        "$SBVERIFY" --cert "$KEYDIR/db.pem" "$f" >/dev/null 2>&1 \
+            || { echo "$PROG: NOT signed: $(basename "$f")" >&2; ((bad++)); }
+    done < <( { _list_ukis; _limine_copies; } )
+    (( n > 0 && bad == 0 ))
+}
+
+# The single IRREVERSIBLE step. --microsoft stays unless --shedos-only: option
+# ROMs (dGPU/NIC) are MS-CA-signed and firmware refuses them otherwise.
+# --ignore-immutable: a running system marks the SB efivars immutable, so a
+# re-enroll (after disable) fails without it — the installer only escapes this
+# because fresh Setup-Mode firmware has no prior KEK/db to begin with.
+_arm() {
+    local cmd=("$SBCTL" enroll-keys --ignore-immutable --yes-this-might-brick-my-machine)
+    [[ -z ${SHEDOS_ONLY:-} ]] && cmd+=(--microsoft)
+    "${cmd[@]}" || _die "enrolling the keys into firmware failed; Secure Boot was NOT armed (the box still boots)" 1
+}
+
+# ── mutating verbs ────────────────────────────────────────────────────────
+_cmd_enroll() {
+    _need_root enroll
+    _is_uefi || _die "this is a BIOS box — Secure Boot cannot be enrolled" 2
+    _setup_mode || _die "firmware is not in Setup Mode — enter your firmware setup, clear/delete the Secure Boot platform keys, then re-run this" 1
+    _on_uki_path || _die "this box is not on the signed-UKI boot path yet — update ShedOS first, then re-run" 1
+    cat >&2 <<EOF
+$PROG: this signs the boot chain and enrolls THIS machine's keys into firmware.
+Secure Boot will enforce them from the next boot.
+
+RECOVERY: if the box won't boot with Secure Boot on, enter your firmware setup
+and clear the Secure Boot keys to return to Setup Mode — it then boots unsigned.
+EOF
+    _confirm "Type 'yes' to sign and enroll: "
+
+    _ensure_keys
+    _rewrite_uki_conf_signing
+    "$BUILD_UKI" --rebuild || _die "signing the kernel images failed; Secure Boot NOT armed" 1
+    _sign_limine
+    _verify_all || _die "the boot chain did not fully verify — Secure Boot NOT armed, the box still boots. Re-run once resolved" 1
+    # Everything is signed and verified — only now arm firmware.
+    _arm
+    echo "$PROG: keys enrolled and the boot chain is signed. Reboot and ensure Secure Boot is enabled in firmware."
+}
+
+_cmd_sign() {
+    _need_root sign
+    _is_uefi || _die "this is a BIOS box — there is nothing to sign" 2
+    _keys_present || _die "no keys for this machine yet — run: sudo $PROG enroll" 1
+    _on_uki_path || _die "this box is not on the signed-UKI boot path" 1
+    "$BUILD_UKI" --rebuild || _die "re-signing the kernel images failed" 1
+    _sign_limine
+    _verify_all || _die "some boot images did not verify after signing" 1
+    echo "$PROG: boot images re-signed and verified."
+}
+
+_cmd_repair() {
+    _need_root repair
+    _is_uefi || _die "this is a BIOS box — nothing to repair" 2
+    _keys_present || _die "no keys for this machine yet — run: sudo $PROG enroll" 1
+    _on_uki_path || _die "this box is not on the signed-UKI boot path" 1
+    "$BUILD_UKI" --rebuild || _die "rebuilding the kernel images failed" 1
+    _sign_limine
+    _verify_all || _die "the rebuilt images did not verify — free ESP space and re-run" 1
+    echo "$PROG: boot images rebuilt, re-signed, and verified."
+}
+
+# disable stops firmware from ENFORCING Secure Boot by clearing this box's keys
+# (back to Setup Mode). The signed images stay in place and boot fine with SB
+# off, so we never rebuild unsigned under live enrolled keys — that would brick.
+_cmd_disable() {
+    _need_root disable
+    _is_uefi || _die "this is a BIOS box — Secure Boot is not in use" 2
+    cat >&2 <<EOF
+$PROG: this clears this machine's Secure Boot keys so firmware stops enforcing
+Secure Boot. The signed boot images stay in place and keep booting.
+EOF
+    _confirm "Type 'yes' to clear the keys and stop enforcing Secure Boot: "
+    "$SBCTL" reset || _die "could not clear the Secure Boot keys; clear them from your firmware setup instead" 1
+    echo "$PROG: Secure Boot keys cleared; firmware is back in Setup Mode and no longer enforcing."
+    if [[ -n ${KEYLESS:-} ]]; then
+        _rewrite_uki_conf_keyless
+        echo "$PROG: future kernel images will be built unsigned (re-enroll with: sudo $PROG enroll)."
+    fi
+}
+
+# ── dispatch ──────────────────────────────────────────────────────────────
+action=${1:-}
+shift || true
+SHEDOS_ONLY=
+ASSUME_YES=
+KEYLESS=
+for arg in "$@"; do
+    case "$arg" in
+        --shedos-only) SHEDOS_ONLY=1 ;;
+        --keyless)     KEYLESS=1 ;;
+        --yes|-y)      ASSUME_YES=1 ;;
+        *) _die "unknown option: $arg (try: $PROG --help)" 2 ;;
+    esac
+done
+
+case "$action" in
+    status)  _cmd_status ;;
+    verify)  _cmd_verify ;;
+    enroll)  _cmd_enroll ;;
+    sign)    _cmd_sign ;;
+    repair)  _cmd_repair ;;
+    disable) _cmd_disable ;;
     *)
-        echo "$PROG: unknown subcommand: $1" >&2
+        echo "$PROG: unknown subcommand: $action" >&2
         echo "Try: $PROG --help" >&2
         exit 2
         ;;
