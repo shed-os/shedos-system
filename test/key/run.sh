@@ -48,6 +48,7 @@ _run() {
     PATH="$d/bin:$PATH" \
     SHEDMAN_KEY_CONTAINERS="${CONTAINERS:-$d/containers}" \
     SHEDMAN_CRYPTTAB="${CRYPTTAB:-$d/crypttab}" \
+    SHEDMAN_KEY_TMPDIR="$d" \
     DUMP_JSON="${DUMP_JSON:-}" \
         bash "$verb" "$action" "$@"
 }
@@ -74,6 +75,24 @@ if [[ $out == *"slot 0"*"passphrase"* && $out == *"slot 1"*"recovery"* && $out =
     _ok C4_status_roles
 else
     _fail C4_status_roles "$out"
+fi
+
+# CP1: change-passphrase runs luksChangeKey on every container.
+d=$(_mk_sandbox)
+printf '/dev/mapper/root\n/dev/mapper/swap\n' > "$d/containers"
+printf 'oldpw\nnewpw\nnewpw\n' | _run "$d" change-passphrase --yes >/dev/null 2>&1
+if grep -q 'luksChangeKey /dev/mapper/root' "$d/cryptsetup.log" 2>/dev/null \
+   && grep -q 'luksChangeKey /dev/mapper/swap' "$d/cryptsetup.log" 2>/dev/null; then
+    _ok CP1_both
+else
+    _fail CP1_both "$(cat "$d/cryptsetup.log" 2>/dev/null)"
+fi
+
+# CP2: no passphrase reaches argv (the cryptsetup stub logs $*).
+if grep -qE 'oldpw|newpw' "$d/cryptsetup.log" 2>/dev/null; then
+    _fail CP2_no_secret_argv "secret on argv"
+else
+    _ok CP2_no_secret_argv
 fi
 
 total=$((pass + fail))

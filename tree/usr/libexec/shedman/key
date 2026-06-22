@@ -153,6 +153,54 @@ _cmd_status() {
     done
 }
 
+# Read a secret from a pipe (non-TTY) or prompt for it silently on the TTY.
+_read_secret() {
+    local p=$1 v
+    if [[ -t 0 ]]; then read -r -s -p "$p" v; echo >&2; else read -r v; fi
+    printf '%s' "$v"
+}
+
+# Read a new secret twice and confirm it matches; refuse an empty one.
+_read_new_secret() {
+    local v1 v2
+    v1=$(_read_secret "New $1: ")
+    v2=$(_read_secret "Repeat $1: ")
+    [[ $v1 == "$v2" ]] || _die "the two entries did not match" 1
+    [[ -n $v1 ]] || _die "an empty $1 is refused" 1
+    printf '%s' "$v1"
+}
+
+# Write a secret to a private 0600 tmpfs file with no trailing newline (so the
+# enrolled key byte-matches what is typed at the boot prompt) and echo its path.
+# cryptsetup cannot read a NEW key from a pipe, so it needs a real file; the
+# caller removes it. SHEDMAN_KEY_TMPDIR lets the tests redirect it off /run.
+_mk_keyfile() {
+    local f
+    f=$(mktemp -p "${SHEDMAN_KEY_TMPDIR:-/run}" shedos-key.XXXXXX) || _die "could not create a temporary keyfile" 1
+    chmod 600 "$f"
+    printf '%s' "$1" > "$f"
+    printf '%s' "$f"
+}
+
+_cmd_change_passphrase() {
+    _require_root change-passphrase
+    _load_containers
+    local old new dev kf
+    old=$(_read_secret "Current passphrase: ")
+    new=$(_read_new_secret "passphrase")
+    _confirm "Type 'yes' to change the passphrase on all encrypted disks: "
+    for dev in "${CONTAINERS[@]}"; do
+        kf=$(_mk_keyfile "$new")
+        if ! printf '%s' "$old" | cryptsetup luksChangeKey "$dev" --key-file=- "$kf" 2>/dev/null; then
+            rm -f "$kf"
+            _die "could not change the passphrase on $dev (is the current passphrase correct?)" 1
+        fi
+        rm -f "$kf"
+        echo "$PROG: passphrase changed on $dev"
+    done
+    echo "$PROG: done. TPM2 unlock (if enrolled) is unaffected — no re-enrol needed."
+}
+
 action=${1:-}; shift || true
 ASSUME_YES=
 args=()
