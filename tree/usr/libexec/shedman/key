@@ -9,53 +9,10 @@ PROG="shedman key"
 CONTAINERS_FILE=${SHEDMAN_KEY_CONTAINERS:-/etc/shedos/secureboot/containers}
 CRYPTTAB=${SHEDMAN_CRYPTTAB:-/etc/crypttab}
 
-case "${1:-}" in
-    --help-summary)
-        echo "change the passphrase, manage keyslots, rotate the recovery key"
-        exit 0
-        ;;
-    --complete-bash|--complete-zsh)
-        printf '%s\n' change-passphrase rotate-recovery add-key remove-key --status --fido2 --yes -y --help -h
-        exit 0
-        ;;
-    --complete-fish)
-        cat <<'EOF'
-change-passphrase	change the disk unlock passphrase
-rotate-recovery	mint a new recovery key and retire the old one
-add-key	add another passphrase, or a FIDO2/YubiKey
-remove-key	remove a keyslot (never your last way in)
---status	show keyslots and what each one is
---fido2	with add-key: enroll a FIDO2/YubiKey
---yes	skip the confirmation prompt
--y	skip the confirmation prompt
---help	show usage
--h	show usage
-EOF
-        exit 0
-        ;;
-    --help|-h|"")
-        cat <<EOF
-Usage: sudo $PROG change-passphrase [--yes]
-       sudo $PROG rotate-recovery [--yes]
-       sudo $PROG add-key [--fido2] [--yes]
-       sudo $PROG remove-key <slot> [--yes]
-            $PROG --status
-
-Manage the keys on this machine's encrypted disk. Every change applies to all
-boot-unlocked containers (root and encrypted swap) and keeps a working way in
-at every step.
-
-  change-passphrase            change the disk unlock passphrase
-  rotate-recovery              mint a new recovery key and retire the old one
-  add-key [--fido2]            add another passphrase, or a FIDO2/YubiKey
-  remove-key <slot>            remove a keyslot (never your last way in)
-  --status                     show keyslots and what each one is
-  -y, --yes                    skip the confirmation prompt
-  -h, --help                   show this help
-EOF
-        exit 0
-        ;;
-esac
+# Canonical recovery-key format, shared with the installer's escrow module so a
+# rotated key reads and types exactly like the one set at install.
+_RECOVERY_ALPHABET='ABCDEFGHJKMNPRSTVWXYZ347'   # 24 unambiguous symbols
+_RECOVERY_SYMBOLS=25                            # ~114 bits at log2(24)
 
 _die() { echo "$PROG: $1" >&2; exit "${2:-1}"; }
 
@@ -182,6 +139,33 @@ _mk_keyfile() {
     printf '%s' "$f"
 }
 
+# A fresh recovery key: 25 uppercase symbols from the unambiguous alphabet,
+# grouped into fives with dashes. Uniform via /dev/urandom rejection sampling
+# (256 % 24 != 0, so drop bytes >= 240); never $RANDOM.
+_gen_recovery() {
+    local n=${#_RECOVERY_ALPHABET} out="" count=0 byte
+    while (( count < _RECOVERY_SYMBOLS )); do
+        byte=$(head -c1 /dev/urandom | od -An -tu1 | tr -d ' ')
+        (( byte >= 240 )) && continue
+        out+=${_RECOVERY_ALPHABET:$(( byte % n )):1}
+        (( count++ ))
+    done
+    sed 's/.\{5\}/&-/g; s/-$//' <<<"$out"
+}
+
+# Every spelling the boot prompt should accept for $1: the key as given and its
+# lowercasing, each with and without dashes, deduplicated. Mirrors the escrow
+# module so a rotated key forgives Caps Lock and dashes exactly like install.
+_recovery_forms() {
+    local base f
+    declare -A seen=()
+    for base in "$1" "${1,,}"; do
+        for f in "$base" "${base//-/}"; do
+            [[ -n ${seen[$f]:-} ]] || { printf '%s\n' "$f"; seen[$f]=1; }
+        done
+    done
+}
+
 _cmd_change_passphrase() {
     _require_root change-passphrase
     _load_containers
@@ -200,6 +184,58 @@ _cmd_change_passphrase() {
     done
     echo "$PROG: done. TPM2 unlock (if enrolled) is unaffected — no re-enrol needed."
 }
+
+# When sourced (the unit tests do this to reach the functions above), stop here
+# with the functions defined; only a direct run reaches the help + dispatch.
+[[ ${BASH_SOURCE[0]} == "${0}" ]] || return 0
+
+case "${1:-}" in
+    --help-summary)
+        echo "change the passphrase, manage keyslots, rotate the recovery key"
+        exit 0
+        ;;
+    --complete-bash|--complete-zsh)
+        printf '%s\n' change-passphrase rotate-recovery add-key remove-key --status --fido2 --yes -y --help -h
+        exit 0
+        ;;
+    --complete-fish)
+        cat <<'EOF'
+change-passphrase	change the disk unlock passphrase
+rotate-recovery	mint a new recovery key and retire the old one
+add-key	add another passphrase, or a FIDO2/YubiKey
+remove-key	remove a keyslot (never your last way in)
+--status	show keyslots and what each one is
+--fido2	with add-key: enroll a FIDO2/YubiKey
+--yes	skip the confirmation prompt
+-y	skip the confirmation prompt
+--help	show usage
+-h	show usage
+EOF
+        exit 0
+        ;;
+    --help|-h|"")
+        cat <<EOF
+Usage: sudo $PROG change-passphrase [--yes]
+       sudo $PROG rotate-recovery [--yes]
+       sudo $PROG add-key [--fido2] [--yes]
+       sudo $PROG remove-key <slot> [--yes]
+            $PROG --status
+
+Manage the keys on this machine's encrypted disk. Every change applies to all
+boot-unlocked containers (root and encrypted swap) and keeps a working way in
+at every step.
+
+  change-passphrase            change the disk unlock passphrase
+  rotate-recovery              mint a new recovery key and retire the old one
+  add-key [--fido2]            add another passphrase, or a FIDO2/YubiKey
+  remove-key <slot>            remove a keyslot (never your last way in)
+  --status                     show keyslots and what each one is
+  -y, --yes                    skip the confirmation prompt
+  -h, --help                   show this help
+EOF
+        exit 0
+        ;;
+esac
 
 action=${1:-}; shift || true
 ASSUME_YES=

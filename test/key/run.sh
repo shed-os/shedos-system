@@ -95,6 +95,21 @@ else
     _ok CP2_no_secret_argv
 fi
 
+# G1-G3: the recovery-key generator — source the verb to reach its internals.
+# shellcheck source=/dev/null
+source "$verb"
+key=$(_gen_recovery); stripped=${key//-/}
+if [[ ${#stripped} -eq 25 && $stripped =~ ^[ABCDEFGHJKMNPRSTVWXYZ347]+$ ]]; then
+    _ok G1_format
+else
+    _fail G1_format "$key"
+fi
+if [[ "$(_gen_recovery)" != "$(_gen_recovery)" ]]; then _ok G2_random; else _fail G2_random "identical draws"; fi
+mapfile -t forms < <(_recovery_forms "AB-CD")
+got=$(printf '%s\n' "${forms[@]}" | sort | tr '\n' ' ')
+want=$(printf '%s\n' AB-CD ABCD ab-cd abcd | sort | tr '\n' ' ')
+if [[ $got == "$want" ]]; then _ok G3_forms; else _fail G3_forms "got=$got"; fi
+
 total=$((pass + fail))
 echo
 echo "key: $pass/$total passed"
