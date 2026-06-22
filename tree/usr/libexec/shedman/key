@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# shedman key; change the disk passphrase, manage keyslots, and rotate the paper
+# recovery key on an encrypted box. Every change applies to all boot-unlocked
+# LUKS containers (root + swap); secrets always move over stdin, never argv.
+
+set -uo pipefail
+
+PROG="shedman key"
+CONTAINERS_FILE=${SHEDMAN_KEY_CONTAINERS:-/etc/shedos/secureboot/containers}
+CRYPTTAB=${SHEDMAN_CRYPTTAB:-/etc/crypttab}
+
+case "${1:-}" in
+    --help-summary)
+        echo "change the passphrase, manage keyslots, rotate the recovery key"
+        exit 0
+        ;;
+    --complete-bash|--complete-zsh)
+        printf '%s\n' change-passphrase rotate-recovery add-key remove-key --status --fido2 --yes -y --help -h
+        exit 0
+        ;;
+    --complete-fish)
+        cat <<'EOF'
+change-passphrase	change the disk unlock passphrase
+rotate-recovery	mint a new recovery key and retire the old one
+add-key	add another passphrase, or a FIDO2/YubiKey
+remove-key	remove a keyslot (never your last way in)
+--status	show keyslots and what each one is
+--fido2	with add-key: enroll a FIDO2/YubiKey
+--yes	skip the confirmation prompt
+-y	skip the confirmation prompt
+--help	show usage
+-h	show usage
+EOF
+        exit 0
+        ;;
+    --help|-h|"")
+        cat <<EOF
+Usage: sudo $PROG change-passphrase [--yes]
+       sudo $PROG rotate-recovery [--yes]
+       sudo $PROG add-key [--fido2] [--yes]
+       sudo $PROG remove-key <slot> [--yes]
+            $PROG --status
+
+Manage the keys on this machine's encrypted disk. Every change applies to all
+boot-unlocked containers (root and encrypted swap) and keeps a working way in
+at every step.
+
+  change-passphrase            change the disk unlock passphrase
+  rotate-recovery              mint a new recovery key and retire the old one
+  add-key [--fido2]            add another passphrase, or a FIDO2/YubiKey
+  remove-key <slot>            remove a keyslot (never your last way in)
+  --status                     show keyslots and what each one is
+  -y, --yes                    skip the confirmation prompt
+  -h, --help                   show this help
+EOF
+        exit 0
+        ;;
+esac
+
+_die() { echo "$PROG: $1" >&2; exit "${2:-1}"; }
+
+_require_root() {
+    if [[ $(id -u) -ne 0 ]]; then
+        echo "$PROG: $1 requires root" >&2
+        exit 1
+    fi
+}
+
+# Map a crypttab field-2 source (UUID=x, PARTUUID=x, or a bare path) to a
+# device path cryptsetup can open.
+_resolve_crypttab_source() {
+    local src=$1
+    case "$src" in
+        UUID=*)     printf '/dev/disk/by-uuid/%s\n' "${src#UUID=}" ;;
+        PARTUUID=*) printf '/dev/disk/by-partuuid/%s\n' "${src#PARTUUID=}" ;;
+        LABEL=*)    printf '/dev/disk/by-label/%s\n' "${src#LABEL=}" ;;
+        *)          printf '%s\n' "$src" ;;
+    esac
+}
+
+# The boot-unlocked LUKS containers, root first. Prefer the install-written
+# list; fall back to crypttab so an older box still resolves.
+_resolve_containers() {
+    local line name dev
+    if [[ -s $CONTAINERS_FILE ]]; then
+        while read -r line; do
+            line=${line%%#*}
+            line=${line//[[:space:]]/}
+            [[ -n $line ]] && printf '%s\n' "$line"
+        done < "$CONTAINERS_FILE"
+        return 0
+    fi
+    [[ -r $CRYPTTAB ]] || return 0
+    while read -r name dev _; do
+        [[ -z $name || $name == \#* || -z $dev ]] && continue
+        _resolve_crypttab_source "$dev"
+    done < "$CRYPTTAB"
+}
+
+_load_containers() {
+    mapfile -t CONTAINERS < <(_resolve_containers)
+    if (( ${#CONTAINERS[@]} == 0 )); then
+        echo "$PROG: found no encrypted disks to manage" >&2
+        exit 1
+    fi
+}
+
+# Gate every mutating action on an explicit yes. A non-TTY only proceeds when
+# the caller passed --yes; we never auto-confirm a security action.
+_confirm() {
+    local prompt=$1 answer
+    if [[ -n ${ASSUME_YES:-} ]]; then
+        return 0
+    fi
+    if [[ ! -t 0 ]]; then
+        echo "$PROG: refusing to continue without confirmation; pass --yes to proceed non-interactively" >&2
+        exit 1
+    fi
+    read -r -p "$prompt" answer
+    if [[ $answer != yes ]]; then
+        echo "$PROG: aborted" >&2
+        exit 1
+    fi
+}
+
+_dump_json() { cryptsetup luksDump --dump-json-metadata "$1" 2>/dev/null; }
+
+# Print "slot N: <role>" per keyslot, reading roles from LUKS2 tokens:
+# shedos-recovery -> recovery, shedos-added -> added passphrase,
+# systemd-tpm2 -> tpm2, systemd-fido2 -> fido2; an untagged slot 0 is the
+# passphrase, any other untagged slot is unlabeled.
+_cmd_status() {
+    _load_containers
+    local dev json slots s role
+    for dev in "${CONTAINERS[@]}"; do
+        echo "$dev:"
+        json=$(_dump_json "$dev")
+        slots=$(jq -r '.keyslots | keys[]' <<<"$json" 2>/dev/null | sort -n)
+        for s in $slots; do
+            role=$(jq -r --arg s "$s" '
+                (.tokens // {}) | to_entries
+                | map(select(.value.keyslots | index($s)))
+                | (.[0].value.type // "")' <<<"$json" 2>/dev/null)
+            case "$role" in
+                shedos-recovery) role=recovery ;;
+                shedos-added)    role="added passphrase" ;;
+                systemd-tpm2)    role=tpm2 ;;
+                systemd-fido2)   role=fido2 ;;
+                "")              role=$([[ $s == 0 ]] && echo passphrase || echo unlabeled) ;;
+            esac
+            echo "  slot $s: $role"
+        done
+    done
+}
+
+action=${1:-}; shift || true
+ASSUME_YES=
+args=()
+for arg in "$@"; do
+    case "$arg" in
+        --yes|-y) ASSUME_YES=1 ;;
+        *)        args+=("$arg") ;;
+    esac
+done
+
+case "$action" in
+    change-passphrase) _cmd_change_passphrase ;;
+    rotate-recovery)   _cmd_rotate_recovery ;;
+    add-key)           _cmd_add_key ;;
+    remove-key)        _cmd_remove_key "${args[0]:-}" ;;
+    --status)          _cmd_status ;;
+    *)
+        echo "$PROG: unknown subcommand: $action" >&2
+        echo "Try: $PROG --help" >&2
+        exit 2
+        ;;
+esac

@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Guard the `shedman key` verb: it changes the passphrase, rotates the recovery
+# key, and adds/removes keyslots on every encrypted container — secrets never on
+# argv, never stranding a way in. cryptsetup + systemd-cryptenroll are
+# PATH-stubbed so they log argv instead of touching a disk; container state is
+# faked via the verb's SHEDMAN_* overrides and `luksDump` prints $DUMP_JSON.
+
+set -uo pipefail
+
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd -- "$here/../.." && pwd)
+verb=$repo_root/packaging/shedos-system/tree/usr/libexec/shedman/key
+
+pass=0; fail=0; failures=()
+_ok()   { printf 'ok: %s\n' "$1"; pass=$((pass + 1)); }
+_fail() { printf 'FAIL: %s — %s\n' "$1" "$2" >&2; failures+=("$1"); fail=$((fail + 1)); }
+
+# A sandbox with PATH-stubbed binaries. cryptsetup logs argv to
+# $d/cryptsetup.log; `cryptsetup luksDump …` prints the $DUMP_JSON env so tests
+# can fake the keyslot/token layout. A stubbed `id -u` reports $STUB_UID
+# (default 0) so the root-guarded paths run unprivileged in CI.
+_mk_sandbox() {
+    local d; d=$(mktemp -d); mkdir -p "$d/bin"
+    cat > "$d/bin/cryptsetup" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$d/cryptsetup.log"
+if [[ \$1 == luksDump ]]; then printf '%s\n' "\${DUMP_JSON:-}"; fi
+exit 0
+EOF
+    cat > "$d/bin/systemd-cryptenroll" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$d/enroll.log"
+exit 0
+EOF
+    cat > "$d/bin/id" <<'EOF'
+#!/usr/bin/env bash
+[[ $1 == -u ]] && { echo "${STUB_UID:-0}"; exit 0; }
+exec /usr/bin/id "$@"
+EOF
+    chmod +x "$d/bin/cryptsetup" "$d/bin/systemd-cryptenroll" "$d/bin/id"
+    printf '%s\n' "$d"
+}
+
+# Run the verb in the sandbox. $1=dir $2=action ...flags. STDIN flows from the
+# caller; $DUMP_JSON / $CONTAINERS / $CRYPTTAB pass through to the verb + stubs.
+_run() {
+    local d=$1 action=$2; shift 2
+    PATH="$d/bin:$PATH" \
+    SHEDMAN_KEY_CONTAINERS="${CONTAINERS:-$d/containers}" \
+    SHEDMAN_CRYPTTAB="${CRYPTTAB:-$d/crypttab}" \
+    DUMP_JSON="${DUMP_JSON:-}" \
+        bash "$verb" "$action" "$@"
+}
+
+# C1: --help exits 0 with the usage banner.
+d=$(_mk_sandbox)
+out=$(_run "$d" --help); rc=$?
+if [[ $rc -eq 0 && $out == *"Usage: sudo shedman key"* ]]; then _ok C1_help; else _fail C1_help "rc=$rc"; fi
+
+# C2: an unknown subcommand exits 2.
+_run "$d" frobnicate >/dev/null 2>&1; rc=$?
+if [[ $rc -eq 2 ]]; then _ok C2_unknown; else _fail C2_unknown "rc=$rc"; fi
+
+# C3: no encrypted disks → exit 1, fail-loud.
+printf '' > "$d/containers"
+out=$(_run "$d" --status 2>&1); rc=$?
+if [[ $rc -eq 1 && $out == *"no encrypted disks"* ]]; then _ok C3_unencrypted; else _fail C3_unencrypted "rc=$rc out=$out"; fi
+
+# C4: --status names each slot's role from the LUKS2 tokens.
+printf '/dev/mapper/fake\n' > "$d/containers"
+DUMP_JSON='{"keyslots":{"0":{},"1":{},"5":{}},"tokens":{"0":{"type":"shedos-recovery","keyslots":["1"]},"1":{"type":"systemd-tpm2","keyslots":["5"]}}}'
+out=$(DUMP_JSON="$DUMP_JSON" _run "$d" --status)
+if [[ $out == *"slot 0"*"passphrase"* && $out == *"slot 1"*"recovery"* && $out == *"slot 5"*"tpm2"* ]]; then
+    _ok C4_status_roles
+else
+    _fail C4_status_roles "$out"
+fi
+
+total=$((pass + fail))
+echo
+echo "key: $pass/$total passed"
+(( fail == 0 ))
