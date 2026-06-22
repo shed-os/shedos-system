@@ -31,7 +31,7 @@ def _run(env):
     )
 
 
-def _env(tmp_path, *, preset=True, limine=LIMINE):
+def _env(tmp_path, *, preset=True, limine: str | None = LIMINE):
     boot = tmp_path / "boot"
     etc = tmp_path / "etc"
     boot.mkdir()
