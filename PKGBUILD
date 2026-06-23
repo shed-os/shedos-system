@@ -152,6 +152,16 @@ package() {
     install -Dm644 tree/usr/lib/shedos/esp-state.sh \
         "$pkgdir/usr/lib/shedos/esp-state.sh"
 
+    # The reencrypt driver (the initramfs one-shot ExecStart) plus its unit and
+    # mkinitcpio install hook. The arm step builds a transient initramfs that
+    # stages the hook; without these lines none of the machinery ships.
+    install -Dm755 tree/usr/lib/shedos/reencrypt-driver.sh \
+        "$pkgdir/usr/lib/shedos/reencrypt-driver.sh"
+    install -Dm644 tree/usr/lib/systemd/system/shedos-reencrypt.service \
+        "$pkgdir/usr/lib/systemd/system/shedos-reencrypt.service"
+    install -Dm755 tree/usr/lib/initcpio/install/shedos-reencrypt \
+        "$pkgdir/usr/lib/initcpio/install/shedos-reencrypt"
+
     # Shared palette loader; the Textual TUIs add /usr/lib/shedos to
     # sys.path and `import shedos_palette` to colour themselves live.
     install -Dm644 tree/usr/lib/shedos/shedos_palette.py \

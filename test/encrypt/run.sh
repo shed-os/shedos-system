@@ -184,6 +184,70 @@ d=$(_mk_sandbox)
 printf 'hunter2-secret\n' | _srun "$d" 'pw=$(_read_secret "p: "); cryptsetup isLuks /dev/sda2 >/dev/null 2>&1 || true'
 if grep -q 'hunter2-secret' "$d"/*.log 2>/dev/null; then _fail S1_no_secret_argv "secret on argv"; else _ok S1_no_secret_argv; fi
 
+# U1-U2: the reencrypt one-shot is an initrd-only oneshot ordered before
+# sysroot.mount and pulled in by initrd-root-fs.target — and must NOT order after
+# cryptsetup.target (it decides the device's fate) or mount the live root.
+unit=$repo_root/packaging/shedos-system/tree/usr/lib/systemd/system/shedos-reencrypt.service
+if [[ -f $unit ]] \
+   && grep -q '^DefaultDependencies=no$'                        "$unit" \
+   && grep -q '^ConditionPathExists=/etc/initrd-release$'       "$unit" \
+   && grep -q '^Before=sysroot.mount$'                          "$unit" \
+   && grep -q '^WantedBy=initrd-root-fs.target$'                "$unit" \
+   && grep -q '^Type=oneshot$'                                  "$unit" \
+   && grep -q '^ExecStart=/usr/lib/shedos/reencrypt-driver.sh$' "$unit"; then
+    _ok U1_unit_shape
+else
+    _fail U1_unit_shape "$(cat "$unit" 2>/dev/null)"
+fi
+# Only an ordering/dependency directive counts — the comment may name the target.
+if grep -qiE '^(after|wants|requires|bindsto)=.*cryptsetup' "$unit" 2>/dev/null; then _fail U2_no_cryptsetup_target "orders after cryptsetup.target"; else _ok U2_no_cryptsetup_target; fi
+
+# H1-H2: the install hook stages the offline-reencrypt toolchain and symlinks the
+# unit into initrd-root-fs.target.wants (a unit not symlinked there never starts).
+hook=$repo_root/packaging/shedos-system/tree/usr/lib/initcpio/install/shedos-reencrypt
+_h() { grep -q "$1" "$hook" 2>/dev/null; }
+if [[ -f $hook ]] \
+   && _h "add_binary /usr/bin/cryptsetup" \
+   && _h "add_binary /usr/bin/btrfs" \
+   && _h "add_binary /usr/bin/bash" \
+   && _h "add_module 'dm-crypt'" \
+   && _h "add_all_modules '/crypto/'" \
+   && _h "add_binary '/usr/lib/libgcc_s.so.1'" \
+   && _h "add_file /usr/lib/shedos/esp-state.sh" \
+   && _h "add_file /usr/lib/shedos/reencrypt-driver.sh" \
+   && _h "add_systemd_unit shedos-reencrypt.service"; then
+    _ok H1_hook_stages
+else
+    _fail H1_hook_stages "$(cat "$hook" 2>/dev/null)"
+fi
+if _h 'initrd-root-fs.target.wants/shedos-reencrypt.service'; then _ok H2_hook_enables; else _fail H2_hook_enables "$(grep -n target.wants "$hook" 2>/dev/null)"; fi
+
+# DS1-DS5: _detect_state branches read-only on isLuks + the ESP phase.
+driver=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/reencrypt-driver.sh
+_ds() {  # $1=isluks-exit(1=plaintext,0=luks) $2=phase
+    local dd; dd=$(_mk_sandbox); mkdir -p "$dd/esp/shedos-encrypt"
+    [[ -n $2 ]] && printf 'phase=%s\n' "$2" > "$dd/esp/shedos-encrypt/state"
+    PATH="$dd/bin:$PATH" STUB_ISLUKS="$1" \
+    ESP_STATE_FILE="$dd/esp/shedos-encrypt/state" SHEDOS_REENCRYPT_DEV=/dev/fake-root \
+        bash -c "source '$driver'; _detect_state"
+}
+got=$(_ds 1 armed);        if [[ $got == fresh-encrypt ]];         then _ok DS1_fresh;            else _fail DS1_fresh "$got"; fi
+got=$(_ds 0 encrypting);   if [[ $got == resume ]];                then _ok DS2_resume;           else _fail DS2_resume "$got"; fi
+got=$(_ds 1 '');           if [[ $got == plaintext-passthrough ]]; then _ok DS3_passthrough;      else _fail DS3_passthrough "$got"; fi
+got=$(_ds 0 '');           if [[ $got == plaintext-passthrough ]]; then _ok DS4_done_passthrough; else _fail DS4_done_passthrough "$got"; fi
+got=$(_ds 0 flip-pending); if [[ $got == resume ]];                then _ok DS5_flip_resume;      else _fail DS5_flip_resume "$got"; fi
+
+# P1: the unit + hook + driver are actually installed by package() — a staged
+# file PKGBUILD never installs ships nothing (the _libexec_shedman class of bug).
+pkgbuild=$repo_root/packaging/shedos-system/PKGBUILD
+if grep -q 'tree/usr/lib/systemd/system/shedos-reencrypt.service' "$pkgbuild" \
+   && grep -q 'tree/usr/lib/initcpio/install/shedos-reencrypt' "$pkgbuild" \
+   && grep -q 'tree/usr/lib/shedos/reencrypt-driver.sh' "$pkgbuild"; then
+    _ok P1_pkgbuild_installs
+else
+    _fail P1_pkgbuild_installs "missing install line"
+fi
+
 # esp-state.sh: pure-unit round-trip + parse-safety (no cryptsetup stubs).
 esp_rc=0; bash "$here/esp-state.sh" || esp_rc=1
 

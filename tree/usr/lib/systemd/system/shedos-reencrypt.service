@@ -1,0 +1,19 @@
+[Unit]
+Description=In-place root reencryption driver
+# Initrd-only one-shot. Unlike shedos-initrd-recovery it deliberately does
+# NOT order after cryptsetup.target and never mounts the live root: on the
+# fresh-encrypt path the root partition is about to be reencrypted under us,
+# so the normal unlock path must not run and root must stay unmounted. The
+# driver reads the ESP state, branches, and either passes through (plaintext
+# box) or drives the conversion before sysroot.mount.
+DefaultDependencies=no
+ConditionPathExists=/etc/initrd-release
+Before=sysroot.mount
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/shedos/reencrypt-driver.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=initrd-root-fs.target

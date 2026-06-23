@@ -1,0 +1,51 @@
+#!/bin/bash
+# mkinitcpio install hook: stage the in-place reencryption toolchain into the
+# systemd initrd so the offline driver can shrink, reencrypt and grow the root
+# without external media. Pairs with shedos-reencrypt.service, which fires the
+# driver before sysroot.mount. Only present in the transient reencrypt
+# initramfs the `shedman encrypt` arm step builds.
+
+build() {
+    # cryptsetup does the reencrypt; btrfs does the resize (shrink before the
+    # header lands, grow-back after). The driver is #!/bin/bash and uses
+    # bashisms, but a systemd initrd carries only busybox /bin/sh, so bash is
+    # staged explicitly (same reason as shedos-recovery).
+    add_binary /usr/bin/cryptsetup
+    add_binary /usr/bin/btrfs
+    add_binary /usr/bin/bash
+
+    # dm-crypt plus the whole crypto module set: the box may use any LUKS2
+    # cipher and the resume path must replay it verbatim, so we cannot prune
+    # to a single cipher at build time.
+    add_module 'dm-crypt'
+    if [[ -n "$CRYPTO_MODULES" ]]; then
+        local mod
+        for mod in $CRYPTO_MODULES; do add_module "$mod"; done
+    else
+        add_all_modules '/crypto/'
+    fi
+
+    # cryptsetup calls pthread_create(), which dlopen()s libgcc_s.so.1, and
+    # loads the legacy OpenSSL provider for whirlpool — same as the stock
+    # encrypt hook.
+    add_binary '/usr/lib/libgcc_s.so.1'
+    add_binary '/usr/lib/ossl-modules/legacy.so'
+
+    # The orchestration state lives on the ESP; the driver sources both libs.
+    add_file /usr/lib/shedos/esp-state.sh
+    add_file /usr/lib/shedos/reencrypt-driver.sh
+
+    add_systemd_unit shedos-reencrypt.service
+    cd "$BUILDROOT" || return 1
+    mkdir -p usr/lib/systemd/system/initrd-root-fs.target.wants
+    ln -sf ../shedos-reencrypt.service \
+        usr/lib/systemd/system/initrd-root-fs.target.wants/shedos-reencrypt.service
+}
+
+help() {
+    cat <<HELPEOF
+Stages cryptsetup, btrfs, dm-crypt + the crypto module set, and the ShedOS
+reencrypt driver into a transient initramfs so an existing unencrypted root can
+be encrypted in place across a reboot. Built only by the shedman encrypt run.
+HELPEOF
+}
