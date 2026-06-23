@@ -184,4 +184,8 @@ d=$(_mk_sandbox)
 printf 'hunter2-secret\n' | _srun "$d" 'pw=$(_read_secret "p: "); cryptsetup isLuks /dev/sda2 >/dev/null 2>&1 || true'
 if grep -q 'hunter2-secret' "$d"/*.log 2>/dev/null; then _fail S1_no_secret_argv "secret on argv"; else _ok S1_no_secret_argv; fi
 
-total=$((pass + fail)); echo; echo "encrypt: $pass/$total passed"; (( fail == 0 ))
+# esp-state.sh: pure-unit round-trip + parse-safety (no cryptsetup stubs).
+esp_rc=0; bash "$here/esp-state.sh" || esp_rc=1
+
+total=$((pass + fail)); echo; echo "encrypt: $pass/$total passed"
+(( fail == 0 && esp_rc == 0 ))

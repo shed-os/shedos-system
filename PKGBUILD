@@ -146,6 +146,12 @@ package() {
     install -Dm644 tree/usr/lib/shedos/apply_core.py \
         "$pkgdir/usr/lib/shedos/apply_core.py"
 
+    # Orchestration state lib for in-place encryption; sourced by the reencrypt
+    # driver and the encrypt subcommand. usr/lib/shedos installs file-by-file,
+    # so a new lib needs its own line here or it does not ship.
+    install -Dm644 tree/usr/lib/shedos/esp-state.sh \
+        "$pkgdir/usr/lib/shedos/esp-state.sh"
+
     # Shared palette loader; the Textual TUIs add /usr/lib/shedos to
     # sys.path and `import shedos_palette` to colour themselves live.
     install -Dm644 tree/usr/lib/shedos/shedos_palette.py \
