@@ -14,6 +14,13 @@ build() {
     add_binary /usr/bin/btrfs
     add_binary /usr/bin/bash
 
+    # The swap carve edits the GPT (sgdisk), re-reads it (partx/blockdev), and
+    # formats a fresh swap container (mkswap).
+    add_binary /usr/bin/sgdisk
+    add_binary /usr/bin/mkswap
+    add_binary /usr/bin/blockdev
+    add_binary /usr/bin/partx
+
     # dm-crypt plus the whole crypto module set: the box may use any LUKS2
     # cipher and the resume path must replay it verbatim, so we cannot prune
     # to a single cipher at build time.

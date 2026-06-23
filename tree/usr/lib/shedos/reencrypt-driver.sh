@@ -20,12 +20,86 @@ SHEDOS_REENCRYPT_ESP=${SHEDOS_REENCRYPT_ESP:-/boot/efi/shedos-encrypt}
 # The arm step stashes the disk passphrase in a 0600 keyfile on the ESP for this
 # unattended initramfs run; a resume reads the same file.
 SHEDOS_REENCRYPT_KEYFILE=${SHEDOS_REENCRYPT_KEYFILE:-$SHEDOS_REENCRYPT_ESP/key}
+# The boot-unlocked container list (root first, then carved swap), shared with
+# the shedman key enrol path; and the RAM source for swap sizing.
+SHEDOS_REENCRYPT_CONTAINERS=${SHEDOS_REENCRYPT_CONTAINERS:-/etc/shedos/secureboot/containers}
+SHEDOS_REENCRYPT_MEMINFO=${SHEDOS_REENCRYPT_MEMINFO:-/proc/meminfo}
 
-# Still placeholders — the swap carve, recovery enrol, and boot reconfigure land
-# in later tasks against real devices.
-_do_swap_carve()       { return 0; }
+# Still placeholders — the recovery enrol and boot reconfigure land in later
+# tasks against real devices.
 _do_enroll()           { return 0; }
 _do_reconfigure_boot() { return 0; }
+
+# Resolve partition N's device node after a table change, handling bare (sdaN)
+# vs p-form (nvme0n1pN) naming and udev's async node creation. Polls up to 5s;
+# SHEDOS_REENCRYPT_SETTLE=0 (tests) skips the wait and returns the bare name.
+_wait_partnode() {  # $1=disk $2=partnum  -> echoes the node, or returns 1
+    local disk=$1 pn=$2 i cand
+    for cand in "${disk}${pn}" "${disk}p${pn}"; do
+        [[ -b $cand ]] && { printf '%s\n' "$cand"; return 0; }
+    done
+    [[ ${SHEDOS_REENCRYPT_SETTLE:-1} == 0 ]] && { printf '%s\n' "${disk}${pn}"; return 0; }
+    udevadm settle 2>/dev/null || true
+    for ((i = 0; i < 50; i++)); do
+        for cand in "${disk}${pn}" "${disk}p${pn}"; do
+            [[ -b $cand ]] && { printf '%s\n' "$cand"; return 0; }
+        done
+        sleep 0.1
+    done
+    return 1
+}
+
+# Carve a RAM-sized encrypted swap from the disk tail and format it fresh. The
+# btrfs fs was already shrunk by RAM+32M in _do_shrink, so the bytes past the new
+# root end are free. Back up the GPT, shrink the root partition entry (same
+# start, smaller end — a table edit only, data is never moved), carve the swap
+# partition in the freed tail, luksFormat it fresh (swap holds no data to
+# preserve), mkswap inside the mapper, and record it for enrol + boot wiring.
+# Separately gated: any failure returns 1 and the caller keeps the box on zram.
+_do_swap_carve() {  # $1=disk $2=root-partnum $3=keyfile
+    local disk=$1 rootpn=$2 kf=$3
+    install -d "$SHEDOS_REENCRYPT_ESP" "$(dirname -- "$SHEDOS_REENCRYPT_CONTAINERS")"
+    local bak; bak="$SHEDOS_REENCRYPT_ESP/gpt-$(basename -- "$disk").bak"
+
+    # Back up the partition table FIRST — recoverable via `sgdisk --load-backup`.
+    sgdisk "--backup=$bak" "$disk" \
+        || { echo "reencrypt: could not back up the GPT of $disk — leaving swap on zram" >&2; return 1; }
+
+    local memkb ramgib
+    memkb=$(awk '/^MemTotal:/{print $2}' "$SHEDOS_REENCRYPT_MEMINFO")
+    ramgib=$(( (memkb + 1048575) / 1048576 ))   # RAM rounded up to the next GiB
+
+    # Shrink the root partition by RAM-size: same start sector, end RAM-GiB
+    # earlier; then carve swap in the freed tail. sgdisk only rewrites the table,
+    # so partition data is never moved and the already-shrunk fs still fits.
+    local start sectors_per_gib new_end
+    start=$(sgdisk -i "$rootpn" "$disk" | awk '/First sector/{print $3}')
+    sectors_per_gib=$(( 1024 * 1024 * 1024 / 512 ))
+    new_end=$(( $(sgdisk -i "$rootpn" "$disk" | awk '/Last sector/{print $3}') - ramgib * sectors_per_gib ))
+    sgdisk -d "$rootpn" \
+           -n "$rootpn:$start:$new_end" -t "$rootpn:8300" -c "$rootpn:root" \
+           -n "0:0:0" -t "0:8300" -c "0:swap" "$disk" \
+        || { echo "reencrypt: GPT carve failed — restoring backup, swap stays on zram" >&2; sgdisk "--load-backup=$bak" "$disk"; return 1; }
+    # Make the kernel pick up the new table, then wait for the swap node to
+    # appear (udev is async, and a loop device needs an explicit re-read).
+    partx -u "$disk" 2>/dev/null || partprobe "$disk" 2>/dev/null || blockdev --rereadpt "$disk" 2>/dev/null || true
+    local swappn=$(( rootpn + 1 )) swapdev mapper=luks-swap
+    swapdev=$(_wait_partnode "$disk" "$swappn") \
+        || { echo "reencrypt: swap partition node never appeared after the carve" >&2; return 1; }
+    cryptsetup luksFormat --type luks2 -q --key-file="$kf" "$swapdev" \
+        || { echo "reencrypt: luksFormat of swap failed — swap stays on zram" >&2; return 1; }
+    cryptsetup open --key-file="$kf" "$swapdev" "$mapper" \
+        || { echo "reencrypt: could not open the new swap container" >&2; return 1; }
+    mkswap "/dev/mapper/$mapper" \
+        || { echo "reencrypt: mkswap failed on the swap container" >&2; return 1; }
+
+    # Record the swap container so _do_enroll enrols the recovery key on it (RCA:
+    # root-only strands the key at the swap tries=0 prompt) and the boot
+    # reconfigure adds its rd.luks.name + resume=.
+    grep -qx "/dev/mapper/$mapper" "$SHEDOS_REENCRYPT_CONTAINERS" 2>/dev/null \
+        || printf '/dev/mapper/%s\n' "$mapper" >> "$SHEDOS_REENCRYPT_CONTAINERS"
+    echo "reencrypt: carved + formatted ${ramgib}G encrypted swap on $swapdev"
+}
 
 # Bytes of a mounted btrfs's "Device size" — the value btrfs resize moves.
 _btrfs_dev_size() {
@@ -158,7 +232,11 @@ main() {
     _do_root_reencrypt "$dev" "$SHEDOS_REENCRYPT_KEYFILE" || return 0
     mapper=luks-$(cryptsetup luksUUID "$dev" 2>/dev/null)
     cryptsetup open --key-file="$SHEDOS_REENCRYPT_KEYFILE" "$dev" "$mapper" 2>/dev/null
-    _do_swap_carve                     || true
+    # Carve encrypted swap only when the arm step asked for it; a carve failure
+    # leaves the box on encrypted-root + zram, never a half-written table.
+    if [[ $(esp_state_get swap 2>/dev/null) == yes ]]; then
+        _do_swap_carve "$(esp_state_get disk)" "$(esp_state_get rootpn)" "$SHEDOS_REENCRYPT_KEYFILE" || true
+    fi
     _do_growback "/dev/mapper/$mapper" || true
     _do_enroll                         || true
     _do_reconfigure_boot               || true

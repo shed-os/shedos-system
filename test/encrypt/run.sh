@@ -321,6 +321,42 @@ else
     _fail MAIN1_fresh_chain "cs=[$(cat "$d/cryptsetup.log" 2>/dev/null)] bt=[$(cat "$d/btrfs.log" 2>/dev/null)]"
 fi
 
+# Swap-carve stubs (sgdisk -p/--backup, mkswap, blockdev; cryptsetup/btrfs from
+# _mk_sandbox). The geometry math is proven by the loop e2e, not the stubs.
+_swap_stubs() {  # $1=dir
+    cat > "$1/bin/sgdisk" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$1/sgdisk.log"
+[[ "\$*" == *--backup=* ]] && { bk=\$(printf '%s' "\$*" | sed -n 's/.*--backup=\([^ ]*\).*/\1/p'); : > "\$bk"; }
+exit 0
+EOF
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/mkswap.log"\nexit 0\n' "$1" > "$1/bin/mkswap"
+    cp "$1/bin/mkswap" "$1/bin/blockdev"
+    chmod +x "$1/bin/sgdisk" "$1/bin/mkswap" "$1/bin/blockdev"
+}
+
+# SC1-SC4: GPT backed up before the table edit, swap is a fresh luksFormat (never
+# reencrypt), mkswap runs with no secret on argv, and the mapper is appended to
+# the container list for enrolment.
+d=$(_mk_sandbox); _swap_stubs "$d"
+printf 'diskpass' > "$d/kf"; chmod 600 "$d/kf"; : > "$d/containers"; printf 'MemTotal: 262144 kB\n' > "$d/meminfo"
+PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SETTLE=0 SHEDOS_REENCRYPT_ESP="$d/esp" SHEDOS_REENCRYPT_CONTAINERS="$d/containers" SHEDOS_REENCRYPT_MEMINFO="$d/meminfo" \
+  bash -c "source '$driver'; _do_swap_carve /dev/sda 2 '$d/kf'" >/dev/null 2>&1
+if grep -q -- '--backup=' "$d/sgdisk.log" 2>/dev/null && [[ -e $d/esp/gpt-sda.bak ]]; then _ok SC1_gpt_backup; else _fail SC1_gpt_backup "$(cat "$d/sgdisk.log" 2>/dev/null)"; fi
+if grep -q 'luksFormat' "$d/cryptsetup.log" 2>/dev/null && ! grep -q 'reencrypt' "$d/cryptsetup.log" 2>/dev/null; then _ok SC2_fresh_format; else _fail SC2_fresh_format "$(cat "$d/cryptsetup.log" 2>/dev/null)"; fi
+if grep -q '/dev/mapper/luks-swap' "$d/mkswap.log" 2>/dev/null && ! grep -q diskpass "$d/cryptsetup.log" "$d/sgdisk.log" 2>/dev/null; then _ok SC3_mkswap_no_secret; else _fail SC3_mkswap_no_secret "$(cat "$d/cryptsetup.log" "$d/sgdisk.log" 2>/dev/null)"; fi
+if grep -q 'luks-swap' "$d/containers" 2>/dev/null; then _ok SC4_container_appended; else _fail SC4_container_appended "$(cat "$d/containers" 2>/dev/null)"; fi
+
+# MAIN2: with swap=yes in the ESP state, main carves swap after the reencrypt.
+d=$(_mk_sandbox); _btrfs_shrink_stub "$d"; _swap_stubs "$d"; mkdir -p "$d/esp"
+{ printf 'phase=armed\n'; printf 'swap=yes\n'; printf 'disk=/dev/sda\n'; printf 'rootpn=2\n'; } > "$d/esp/state"
+printf 'e2e' > "$d/esp/key"; : > "$d/containers"; printf 'MemTotal: 262144 kB\n' > "$d/meminfo"
+PATH="$d/bin:$PATH" STUB_ISLUKS=1 SHEDOS_REENCRYPT_SETTLE=0 ESP_STATE_FILE="$d/esp/state" SHEDOS_REENCRYPT_DEV=/dev/sda2 \
+  SHEDOS_REENCRYPT_SCRATCH="$d/mnt" SHEDOS_REENCRYPT_ESP="$d/esp" SHEDOS_REENCRYPT_KEYFILE="$d/esp/key" \
+  SHEDOS_REENCRYPT_CONTAINERS="$d/containers" SHEDOS_REENCRYPT_MEMINFO="$d/meminfo" \
+  bash -c "source '$driver'; main" >/dev/null 2>&1
+if grep -q 'luksFormat' "$d/cryptsetup.log" 2>/dev/null && grep -q 'luks-swap' "$d/containers" 2>/dev/null; then _ok MAIN2_swap_carved; else _fail MAIN2_swap_carved "cs=[$(cat "$d/cryptsetup.log" 2>/dev/null)] cont=[$(cat "$d/containers" 2>/dev/null)]"; fi
+
 # esp-state.sh: pure-unit round-trip + parse-safety (no cryptsetup stubs).
 esp_rc=0; bash "$here/esp-state.sh" || esp_rc=1
 
