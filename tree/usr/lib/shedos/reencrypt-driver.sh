@@ -20,14 +20,11 @@ SHEDOS_REENCRYPT_ESP=${SHEDOS_REENCRYPT_ESP:-/boot/efi/shedos-encrypt}
 # The arm step stashes the disk passphrase in a 0600 keyfile on the ESP for this
 # unattended initramfs run; a resume reads the same file.
 SHEDOS_REENCRYPT_KEYFILE=${SHEDOS_REENCRYPT_KEYFILE:-$SHEDOS_REENCRYPT_ESP/key}
-# The boot-unlocked container list (root first, then carved swap), shared with
-# the shedman key enrol path; and the RAM source for swap sizing.
-SHEDOS_REENCRYPT_CONTAINERS=${SHEDOS_REENCRYPT_CONTAINERS:-/etc/shedos/secureboot/containers}
+# The RAM source for swap sizing.
 SHEDOS_REENCRYPT_MEMINFO=${SHEDOS_REENCRYPT_MEMINFO:-/proc/meminfo}
 
-# Still placeholders — the recovery enrol and boot reconfigure land in later
-# tasks against real devices.
-_do_enroll()           { return 0; }
+# Still a placeholder — the live-box boot reconfigure lands in a later task
+# against real devices.
 _do_reconfigure_boot() { return 0; }
 
 # Resolve partition N's device node after a table change, handling bare (sdaN)
@@ -58,7 +55,7 @@ _wait_partnode() {  # $1=disk $2=partnum  -> echoes the node, or returns 1
 # Separately gated: any failure returns 1 and the caller keeps the box on zram.
 _do_swap_carve() {  # $1=disk $2=root-partnum $3=keyfile
     local disk=$1 rootpn=$2 kf=$3
-    install -d "$SHEDOS_REENCRYPT_ESP" "$(dirname -- "$SHEDOS_REENCRYPT_CONTAINERS")"
+    install -d "$SHEDOS_REENCRYPT_ESP"
     local bak; bak="$SHEDOS_REENCRYPT_ESP/gpt-$(basename -- "$disk").bak"
 
     # Back up the partition table FIRST — recoverable via `sgdisk --load-backup`.
@@ -93,11 +90,11 @@ _do_swap_carve() {  # $1=disk $2=root-partnum $3=keyfile
     mkswap "/dev/mapper/$mapper" \
         || { echo "reencrypt: mkswap failed on the swap container" >&2; return 1; }
 
-    # Record the swap container so _do_enroll enrols the recovery key on it (RCA:
-    # root-only strands the key at the swap tries=0 prompt) and the boot
-    # reconfigure adds its rd.luks.name + resume=.
-    grep -qx "/dev/mapper/$mapper" "$SHEDOS_REENCRYPT_CONTAINERS" 2>/dev/null \
-        || printf '/dev/mapper/%s\n' "$mapper" >> "$SHEDOS_REENCRYPT_CONTAINERS"
+    # Export the swap PARTITION (not the mapper — luksUUID needs the LUKS device)
+    # so _record_containers records it by-uuid and the first-boot enrol service
+    # adds the recovery key to it too (RCA: root-only strands the key at the swap
+    # tries=0 prompt).
+    export SHEDOS_REENCRYPT_SWAP_PART="$swapdev"
     echo "reencrypt: carved + formatted ${ramgib}G encrypted swap on $swapdev"
 }
 
@@ -178,6 +175,26 @@ _do_growback() {
     umount "$SHEDOS_REENCRYPT_SCRATCH"
 }
 
+# Hand the finalized container list off to userspace. Recovery-key enrolment runs
+# on the booted system, not here: minting a key the user must write down and
+# confirm is interactive, and this one-shot is headless and ordered before
+# sysroot.mount. So we only record the containers (root first, then the carved
+# swap) by their LUKS UUID into the ESP state; the first-boot enrol service reads
+# enroll_containers=, writes /etc/shedos/secureboot/containers, and enrols. luksUUID
+# reads the header directly, so the by-uuid path is computable with no udev symlink
+# (which has not been created this early in boot).
+_record_containers() {  # $1=root-part $2=swap-part(optional)
+    local rootpart=$1 swappart=${2:-} list uuid
+    uuid=$(cryptsetup luksUUID "$rootpart" 2>/dev/null) || return 1
+    [[ -n $uuid ]] || return 1
+    list="/dev/disk/by-uuid/$uuid"
+    if [[ -n $swappart ]]; then
+        uuid=$(cryptsetup luksUUID "$swappart" 2>/dev/null)
+        [[ -n $uuid ]] && list="$list /dev/disk/by-uuid/$uuid"
+    fi
+    esp_state_write "enroll_containers=$list"
+}
+
 # The root partition to convert. The arm step pins it into the ESP state
 # (containers=, root first, space-separated); the override is for the tests.
 _reencrypt_dev() {
@@ -237,9 +254,9 @@ main() {
     if [[ $(esp_state_get swap 2>/dev/null) == yes ]]; then
         _do_swap_carve "$(esp_state_get disk)" "$(esp_state_get rootpn)" "$SHEDOS_REENCRYPT_KEYFILE" || true
     fi
-    _do_growback "/dev/mapper/$mapper" || true
-    _do_enroll                         || true
-    _do_reconfigure_boot               || true
+    _do_growback "/dev/mapper/$mapper"                         || true
+    _record_containers "$dev" "${SHEDOS_REENCRYPT_SWAP_PART:-}" || true
+    _do_reconfigure_boot                                       || true
     return 0
 }
 

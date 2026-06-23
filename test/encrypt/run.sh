@@ -25,6 +25,7 @@ _mk_sandbox() {
 printf '%s\n' "\$*" >> "$d/cryptsetup.log"
 [[ \$1 == isLuks ]] && exit \${STUB_ISLUKS:-1}
 if [[ \$1 == open && \$2 == --test-passphrase ]]; then exit \${STUB_OPEN_RC:-0}; fi
+[[ \$1 == luksUUID ]] && echo "uuid-\$(basename "\$2")"
 exit 0
 EOF
     cat > "$d/bin/findmnt" <<EOF
@@ -336,26 +337,37 @@ EOF
 }
 
 # SC1-SC4: GPT backed up before the table edit, swap is a fresh luksFormat (never
-# reencrypt), mkswap runs with no secret on argv, and the mapper is appended to
-# the container list for enrolment.
+# reencrypt), mkswap runs with no secret on argv, and the swap PARTITION (not the
+# mapper) is exported so _record_containers can enrol + record it by-uuid.
 d=$(_mk_sandbox); _swap_stubs "$d"
-printf 'diskpass' > "$d/kf"; chmod 600 "$d/kf"; : > "$d/containers"; printf 'MemTotal: 262144 kB\n' > "$d/meminfo"
-PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SETTLE=0 SHEDOS_REENCRYPT_ESP="$d/esp" SHEDOS_REENCRYPT_CONTAINERS="$d/containers" SHEDOS_REENCRYPT_MEMINFO="$d/meminfo" \
-  bash -c "source '$driver'; _do_swap_carve /dev/sda 2 '$d/kf'" >/dev/null 2>&1
+printf 'diskpass' > "$d/kf"; chmod 600 "$d/kf"; printf 'MemTotal: 262144 kB\n' > "$d/meminfo"
+swapout=$(PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SETTLE=0 SHEDOS_REENCRYPT_ESP="$d/esp" SHEDOS_REENCRYPT_MEMINFO="$d/meminfo" \
+  bash -c "source '$driver'; _do_swap_carve /dev/sda 2 '$d/kf' >/dev/null 2>&1; printf 'SWAPPART=%s\n' \"\${SHEDOS_REENCRYPT_SWAP_PART:-}\"")
 if grep -q -- '--backup=' "$d/sgdisk.log" 2>/dev/null && [[ -e $d/esp/gpt-sda.bak ]]; then _ok SC1_gpt_backup; else _fail SC1_gpt_backup "$(cat "$d/sgdisk.log" 2>/dev/null)"; fi
 if grep -q 'luksFormat' "$d/cryptsetup.log" 2>/dev/null && ! grep -q 'reencrypt' "$d/cryptsetup.log" 2>/dev/null; then _ok SC2_fresh_format; else _fail SC2_fresh_format "$(cat "$d/cryptsetup.log" 2>/dev/null)"; fi
 if grep -q '/dev/mapper/luks-swap' "$d/mkswap.log" 2>/dev/null && ! grep -q diskpass "$d/cryptsetup.log" "$d/sgdisk.log" 2>/dev/null; then _ok SC3_mkswap_no_secret; else _fail SC3_mkswap_no_secret "$(cat "$d/cryptsetup.log" "$d/sgdisk.log" 2>/dev/null)"; fi
-if grep -q 'luks-swap' "$d/containers" 2>/dev/null; then _ok SC4_container_appended; else _fail SC4_container_appended "$(cat "$d/containers" 2>/dev/null)"; fi
+if [[ $swapout == *"SWAPPART=/dev/sda3"* ]]; then _ok SC4_swap_part_exported; else _fail SC4_swap_part_exported "$swapout"; fi
 
-# MAIN2: with swap=yes in the ESP state, main carves swap after the reencrypt.
+# MAIN2: with swap=yes in the ESP state, main carves swap after the reencrypt and
+# records both containers (root + carved swap) by-uuid into the ESP handoff.
 d=$(_mk_sandbox); _btrfs_shrink_stub "$d"; _swap_stubs "$d"; mkdir -p "$d/esp"
 { printf 'phase=armed\n'; printf 'swap=yes\n'; printf 'disk=/dev/sda\n'; printf 'rootpn=2\n'; } > "$d/esp/state"
-printf 'e2e' > "$d/esp/key"; : > "$d/containers"; printf 'MemTotal: 262144 kB\n' > "$d/meminfo"
+printf 'e2e' > "$d/esp/key"; printf 'MemTotal: 262144 kB\n' > "$d/meminfo"
 PATH="$d/bin:$PATH" STUB_ISLUKS=1 SHEDOS_REENCRYPT_SETTLE=0 ESP_STATE_FILE="$d/esp/state" SHEDOS_REENCRYPT_DEV=/dev/sda2 \
   SHEDOS_REENCRYPT_SCRATCH="$d/mnt" SHEDOS_REENCRYPT_ESP="$d/esp" SHEDOS_REENCRYPT_KEYFILE="$d/esp/key" \
-  SHEDOS_REENCRYPT_CONTAINERS="$d/containers" SHEDOS_REENCRYPT_MEMINFO="$d/meminfo" \
+  SHEDOS_REENCRYPT_MEMINFO="$d/meminfo" \
   bash -c "source '$driver'; main" >/dev/null 2>&1
-if grep -q 'luksFormat' "$d/cryptsetup.log" 2>/dev/null && grep -q 'luks-swap' "$d/containers" 2>/dev/null; then _ok MAIN2_swap_carved; else _fail MAIN2_swap_carved "cs=[$(cat "$d/cryptsetup.log" 2>/dev/null)] cont=[$(cat "$d/containers" 2>/dev/null)]"; fi
+if grep -q 'luksFormat' "$d/cryptsetup.log" 2>/dev/null && grep -qE 'enroll_containers=.*by-uuid/uuid-sda3' "$d/esp/state" 2>/dev/null; then _ok MAIN2_swap_carved_recorded; else _fail MAIN2_swap_carved_recorded "cs=[$(cat "$d/cryptsetup.log" 2>/dev/null)] state=[$(cat "$d/esp/state" 2>/dev/null)]"; fi
+
+# R1-R2: _record_containers stashes the by-uuid list (root first, then swap) into
+# the ESP state as enroll_containers= — the handoff the first-boot enrol service
+# reads. luksUUID reads the header directly, so by-uuid needs no udev symlink.
+d=$(_mk_sandbox); mkdir -p "$d/esp"; printf 'phase=flip-pending\n' > "$d/esp/state"
+PATH="$d/bin:$PATH" ESP_STATE_FILE="$d/esp/state" bash -c "source '$driver'; _record_containers /dev/sda2 /dev/sda3" >/dev/null 2>&1
+if grep -qx 'enroll_containers=/dev/disk/by-uuid/uuid-sda2 /dev/disk/by-uuid/uuid-sda3' "$d/esp/state" 2>/dev/null; then _ok R1_record_root_and_swap; else _fail R1_record_root_and_swap "$(grep enroll_containers "$d/esp/state" 2>/dev/null)"; fi
+d=$(_mk_sandbox); mkdir -p "$d/esp"; printf 'phase=flip-pending\n' > "$d/esp/state"
+PATH="$d/bin:$PATH" ESP_STATE_FILE="$d/esp/state" bash -c "source '$driver'; _record_containers /dev/sda2" >/dev/null 2>&1
+if grep -qx 'enroll_containers=/dev/disk/by-uuid/uuid-sda2' "$d/esp/state" 2>/dev/null; then _ok R2_record_root_only; else _fail R2_record_root_only "$(grep enroll_containers "$d/esp/state" 2>/dev/null)"; fi
 
 # esp-state.sh: pure-unit round-trip + parse-safety (no cryptsetup stubs).
 esp_rc=0; bash "$here/esp-state.sh" || esp_rc=1
