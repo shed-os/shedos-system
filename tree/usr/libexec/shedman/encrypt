@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+# shedman encrypt; encrypt an existing unencrypted ShedOS root (and an optional
+# RAM-sized swap for hibernation) in place — no reinstall, no external media.
+# This file is the userspace half: it runs the preflight gauntlet and (later
+# tasks) arms an initramfs one-shot that does the offline reencrypt across a
+# reboot. Secrets move over stdin, never argv.
+
+set -uo pipefail
+
+PROG="shedman encrypt"
+
+# Hardware seams, overridable so the tests can point them at a fake tree.
+POWER_DIR=${SHEDMAN_ENCRYPT_POWER_DIR:-/sys/class/power_supply}
+MEMINFO=${SHEDMAN_ENCRYPT_MEMINFO:-/proc/meminfo}
+
+# The header tail and the matching --reduce-device-size, pinned identical (the
+# btrfs shrink and the cryptsetup reduction MUST agree to the byte).
+_HEADER_TAIL_BYTES=33554432   # 32 MiB
+
+_die() { echo "$PROG: $1" >&2; exit "${2:-1}"; }
+
+_require_root() {
+    if [[ $(id -u) -ne 0 ]]; then
+        echo "$PROG: $1 requires root" >&2
+        exit 1
+    fi
+}
+
+# Read a secret from a pipe (non-TTY) or prompt silently on the TTY. Same shape
+# as `shedman key`: the passphrase never lands on a command line.
+_read_secret() {
+    local p=$1 v
+    if [[ -t 0 ]]; then read -r -s -p "$p" v; echo >&2; else read -r v; fi
+    printf '%s' "$v"
+}
+
+# Gate on an explicit yes (a typed "yes", not just Enter). A non-TTY proceeds
+# only with --yes; we never auto-confirm a destructive action.
+_confirm() {
+    local prompt=$1 answer
+    [[ -n ${ASSUME_YES:-} ]] && return 0
+    if [[ ! -t 0 ]]; then
+        echo "$PROG: refusing to continue without confirmation; pass --yes" >&2
+        exit 1
+    fi
+    read -r -p "$prompt" answer
+    [[ $answer == yes ]] || { echo "$PROG: aborted" >&2; exit 1; }
+}
+
+# --- preflight ---------------------------------------------------------------
+
+# The block device backing /. findmnt resolves through bind mounts and subvols
+# to the real source; on a plain box this is the bare partition (the device we
+# would convert), on an already-encrypted box it would be /dev/mapper/luks-*.
+_preflight_root_device() {
+    findmnt -n -o SOURCE / 2>/dev/null
+}
+
+# Refuse anything we can't (or won't) convert in place. The root must be plain
+# btrfs and must NOT already be a LUKS container — in-place reencrypt only makes
+# sense on an unencrypted btrfs root, and re-encrypting an encrypted disk would
+# be a data-loss bug.
+_preflight_assert_btrfs_plain() {
+    local dev=$1 fstype
+    fstype=$(findmnt -n -o FSTYPE / 2>/dev/null)
+    [[ $fstype == btrfs ]] || _die "root is $fstype, not btrfs — in-place encryption only supports a btrfs root" 1
+    if cryptsetup isLuks "$dev" 2>/dev/null; then
+        _die "$dev is already encrypted (LUKS); nothing to do" 1
+    fi
+    return 0
+}
+
+# Mid-encrypt power loss is the central risk of this feature (the disk is being
+# rewritten in place), so refuse to arm unless we're on AC or the battery is
+# comfortably charged. --force-no-ac overrides for a user who knows their UPS is
+# fine. We read /sys directly rather than shelling out to upower so the
+# initramfs side (no D-Bus) can reuse the same check later.
+_preflight_power_ok() {
+    [[ -n ${FORCE_NO_AC:-} ]] && return 0
+    local p online cap
+    # `$(<file)` only takes the fast-read path when the substitution is exactly
+    # `< file` — a trailing `2>/dev/null` turns it into an empty command, so
+    # guard readability up front and read plainly.
+    for p in "$POWER_DIR"/*; do
+        [[ -r $p/type && $(<"$p/type") == Mains && -r $p/online ]] || continue
+        online=$(<"$p/online")
+        [[ $online == 1 ]] && return 0
+    done
+    for p in "$POWER_DIR"/*; do
+        [[ -r $p/type && $(<"$p/type") == Battery && -r $p/capacity ]] || continue
+        cap=$(<"$p/capacity")
+        [[ $cap =~ ^[0-9]+$ ]] && (( cap >= 50 )) && return 0
+    done
+    _die "no AC power and battery is below 50% — encryption rewrites the whole disk and must not be interrupted; plug in or pass --force-no-ac" 1
+}
+
+# Free space the shrink needs. Root-only: just the 32M header tail. With swap
+# carving in scope we also have to shrink the fs by a RAM-sized swap partition,
+# so require RAM-size + 32M of free space (plus a sane btrfs metadata margin).
+# AVAIL comes back in bytes (-b); meminfo is in kB.
+_preflight_space_ok() {  # $1=carve-swap (yes|no)
+    local carve=$1 avail need mem_kb
+    avail=$(findmnt -n -b -o AVAIL / 2>/dev/null)
+    [[ $avail =~ ^[0-9]+$ ]] || _die "could not read free space on /" 1
+    need=$_HEADER_TAIL_BYTES
+    if [[ $carve == yes ]]; then
+        mem_kb=$(awk '/^MemTotal:/ {print $2}' "$MEMINFO")
+        [[ $mem_kb =~ ^[0-9]+$ ]] || _die "could not read RAM size for swap sizing" 1
+        need=$(( mem_kb * 1024 + _HEADER_TAIL_BYTES ))
+        if (( avail < need )); then
+            _die "not enough free space to carve a RAM-sized encrypted swap (need ~$(( need / 1048576 )) MiB free, have $(( avail / 1048576 )) MiB); free space, drop swap, or use zram" 1
+        fi
+        return 0
+    fi
+    if (( avail < need )); then
+        _die "not enough free space for the 32 MiB encryption header (need $(( need / 1048576 )) MiB free, have $(( avail / 1048576 )) MiB); free some space and retry" 1
+    fi
+    return 0
+}
+
+# The data-loss ceremony. cryptsetup makes no backup of its own, and a mistake
+# in the freed-region math is unrecoverable, so make the user type out a full
+# phrase rather than a reflex "yes". --yes (ASSUME_YES) bypasses it for a
+# scripted run that has already accepted the risk.
+_DATALOSS_PHRASE='encrypt this disk'
+_dataloss_ack() {
+    [[ -n ${ASSUME_YES:-} ]] && return 0
+    cat >&2 <<EOF
+
+  This encrypts the root disk IN PLACE. There is no backup — if it is
+  interrupted at the wrong moment, or the free-space math is wrong, the data
+  cannot be undone. Make sure you have your own backup first.
+
+EOF
+    local answer
+    read -r -p "  Type '$_DATALOSS_PHRASE' to proceed: " answer
+    [[ $answer == "$_DATALOSS_PHRASE" ]] || _die "acknowledgement did not match — aborted" 1
+    return 0
+}
+
+# When sourced (the tests do this to reach the functions), stop here with the
+# functions defined; only a direct run reaches help + dispatch.
+[[ ${BASH_SOURCE[0]} == "${0}" ]] || return 0
+
+case "${1:-}" in
+    --help-summary)
+        echo "encrypt this machine's existing unencrypted disk in place"
+        exit 0
+        ;;
+    --complete-bash|--complete-zsh)
+        printf '%s\n' --status --resume --yes -y --help -h
+        exit 0
+        ;;
+    --complete-fish)
+        cat <<'EOF'
+--status	show what an in-progress encryption is doing
+--resume	resume an interrupted encryption
+--yes	skip the confirmation prompts
+-y	skip the confirmation prompts
+--help	show usage
+-h	show usage
+EOF
+        exit 0
+        ;;
+    --help|-h|"")
+        cat <<EOF
+Usage: sudo $PROG [--yes]
+       sudo $PROG --resume
+            $PROG --status
+
+Encrypt this machine's root (and an optional encrypted swap) in place. The
+actual reencryption runs offline in the initramfs across a reboot; this command
+checks the disk is safe to convert, makes you acknowledge the risk, takes your
+unlock passphrase, and arms the conversion.
+
+  (no subcommand)              run the preflight and arm the encryption
+  --resume                     resume an interrupted encryption
+  --status                     show what an in-progress encryption is doing
+  -y, --yes                    skip the confirmation prompts
+  -h, --help                   show this help
+EOF
+        exit 0
+        ;;
+esac
+
+action=${1:-}
+ASSUME_YES=
+args=()
+for arg in "$@"; do
+    case "$arg" in
+        --yes|-y)  ASSUME_YES=1 ;;
+        --status)  action=--status ;;
+        --resume)  action=--resume ;;
+        *)         args+=("$arg") ;;
+    esac
+done
+
+case "$action" in
+    --status)  _die "reporting an in-progress encryption is wired in a later task" 1 ;;
+    --resume)  _die "resuming an interrupted encryption is wired in a later task" 1 ;;
+    "")        _die "arming the conversion is wired in a later task" 1 ;;
+    *)
+        echo "$PROG: unknown subcommand: $action" >&2
+        echo "Try: $PROG --help" >&2
+        exit 2
+        ;;
+esac

@@ -112,7 +112,7 @@ package() {
 
     install -d "$pkgdir/usr/libexec/shedman"
     local _libexec_shedman=(
-        apply config conflicts datetime db dock doctor fingerprint health install kernel key lock login logs
+        apply config conflicts datetime db dock doctor encrypt fingerprint health install kernel key lock login logs
         rollback secureboot services snapshot status theme tpm2 uninstall update updates upgrade-history
         _config-sync _config-review
     )
