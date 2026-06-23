@@ -24,6 +24,7 @@ _mk_sandbox() {
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$d/cryptsetup.log"
 [[ \$1 == isLuks ]] && exit \${STUB_ISLUKS:-1}
+if [[ \$1 == open && \$2 == --test-passphrase ]]; then exit \${STUB_OPEN_RC:-0}; fi
 exit 0
 EOF
     cat > "$d/bin/findmnt" <<EOF
@@ -37,13 +38,20 @@ case "\$*" in
 esac
 exit 0
 EOF
-    for b in sgdisk systemctl; do
+    for b in sgdisk systemctl mount umount; do
         cat > "$d/bin/$b" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$d/$b.log"
 exit 0
 EOF
     done
+    # Default btrfs stub; the S*/GB* cases override it with size-specific ones.
+    cat > "$d/bin/btrfs" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$d/btrfs.log"
+[[ \$1 == filesystem && \$2 == usage ]] && echo "Device size:                10737418240"
+exit 0
+EOF
     cat > "$d/bin/id" <<'EOF'
 #!/usr/bin/env bash
 [[ $1 == -u ]] && { echo "${STUB_UID:-0}"; exit 0; }
@@ -246,6 +254,71 @@ if grep -q 'tree/usr/lib/systemd/system/shedos-reencrypt.service' "$pkgbuild" \
     _ok P1_pkgbuild_installs
 else
     _fail P1_pkgbuild_installs "missing install line"
+fi
+
+# A shrinking btrfs stub: first `filesystem usage` reports the pre size, the next
+# reports pre-32M, so the post-resize verify (device got smaller) passes.
+_btrfs_shrink_stub() {  # $1=dir
+    cat > "$1/bin/btrfs" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$1/btrfs.log"
+if [[ \$1 == filesystem && \$2 == usage ]]; then
+    n=\$(grep -c 'filesystem usage' "$1/btrfs.log")
+    if [[ \$n -le 1 ]]; then echo "Device size:                10737418240"; else echo "Device size:                10703863808"; fi
+fi
+exit 0
+EOF
+    chmod +x "$1/bin/btrfs"
+}
+
+# S1-S2: _do_shrink resizes by exactly the tail and hard-fails if the device did
+# not actually shrink (corruption guard before any header is written).
+d=$(_mk_sandbox); _btrfs_shrink_stub "$d"
+PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SCRATCH="$d/mnt" bash -c "source '$driver'; _do_shrink /dev/loopX" >/dev/null 2>&1
+if grep -q 'filesystem resize 1:-32M' "$d/btrfs.log" 2>/dev/null; then _ok S1_resize_32M; else _fail S1_resize_32M "$(cat "$d/btrfs.log" 2>/dev/null)"; fi
+
+# the default _mk_sandbox btrfs stub never shrinks → the guard must fire.
+d=$(_mk_sandbox)
+out=$(PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SCRATCH="$d/mnt" bash -c "source '$driver'; _do_shrink /dev/loopX" 2>&1); rc=$?
+if [[ $rc -ne 0 && $out == *"did not shrink"* ]]; then _ok S2_verify_guard; else _fail S2_verify_guard "rc=$rc out=$out"; fi
+
+# RE1-RE5: header-init -> test-open -> encrypt order (verify-before-encrypt), the
+# key off argv, the pinned flags, the transient header backup, and the strand
+# guard (never encrypt a keyslot that will not open).
+d=$(_mk_sandbox); kf="$d/newkey"; printf 'diskpass' > "$kf"; chmod 600 "$kf"
+PATH="$d/bin:$PATH" STUB_OPEN_RC=0 SHEDOS_REENCRYPT_ESP="$d/esp" bash -c "source '$driver'; _do_root_reencrypt /dev/loopXp1 '$kf'" >/dev/null 2>&1
+init=$(grep -n 'reencrypt --encrypt' "$d/cryptsetup.log" | head -1 | cut -d: -f1)
+topen=$(grep -n 'open --test-passphrase' "$d/cryptsetup.log" | head -1 | cut -d: -f1)
+resume=$(grep -n 'reencrypt --resume-only' "$d/cryptsetup.log" | head -1 | cut -d: -f1)
+if [[ -n $init && -n $topen && -n $resume && $init -lt $topen && $topen -lt $resume ]]; then _ok RE1_verify_before_encrypt; else _fail RE1_verify_before_encrypt "init=$init topen=$topen resume=$resume"; fi
+if grep -q -- '--key-file=' "$d/cryptsetup.log" 2>/dev/null && ! grep -q 'diskpass' "$d/cryptsetup.log" 2>/dev/null; then _ok RE2_key_off_argv; else _fail RE2_key_off_argv "$(cat "$d/cryptsetup.log" 2>/dev/null)"; fi
+if grep -qE 'reencrypt --encrypt --type luks2 --reduce-device-size 32M --force-offline-reencrypt' "$d/cryptsetup.log" 2>/dev/null; then _ok RE3_pinned_flags; else _fail RE3_pinned_flags "$(grep 'reencrypt --encrypt' "$d/cryptsetup.log" 2>/dev/null)"; fi
+if grep -qE "luksHeaderBackup .*--header-backup-file $d/esp/header-.*\.img" "$d/cryptsetup.log" 2>/dev/null; then _ok RE4_header_backup; else _fail RE4_header_backup "$(grep luksHeaderBackup "$d/cryptsetup.log" 2>/dev/null)"; fi
+
+d=$(_mk_sandbox); kf="$d/newkey"; printf 'diskpass' > "$kf"; chmod 600 "$kf"
+out=$(PATH="$d/bin:$PATH" STUB_OPEN_RC=1 SHEDOS_REENCRYPT_ESP="$d/esp" bash -c "source '$driver'; _do_root_reencrypt /dev/loopXp1 '$kf'" 2>&1); rc=$?
+if [[ $rc -ne 0 && $out == *"keyslot did not open"* ]] && ! grep -q 'reencrypt --resume-only' "$d/cryptsetup.log" 2>/dev/null; then _ok RE5_strand_guard; else _fail RE5_strand_guard "rc=$rc out=$out"; fi
+
+# GB1-GB2: _do_growback grows the mapper back to max, idempotently.
+d=$(_mk_sandbox)
+PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SCRATCH="$d/mnt" bash -c "source '$driver'; _do_growback /dev/mapper/luks-test" >/dev/null 2>&1
+if grep -q 'filesystem resize 1:max' "$d/btrfs.log" 2>/dev/null; then _ok GB1_resize_max; else _fail GB1_resize_max "$(cat "$d/btrfs.log" 2>/dev/null)"; fi
+PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SCRATCH="$d/mnt" bash -c "source '$driver'; _do_growback /dev/mapper/luks-test" >/dev/null 2>&1; rc=$?
+if [[ $rc -eq 0 ]]; then _ok GB2_idempotent; else _fail GB2_idempotent "rc=$rc"; fi
+
+# MAIN1: on a fresh-encrypt box, main threads the device through the whole chain
+# — shrink, reencrypt, open the mapper, grow back.
+d=$(_mk_sandbox); _btrfs_shrink_stub "$d"; mkdir -p "$d/esp"
+printf 'phase=armed\n' > "$d/esp/state"; printf 'e2e' > "$d/esp/key"
+PATH="$d/bin:$PATH" STUB_ISLUKS=1 ESP_STATE_FILE="$d/esp/state" SHEDOS_REENCRYPT_DEV=/dev/fake-root \
+  SHEDOS_REENCRYPT_SCRATCH="$d/mnt" SHEDOS_REENCRYPT_ESP="$d/esp" SHEDOS_REENCRYPT_KEYFILE="$d/esp/key" \
+  bash -c "source '$driver'; main" >/dev/null 2>&1
+if grep -q 'reencrypt --encrypt' "$d/cryptsetup.log" 2>/dev/null \
+   && grep -q 'filesystem resize 1:-32M' "$d/btrfs.log" 2>/dev/null \
+   && grep -q 'filesystem resize 1:max' "$d/btrfs.log" 2>/dev/null; then
+    _ok MAIN1_fresh_chain
+else
+    _fail MAIN1_fresh_chain "cs=[$(cat "$d/cryptsetup.log" 2>/dev/null)] bt=[$(cat "$d/btrfs.log" 2>/dev/null)]"
 fi
 
 # esp-state.sh: pure-unit round-trip + parse-safety (no cryptsetup stubs).
