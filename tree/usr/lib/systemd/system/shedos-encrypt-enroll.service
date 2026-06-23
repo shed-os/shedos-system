@@ -1,0 +1,14 @@
+[Unit]
+Description=Enrol the recovery key after in-place disk encryption
+# Only meaningful on a box that ran `shedman encrypt`; on every ordinary boot the
+# state file is absent, so the unit is skipped before it ever starts.
+ConditionPathExists=/boot/efi/shedos-encrypt/state
+# Needs the encrypted root and ESP mounted and the LUKS by-uuid symlinks settled.
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/shedos/encrypt-enroll.sh
+
+[Install]
+WantedBy=multi-user.target

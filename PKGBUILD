@@ -162,6 +162,15 @@ package() {
     install -Dm755 tree/usr/lib/initcpio/install/shedos-reencrypt \
         "$pkgdir/usr/lib/initcpio/install/shedos-reencrypt"
 
+    # First-boot recovery-key enrolment: the headless reencrypt one-shot cannot
+    # run the interactive "write it down" ceremony, so this enrols on the booted
+    # system. The .install scriptlet enables the unit; it self-gates to a no-op
+    # on any box that never ran `shedman encrypt`.
+    install -Dm755 tree/usr/lib/shedos/encrypt-enroll.sh \
+        "$pkgdir/usr/lib/shedos/encrypt-enroll.sh"
+    install -Dm644 tree/usr/lib/systemd/system/shedos-encrypt-enroll.service \
+        "$pkgdir/usr/lib/systemd/system/shedos-encrypt-enroll.service"
+
     # Shared palette loader; the Textual TUIs add /usr/lib/shedos to
     # sys.path and `import shedos_palette` to colour themselves live.
     install -Dm644 tree/usr/lib/shedos/shedos_palette.py \
