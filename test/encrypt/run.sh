@@ -26,6 +26,9 @@ printf '%s\n' "\$*" >> "$d/cryptsetup.log"
 [[ \$1 == isLuks ]] && exit \${STUB_ISLUKS:-1}
 if [[ \$1 == open && \$2 == --test-passphrase ]]; then exit \${STUB_OPEN_RC:-0}; fi
 [[ \$1 == luksUUID ]] && echo "uuid-\$(basename "\$2")"
+# luksDump --dump-json-metadata: the online-reencrypt requirement is present while
+# a reencrypt is in progress and gone once it completes (STUB_REENCRYPT_DONE=1).
+[[ \$1 == luksDump ]] && { [[ -z \${STUB_REENCRYPT_DONE:-} ]] && echo online-reencrypt-v2; exit 0; }
 exit 0
 EOF
     cat > "$d/bin/findmnt" <<EOF
@@ -334,6 +337,21 @@ if grep -qE "luksHeaderBackup .*--header-backup-file $d/esp/header-.*\.img" "$d/
 d=$(_mk_sandbox); kf="$d/newkey"; printf 'diskpass' > "$kf"; chmod 600 "$kf"
 out=$(PATH="$d/bin:$PATH" STUB_OPEN_RC=1 SHEDOS_REENCRYPT_ESP="$d/esp" bash -c "source '$driver'; _do_root_reencrypt /dev/loopXp1 '$kf'" 2>&1); rc=$?
 if [[ $rc -ne 0 && $out == *"keyslot did not open"* ]] && ! grep -q 'reencrypt --resume-only' "$d/cryptsetup.log" 2>/dev/null; then _ok RE5_strand_guard; else _fail RE5_strand_guard "rc=$rc out=$out"; fi
+
+# RE6: a reboot onto an ALREADY-COMPLETE reencrypt (isLuks=yes, no online-reencrypt
+# requirement) must NOT call --resume-only (which errors "not in progress" and would
+# strand the root unopened); it returns 0 so the caller opens the mapper. The brick.
+d=$(_mk_sandbox); kf="$d/newkey"; printf 'diskpass' > "$kf"; chmod 600 "$kf"
+PATH="$d/bin:$PATH" STUB_ISLUKS=0 STUB_REENCRYPT_DONE=1 SHEDOS_REENCRYPT_ESP="$d/esp" \
+  bash -c "source '$driver'; _do_root_reencrypt /dev/loopXp1 '$kf'" >/dev/null 2>&1; rc=$?
+if [[ $rc -eq 0 ]] && ! grep -q 'reencrypt --resume-only' "$d/cryptsetup.log" 2>/dev/null; then _ok RE6_complete_no_resume; else _fail RE6_complete_no_resume "rc=$rc cs=[$(cat "$d/cryptsetup.log" 2>/dev/null)]"; fi
+
+# RE7: a genuine mid-encrypt resume (isLuks=yes, online-reencrypt still present) DOES
+# call --resume-only.
+d=$(_mk_sandbox); kf="$d/newkey"; printf 'diskpass' > "$kf"; chmod 600 "$kf"
+PATH="$d/bin:$PATH" STUB_ISLUKS=0 SHEDOS_REENCRYPT_ESP="$d/esp" \
+  bash -c "source '$driver'; _do_root_reencrypt /dev/loopXp1 '$kf'" >/dev/null 2>&1; rc=$?
+if [[ $rc -eq 0 ]] && grep -q 'reencrypt --resume-only' "$d/cryptsetup.log" 2>/dev/null; then _ok RE7_inprogress_resumes; else _fail RE7_inprogress_resumes "rc=$rc cs=[$(cat "$d/cryptsetup.log" 2>/dev/null)]"; fi
 
 # GB1-GB2: _do_growback grows the mapper back to max, idempotently.
 d=$(_mk_sandbox)

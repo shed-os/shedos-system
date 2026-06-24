@@ -223,9 +223,18 @@ _do_root_reencrypt() {
         cryptsetup luksHeaderBackup "$part" --header-backup-file "$hdr" \
             || { echo "shedos-reencrypt: header backup failed" >&2; return 1; }
     fi
-    if ! cryptsetup reencrypt --resume-only -q --key-file="$keyfile" "$part"; then
-        echo "shedos-reencrypt: reencrypt run failed on $part (re-runnable)" >&2
-        return 1
+    # --resume-only errors ("Device reencryption not in progress") on a container
+    # whose reencrypt has already finished, and the caller's `|| return 0` would then
+    # strand the root unopened and brick the boot. A completed run sits at
+    # phase=encrypting until userspace finalize advances it, so a reboot in that
+    # window (e.g. after a reconfigure or enrol failure) lands right here. Only resume
+    # while the LUKS2 header still carries the online-reencrypt requirement; once it is
+    # gone the move is complete and we fall through to the mapper open below.
+    if cryptsetup luksDump --dump-json-metadata "$part" 2>/dev/null | grep -q 'online-reencrypt'; then
+        if ! cryptsetup reencrypt --resume-only -q --key-file="$keyfile" "$part"; then
+            echo "shedos-reencrypt: reencrypt run failed on $part (re-runnable)" >&2
+            return 1
+        fi
     fi
 }
 
