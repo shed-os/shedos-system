@@ -36,7 +36,7 @@ EOF
 printf '%s\n' "\$*" >> "$d/findmnt.log"
 src=\${STUB_ROOTDEV:-/dev/sda2}
 case "\$*" in
-    *SOURCE*) printf '%s\n' "\$src" ;;
+    *SOURCE*) printf '%s\n' "\${src}[/@]" ;;   # btrfs annotates the subvol: /dev/X[/@]
     *FSTYPE*) printf '%s\n' "\${STUB_FSTYPE:-btrfs}" ;;
     *AVAIL*)  printf '%s\n' "\${STUB_AVAIL:-107374182400}" ;;
 esac

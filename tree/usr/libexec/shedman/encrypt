@@ -71,7 +71,12 @@ _confirm() {
 # to the real source; on a plain box this is the bare partition (the device we
 # would convert), on an already-encrypted box it would be /dev/mapper/luks-*.
 _preflight_root_device() {
-    findmnt -n -o SOURCE / 2>/dev/null
+    local src
+    src=$(findmnt -n -o SOURCE / 2>/dev/null)
+    # btrfs reports the source as /dev/X[/subvol] (e.g. /dev/vda2[/@]); strip the
+    # bracketed subvolume to the bare partition the driver reencrypts and the
+    # geometry parse expects.
+    printf '%s' "${src%%[*}"
 }
 
 # Bytes of free tail the offline shrink must leave: the 32M header always, plus a

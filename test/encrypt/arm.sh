@@ -32,7 +32,7 @@ EOF
     cat > "$d/bin/findmnt" <<EOF
 #!/usr/bin/env bash
 case "\$*" in
-    *SOURCE*) printf '%s\n' "\${STUB_ROOTDEV:-/dev/sda2}" ;;
+    *SOURCE*) printf '%s\n' "\${STUB_ROOTDEV:-/dev/sda2}[/@]" ;;
     *UUID*)   printf '%s\n' "\${STUB_UUID:-inner-fs-uuid}" ;;
     *FSTYPE*) printf '%s\n' "\${STUB_FSTYPE:-btrfs}" ;;
     *AVAIL*)  printf '%s\n' "\${STUB_AVAIL:-107374182400}" ;;
