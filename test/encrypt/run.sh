@@ -53,6 +53,11 @@ printf '%s\n' "\$*" >> "$d/btrfs.log"
 [[ \$1 == filesystem && \$2 == usage ]] && echo "Device size:                10737418240"
 exit 0
 EOF
+    cat > "$d/bin/blockdev" <<EOF
+#!/usr/bin/env bash
+[[ \$1 == --getsize64 ]] && { echo 10737418240; exit 0; }
+exit 0
+EOF
     cat > "$d/bin/id" <<'EOF'
 #!/usr/bin/env bash
 [[ $1 == -u ]] && { echo "${STUB_UID:-0}"; exit 0; }
@@ -245,6 +250,7 @@ got=$(_ds 0 encrypting);   if [[ $got == resume ]];                then _ok DS2_
 got=$(_ds 1 '');           if [[ $got == plaintext-passthrough ]]; then _ok DS3_passthrough;      else _fail DS3_passthrough "$got"; fi
 got=$(_ds 0 '');           if [[ $got == plaintext-passthrough ]]; then _ok DS4_done_passthrough; else _fail DS4_done_passthrough "$got"; fi
 got=$(_ds 0 flip-pending); if [[ $got == resume ]];                then _ok DS5_flip_resume;      else _fail DS5_flip_resume "$got"; fi
+got=$(_ds 1 encrypting);   if [[ $got == resume ]];                then _ok DS6_noluks_encrypting_resume; else _fail DS6_noluks_encrypting_resume "$got"; fi
 
 # P1: the unit + hook + driver are actually installed by package() — a staged
 # file PKGBUILD never installs ships nothing (the _libexec_shedman class of bug).
@@ -272,16 +278,25 @@ EOF
     chmod +x "$1/bin/btrfs"
 }
 
-# S1-S2: _do_shrink resizes by exactly the tail and hard-fails if the device did
-# not actually shrink (corruption guard before any header is written).
+# S1-S3: _do_shrink resizes to the ABSOLUTE target (partition size minus the
+# tail), hard-fails if the fs is still bigger than the target (corruption guard),
+# and is idempotent so a power-cut retry never chops a second tail.
+tgt=$(( 10737418240 - 33554432 ))
 d=$(_mk_sandbox); _btrfs_shrink_stub "$d"
-PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SCRATCH="$d/mnt" bash -c "source '$driver'; _do_shrink /dev/loopX" >/dev/null 2>&1
-if grep -q 'filesystem resize 1:-32M' "$d/btrfs.log" 2>/dev/null; then _ok S1_resize_32M; else _fail S1_resize_32M "$(cat "$d/btrfs.log" 2>/dev/null)"; fi
+PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SCRATCH="$d/mnt" bash -c "source '$driver'; _do_shrink /dev/loopX 33554432" >/dev/null 2>&1
+if grep -q "filesystem resize 1:$tgt" "$d/btrfs.log" 2>/dev/null; then _ok S1_resize_absolute; else _fail S1_resize_absolute "$(cat "$d/btrfs.log" 2>/dev/null)"; fi
 
 # the default _mk_sandbox btrfs stub never shrinks → the guard must fire.
 d=$(_mk_sandbox)
-out=$(PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SCRATCH="$d/mnt" bash -c "source '$driver'; _do_shrink /dev/loopX" 2>&1); rc=$?
+out=$(PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SCRATCH="$d/mnt" bash -c "source '$driver'; _do_shrink /dev/loopX 33554432" 2>&1); rc=$?
 if [[ $rc -ne 0 && $out == *"did not shrink"* ]]; then _ok S2_verify_guard; else _fail S2_verify_guard "rc=$rc out=$out"; fi
+
+# the second shrink is a no-op: the absolute target means an interrupted run that
+# re-enters fresh-encrypt cannot double-shrink (the resize runs exactly once).
+d=$(_mk_sandbox); _btrfs_shrink_stub "$d"
+PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SCRATCH="$d/mnt" bash -c "source '$driver'; _do_shrink /dev/loopX 33554432; _do_shrink /dev/loopX 33554432" >/dev/null 2>&1
+n=$(grep -c 'filesystem resize 1:' "$d/btrfs.log" 2>/dev/null)
+if (( n == 1 )); then _ok S3_idempotent; else _fail S3_idempotent "resize count=$n"; fi
 
 # RE1-RE5: header-init -> test-open -> encrypt order (verify-before-encrypt), the
 # key off argv, the pinned flags, the transient header backup, and the strand
@@ -315,11 +330,12 @@ PATH="$d/bin:$PATH" STUB_ISLUKS=1 ESP_STATE_FILE="$d/esp/state" SHEDOS_REENCRYPT
   SHEDOS_REENCRYPT_SCRATCH="$d/mnt" SHEDOS_REENCRYPT_ESP="$d/esp" SHEDOS_REENCRYPT_KEYFILE="$d/esp/key" \
   bash -c "source '$driver'; main" >/dev/null 2>&1
 if grep -q 'reencrypt --encrypt' "$d/cryptsetup.log" 2>/dev/null \
-   && grep -q 'filesystem resize 1:-32M' "$d/btrfs.log" 2>/dev/null \
-   && grep -q 'filesystem resize 1:max' "$d/btrfs.log" 2>/dev/null; then
+   && grep -q "filesystem resize 1:$(( 10737418240 - 33554432 ))" "$d/btrfs.log" 2>/dev/null \
+   && grep -q 'filesystem resize 1:max' "$d/btrfs.log" 2>/dev/null \
+   && grep -q 'phase=encrypting' "$d/esp/state" 2>/dev/null; then
     _ok MAIN1_fresh_chain
 else
-    _fail MAIN1_fresh_chain "cs=[$(cat "$d/cryptsetup.log" 2>/dev/null)] bt=[$(cat "$d/btrfs.log" 2>/dev/null)]"
+    _fail MAIN1_fresh_chain "cs=[$(cat "$d/cryptsetup.log" 2>/dev/null)] bt=[$(cat "$d/btrfs.log" 2>/dev/null)] st=[$(cat "$d/esp/state" 2>/dev/null)]"
 fi
 
 # Swap-carve stubs (sgdisk -p/--backup, mkswap, blockdev; cryptsetup/btrfs from
@@ -332,8 +348,7 @@ printf '%s\n' "\$*" >> "$1/sgdisk.log"
 exit 0
 EOF
     printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/mkswap.log"\nexit 0\n' "$1" > "$1/bin/mkswap"
-    cp "$1/bin/mkswap" "$1/bin/blockdev"
-    chmod +x "$1/bin/sgdisk" "$1/bin/mkswap" "$1/bin/blockdev"
+    chmod +x "$1/bin/sgdisk" "$1/bin/mkswap"   # blockdev (incl --getsize64) stays from _mk_sandbox
 }
 
 # SC1-SC4: GPT backed up before the table edit, swap is a fresh luksFormat (never

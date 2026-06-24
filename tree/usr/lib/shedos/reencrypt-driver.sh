@@ -15,6 +15,9 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/esp-state.sh"
 # Pinned tail: the btrfs shrink and cryptsetup --reduce-device-size both use this
 # one value, so they cannot drift — a mismatch loses root data.
 SHEDOS_REENCRYPT_TAIL=${SHEDOS_REENCRYPT_TAIL:-32M}
+# The same tail in bytes, for the absolute-target shrink (an idempotent resize
+# needs an exact target, not a relative -32M that double-shrinks on a retry).
+SHEDOS_REENCRYPT_TAIL_BYTES=${SHEDOS_REENCRYPT_TAIL_BYTES:-33554432}   # 32 MiB
 SHEDOS_REENCRYPT_SCRATCH=${SHEDOS_REENCRYPT_SCRATCH:-/run/shedos-reencrypt}
 SHEDOS_REENCRYPT_ESP=${SHEDOS_REENCRYPT_ESP:-/boot/efi/shedos-encrypt}
 # The arm step stashes the disk passphrase in a 0600 keyfile on the ESP for this
@@ -104,26 +107,35 @@ _btrfs_dev_size() {
         | awk '/Device size:/ { gsub(/[^0-9]/, "", $NF); print $NF; exit }'
 }
 
-# Shrink root by exactly the header tail, in the fully reversible pre-header
-# window (no LUKS header exists yet; the old plaintext cmdline still boots).
-# btrfs resize is a kernel ioctl that needs the fs mounted, so mount rw on a
-# scratch dir, resize, verify the device actually shrank, and unmount. A resize
-# that did not shrink is a hard error: never write a header over an un-shrunk fs.
-_do_shrink() {
-    local dev=$1 before after
+# Shrink root to leave a tail of $2 free bytes at the partition end — header room
+# (32M), plus the RAM-sized swap on the carve path. The target is ABSOLUTE
+# (partition size minus the tail), not a relative -32M, so a re-run after a power
+# cut is idempotent: a relative shrink would chop another tail off every retry and
+# corrupt the fs. btrfs resize needs the fs mounted, so mount rw on a scratch dir,
+# resize to the target, verify, and unmount. A resize that leaves the fs bigger
+# than the target is a hard error: never write a header over an un-shrunk fs.
+_do_shrink() {  # $1=dev $2=tail-bytes
+    local dev=$1 tail=$2 psize target cur after slack=4194304
+    psize=$(blockdev --getsize64 "$dev" 2>/dev/null)
+    [[ $psize =~ ^[0-9]+$ ]] || { echo "shedos-reencrypt: cannot size $dev to shrink" >&2; return 1; }
+    target=$(( psize - tail ))
     mkdir -p "$SHEDOS_REENCRYPT_SCRATCH"
     mount -t btrfs -o subvolid=5,rw "$dev" "$SHEDOS_REENCRYPT_SCRATCH" \
         || { echo "shedos-reencrypt: cannot mount $dev to shrink" >&2; return 1; }
-    before=$(_btrfs_dev_size "$SHEDOS_REENCRYPT_SCRATCH")
-    if ! btrfs filesystem resize "1:-$SHEDOS_REENCRYPT_TAIL" "$SHEDOS_REENCRYPT_SCRATCH"; then
+    cur=$(_btrfs_dev_size "$SHEDOS_REENCRYPT_SCRATCH")
+    # Idempotent: already at or below the target (within a btrfs-alignment slack).
+    if [[ $cur =~ ^[0-9]+$ ]] && (( cur <= target + slack )); then
+        umount "$SHEDOS_REENCRYPT_SCRATCH"; return 0
+    fi
+    if ! btrfs filesystem resize "1:$target" "$SHEDOS_REENCRYPT_SCRATCH"; then
         umount "$SHEDOS_REENCRYPT_SCRATCH"
         echo "shedos-reencrypt: btrfs resize failed on $dev" >&2
         return 1
     fi
     after=$(_btrfs_dev_size "$SHEDOS_REENCRYPT_SCRATCH")
     umount "$SHEDOS_REENCRYPT_SCRATCH"
-    if [[ -z $before || -z $after || $after -ge $before ]]; then
-        echo "shedos-reencrypt: $dev did not shrink (before=$before after=$after)" >&2
+    if [[ -z $after ]] || (( after > target + slack )); then
+        echo "shedos-reencrypt: $dev did not shrink to target (after=$after target=$target)" >&2
         return 1
     fi
 }
@@ -210,14 +222,18 @@ _reencrypt_dev() {
 #
 #   isLuks  phase            -> branch
 #   no      armed            -> fresh-encrypt   (first reencrypt boot)
+#   no      encrypting       -> resume          (cut after shrink, before the header)
 #   no      (none)           -> plaintext-passthrough (ordinary box / done)
 #   yes     encrypting       -> resume          (power-cut mid-encrypt)
 #   yes     flip-pending     -> resume          (encrypt done, flip not committed)
 #   yes     (none)           -> plaintext-passthrough (already encrypted + cleared)
 #
-# The inner btrfs UUID survives in-place encryption, so even a stale cmdline
-# token still opens the right container — this brancher, not the cmdline, is the
-# source of truth during the window.
+# The no+encrypting row is load-bearing: the header is initialised only after the
+# shrink, so a cut in that window leaves isLuks=no with the phase already advanced,
+# and it must resume (re-init the header on the already-shrunk fs) rather than
+# re-shrink. The inner btrfs UUID survives in-place encryption, so even a stale
+# cmdline token still opens the right container — this brancher, not the cmdline,
+# is the source of truth during the window.
 _detect_state() {
     local dev phase
     dev=$(_reencrypt_dev)
@@ -230,8 +246,9 @@ _detect_state() {
         esac
     else
         case $phase in
-            armed) echo fresh-encrypt ;;
-            *)     echo plaintext-passthrough ;;
+            armed)      echo fresh-encrypt ;;
+            encrypting) echo resume ;;
+            *)          echo plaintext-passthrough ;;
         esac
     fi
 }
@@ -242,10 +259,15 @@ main() {
     # Ordinary boot: hand the device back to the normal path, no-op.
     [[ $branch == plaintext-passthrough ]] && return 0
     dev=$(_reencrypt_dev)
-    # Only a fresh start needs the shrink; a resume re-enters past it. After the
-    # bytes are encrypted the steps are shared (each _do_* re-detects its own
-    # sub-state, so a re-entered resume picks up where the cut landed).
-    [[ $branch == fresh-encrypt ]] && { _do_shrink "$dev" || return 0; }
+    # Only a fresh start needs the shrink; a resume re-enters past it (the shrink
+    # is idempotent, but skipping it is cleaner). After the shrink, advance the
+    # phase to encrypting: the header init below flips the device to LUKS, and a
+    # cut anywhere after this point must boot into the resume branch instead of
+    # handing a half-encrypted disk back to the normal path.
+    if [[ $branch == fresh-encrypt ]]; then
+        _do_shrink "$dev" "$SHEDOS_REENCRYPT_TAIL_BYTES" || return 0
+        esp_state_write "phase=encrypting"
+    fi
     _do_root_reencrypt "$dev" "$SHEDOS_REENCRYPT_KEYFILE" || return 0
     mapper=luks-$(cryptsetup luksUUID "$dev" 2>/dev/null)
     cryptsetup open --key-file="$SHEDOS_REENCRYPT_KEYFILE" "$dev" "$mapper" 2>/dev/null

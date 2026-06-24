@@ -37,7 +37,7 @@ export SHEDOS_REENCRYPT_SCRATCH="$mnt" SHEDOS_REENCRYPT_ESP="$work/esp"
 kf="$work/key"; printf 'e2epass' > "$kf"; chmod 600 "$kf"
 
 fail=0
-_do_shrink "$loop"                || { echo "FAIL: _do_shrink"; fail=1; }
+_do_shrink "$loop" "$SHEDOS_REENCRYPT_TAIL_BYTES" || { echo "FAIL: _do_shrink"; fail=1; }
 _do_root_reencrypt "$loop" "$kf"  || { echo "FAIL: _do_root_reencrypt"; fail=1; }
 
 # The real assertion: the device is now LUKS2 and opens with the passphrase.
