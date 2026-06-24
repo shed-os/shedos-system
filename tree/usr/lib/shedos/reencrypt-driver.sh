@@ -49,6 +49,34 @@ _wait_partnode() {  # $1=disk $2=partnum  -> echoes the node, or returns 1
     return 1
 }
 
+# Partition N's node if it exists RIGHT NOW (no settle wait) — for the carve's
+# idempotency probe, where a missing node means "not carved yet", not "wait".
+_partnode_exists() {  # $1=disk $2=partnum  -> echoes the node, or returns 1
+    # Tests pin SETTLE=0 and use fake device names; treat that as "not carved" so
+    # the fresh-carve path runs (real-node idempotency is the swap loop-e2e's job).
+    [[ ${SHEDOS_REENCRYPT_SETTLE:-1} == 0 ]] && return 1
+    local cand
+    for cand in "${1}${2}" "${1}p${2}"; do
+        [[ -b $cand ]] && { printf '%s' "$cand"; return 0; }
+    done
+    return 1
+}
+
+# How much free tail the shrink must leave at the partition end: 32M of header
+# room always, plus a RAM-sized swap when we are going to carve one. The swap
+# carve removes exactly the RAM-GiB part from the partition table afterwards, so
+# the two derive from the same RAM rounding and stay in lock-step.
+_effective_tail() {  # $1=swap(yes|no)  -> bytes
+    if [[ $1 == yes ]]; then
+        local memkb ramgib
+        memkb=$(awk '/^MemTotal:/{print $2}' "$SHEDOS_REENCRYPT_MEMINFO")
+        ramgib=$(( (memkb + 1048575) / 1048576 ))   # RAM rounded up to the next GiB
+        printf '%s' "$(( ramgib * 1073741824 + SHEDOS_REENCRYPT_TAIL_BYTES ))"
+    else
+        printf '%s' "$SHEDOS_REENCRYPT_TAIL_BYTES"
+    fi
+}
+
 # Carve a RAM-sized encrypted swap from the disk tail and format it fresh. The
 # btrfs fs was already shrunk by RAM+32M in _do_shrink, so the bytes past the new
 # root end are free. Back up the GPT, shrink the root partition entry (same
@@ -58,6 +86,25 @@ _wait_partnode() {  # $1=disk $2=partnum  -> echoes the node, or returns 1
 # Separately gated: any failure returns 1 and the caller keeps the box on zram.
 _do_swap_carve() {  # $1=disk $2=root-partnum $3=keyfile
     local disk=$1 rootpn=$2 kf=$3
+
+    # Idempotent: if a prior (interrupted) run already carved the swap partition,
+    # do not re-carve — sgdisk would append a SECOND swap. Just make sure it is a
+    # formatted LUKS swap and export it.
+    local existing
+    if existing=$(_partnode_exists "$disk" "$(( rootpn + 1 ))"); then
+        if ! cryptsetup isLuks "$existing" 2>/dev/null; then
+            if ! { cryptsetup luksFormat --type luks2 -q --key-file="$kf" "$existing" \
+                   && cryptsetup open --key-file="$kf" "$existing" luks-swap \
+                   && mkswap /dev/mapper/luks-swap; }; then
+                echo "reencrypt: could not format the existing swap partition $existing" >&2
+                return 1
+            fi
+        fi
+        export SHEDOS_REENCRYPT_SWAP_PART="$existing"
+        echo "reencrypt: swap already carved on $existing"
+        return 0
+    fi
+
     install -d "$SHEDOS_REENCRYPT_ESP"
     local bak; bak="$SHEDOS_REENCRYPT_ESP/gpt-$(basename -- "$disk").bak"
 
@@ -254,28 +301,37 @@ _detect_state() {
 }
 
 main() {
-    local branch dev mapper
+    local branch dev mapper swap tail rpn
     branch=$(_detect_state)
     # Ordinary boot: hand the device back to the normal path, no-op.
     [[ $branch == plaintext-passthrough ]] && return 0
     dev=$(_reencrypt_dev)
-    # Only a fresh start needs the shrink; a resume re-enters past it (the shrink
-    # is idempotent, but skipping it is cleaner). After the shrink, advance the
-    # phase to encrypting: the header init below flips the device to LUKS, and a
-    # cut anywhere after this point must boot into the resume branch instead of
-    # handing a half-encrypted disk back to the normal path.
+    swap=$(esp_state_get swap 2>/dev/null)
     if [[ $branch == fresh-encrypt ]]; then
-        _do_shrink "$dev" "$SHEDOS_REENCRYPT_TAIL_BYTES" || return 0
+        # Shrink the fs to leave the header tail (plus the RAM swap if carving),
+        # then carve the encrypted swap from the freed tail while the root is still
+        # PLAINTEXT — a table edit only; the fs already fits and there is no LUKS
+        # header yet that the shrunk partition could outsize. The root then
+        # reencrypts at its final size, so cryptsetup's data area (which ends at the
+        # partition end) is never truncated by the carve. Advancing the phase last:
+        # the header init below flips the device to LUKS, and a cut after this point
+        # must boot into the resume branch, not hand a half-encrypted disk back.
+        tail=$(_effective_tail "$swap")
+        _do_shrink "$dev" "$tail" || return 0
+        if [[ $swap == yes ]]; then
+            _do_swap_carve "$(esp_state_get disk)" "$(esp_state_get rootpn)" "$SHEDOS_REENCRYPT_KEYFILE" || true
+        fi
         esp_state_write "phase=encrypting"
+    elif [[ $swap == yes ]]; then
+        # Resume: the carve already happened on the fresh run; re-derive the swap
+        # partition so the recovery enrol + boot wiring still see it.
+        rpn=$(esp_state_get rootpn 2>/dev/null)
+        SHEDOS_REENCRYPT_SWAP_PART=$(_partnode_exists "$(esp_state_get disk 2>/dev/null)" "$(( ${rpn:-0} + 1 ))" || true)
+        export SHEDOS_REENCRYPT_SWAP_PART
     fi
     _do_root_reencrypt "$dev" "$SHEDOS_REENCRYPT_KEYFILE" || return 0
     mapper=luks-$(cryptsetup luksUUID "$dev" 2>/dev/null)
     cryptsetup open --key-file="$SHEDOS_REENCRYPT_KEYFILE" "$dev" "$mapper" 2>/dev/null
-    # Carve encrypted swap only when the arm step asked for it; a carve failure
-    # leaves the box on encrypted-root + zram, never a half-written table.
-    if [[ $(esp_state_get swap 2>/dev/null) == yes ]]; then
-        _do_swap_carve "$(esp_state_get disk)" "$(esp_state_get rootpn)" "$SHEDOS_REENCRYPT_KEYFILE" || true
-    fi
     _do_growback "/dev/mapper/$mapper"                         || true
     _record_containers "$dev" "${SHEDOS_REENCRYPT_SWAP_PART:-}" || true
     _do_reconfigure_boot                                       || true

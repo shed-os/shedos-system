@@ -269,9 +269,14 @@ _btrfs_shrink_stub() {  # $1=dir
     cat > "$1/bin/btrfs" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$1/btrfs.log"
+tf="$1/btrfs-size"
+if [[ \$1 == filesystem && \$2 == resize ]]; then
+    t=\$(printf '%s' "\$3" | sed -n 's/^1:\([0-9][0-9]*\)\$/\1/p')
+    [[ -n \$t ]] && echo "\$t" > "\$tf"
+fi
 if [[ \$1 == filesystem && \$2 == usage ]]; then
-    n=\$(grep -c 'filesystem usage' "$1/btrfs.log")
-    if [[ \$n -le 1 ]]; then echo "Device size:                10737418240"; else echo "Device size:                10703863808"; fi
+    sz=10737418240; [[ -f \$tf ]] && sz=\$(<"\$tf")
+    echo "Device size:                \$sz"
 fi
 exit 0
 EOF
