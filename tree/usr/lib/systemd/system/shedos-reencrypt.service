@@ -1,18 +1,18 @@
 [Unit]
 Description=In-place root reencryption driver
-# Initrd-only one-shot. Unlike shedos-initrd-recovery it deliberately does
-# NOT order after cryptsetup.target and never mounts the live root: on the
-# fresh-encrypt path the root partition is about to be reencrypted under us,
-# so the normal unlock path must not run and root must stay unmounted. It does
-# order after initrd-root-device.target (pulled into the transaction by Wants)
-# so the disk has been probed and the root + ESP partition nodes exist before
-# the driver's blkid/isLuks/getsize64 calls run. The driver reads the ESP state,
-# branches, and either passes through (plaintext box) or drives the conversion
-# before sysroot.mount.
+# Initrd-only one-shot. Like systemd-cryptsetup it PROVIDES the root device (it
+# opens the LUKS mapper on a resume/bridge boot), so it must NOT order after anything
+# that waits on the root: ordering after initrd-root-device.target deadlocks the
+# encrypted boot, because the root lives inside the LUKS container the driver itself
+# opens (proven in QEMU — it lands in Emergency Mode). It also stays off
+# cryptsetup.target: on the fresh-encrypt path the root is still plaintext and the
+# normal unlock must not run. It DOES order after systemd-udevd: cryptsetup open waits
+# on a device-mapper udev cookie, so udevd must be up to service it (else the open
+# hangs forever — also proven in QEMU). The disk-enumeration race is handled in the
+# driver (_mount_esp retries blkid). Runs before sysroot.mount.
 DefaultDependencies=no
 ConditionPathExists=/etc/initrd-release
-After=initrd-root-device.target
-Wants=initrd-root-device.target
+After=systemd-udevd.service systemd-udev-trigger.service
 Before=sysroot.mount
 
 [Service]

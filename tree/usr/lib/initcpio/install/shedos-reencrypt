@@ -28,6 +28,15 @@ build() {
     add_module 'nls_cp437'
     add_module 'nls_iso8859-1'
 
+    # The driver opens the LUKS mapper with the cryptsetup CLI, which waits on a
+    # device-mapper udev cookie. Without these rules (95-dm-notify runs `dmsetup
+    # udevcomplete`) the cookie never releases and `cryptsetup open` hangs forever
+    # in the initramfs — proven in QEMU. Mirror the sd-encrypt hook.
+    add_binary /usr/bin/dmsetup
+    add_udev_rule '10-dm.rules'
+    add_udev_rule '13-dm-disk.rules'
+    add_udev_rule '95-dm-notify.rules'
+
     # dm-crypt plus the whole crypto module set: the box may use any LUKS2
     # cipher and the resume path must replay it verbatim, so we cannot prune
     # to a single cipher at build time.

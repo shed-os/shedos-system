@@ -394,18 +394,19 @@ EOF
 rm -rf "$1/shedos-encrypt" 2>/dev/null || true
 exit 0
 EOF
-    chmod +x "$1/bin/blkid" "$1/bin/mount" "$1/bin/umount"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$1/bin/udevadm"   # no-op settle
+    chmod +x "$1/bin/blkid" "$1/bin/mount" "$1/bin/umount" "$1/bin/udevadm"
 }
 
 # MNT1: the marker ESP is the SECOND device — discovery skips the first, mounts it.
 d=$(_mk_sandbox); _esp_discovery_stubs "$d" /dev/fake-esp2
-out=$(PATH="$d/bin:$PATH" ESP_STATE_FILE="$d/efi/shedos-encrypt/state" SHEDOS_REENCRYPT_ESP="$d/efi/shedos-encrypt" \
+out=$(PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SETTLE=0 ESP_STATE_FILE="$d/efi/shedos-encrypt/state" SHEDOS_REENCRYPT_ESP="$d/efi/shedos-encrypt" \
   bash -c "source '$driver'; _mount_esp && cat \"\$ESP_STATE_FILE\"" 2>/dev/null)
 if [[ $out == *phase=armed* ]]; then _ok MNT1_discovers_marker_esp; else _fail MNT1_discovers_marker_esp "$out"; fi
 
 # MNT2: no device carries the marker — _mount_esp fails rather than silently boot.
 d=$(_mk_sandbox); _esp_discovery_stubs "$d" /dev/none
-PATH="$d/bin:$PATH" ESP_STATE_FILE="$d/efi/shedos-encrypt/state" SHEDOS_REENCRYPT_ESP="$d/efi/shedos-encrypt" \
+PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SETTLE=0 ESP_STATE_FILE="$d/efi/shedos-encrypt/state" SHEDOS_REENCRYPT_ESP="$d/efi/shedos-encrypt" \
   bash -c "source '$driver'; _mount_esp" >/dev/null 2>&1; rc=$?
 if [[ $rc -eq 1 ]]; then _ok MNT2_no_esp_fails; else _fail MNT2_no_esp_fails "rc=$rc"; fi
 

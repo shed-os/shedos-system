@@ -335,21 +335,32 @@ _detect_state() {
 _ESP_SELF_MOUNTED=
 _mount_esp() {
     [[ -f $ESP_STATE_FILE ]] && return 0
-    local mp dev
+    local mp dev i
     mp=$(dirname -- "$SHEDOS_REENCRYPT_ESP")
     mkdir -p -- "$mp"
-    # Find the ESP by its vfat filesystem, then confirm it by our state marker. We do
-    # NOT match on the EFI partition-type GUID: blkid in the initramfs reads the fs
-    # superblock, not the GPT, so a PARTTYPE query returns nothing and the conversion
-    # silently never starts (proven in QEMU). Every ESP is vfat, and the
-    # shedos-encrypt marker disambiguates among any vfat volumes.
-    for dev in $(blkid -t TYPE=vfat -o device 2>/dev/null); do
-        mount -t vfat "$dev" "$mp" 2>/dev/null || continue
-        if [[ -e $SHEDOS_REENCRYPT_ESP/state || -e $SHEDOS_REENCRYPT_ESP/key ]]; then
-            _ESP_SELF_MOUNTED=$mp
-            return 0
-        fi
-        umount "$mp" 2>/dev/null || true
+    # The disk may not be probed yet: this service runs early with DefaultDependencies=no
+    # (it has to — it PROVIDES the root on a resume boot, so it cannot order after the
+    # root device), so retry the scan for up to ~5s. Do NOT `udevadm settle` here: this
+    # early, settle blocks for its full timeout waiting on a udev that never quiesces
+    # (the root device lives inside the LUKS container we are about to open), which
+    # delays the mapper open past sysroot.mount's timeout and drops the box to emergency
+    # (proven in QEMU). The non-blocking retry handles the enumeration race instead.
+    # Find the ESP by its vfat filesystem and confirm it by our state marker. We do NOT
+    # match the EFI partition-type GUID: blkid in the initramfs reads the fs superblock,
+    # not the GPT, so a PARTTYPE query returns nothing and the conversion silently never
+    # starts (also proven in QEMU). Every ESP is vfat; the shedos-encrypt marker
+    # disambiguates among any vfat volumes.
+    for ((i = 0; i < 50; i++)); do
+        for dev in $(blkid -t TYPE=vfat -o device 2>/dev/null); do
+            mount -t vfat "$dev" "$mp" 2>/dev/null || continue
+            if [[ -e $SHEDOS_REENCRYPT_ESP/state || -e $SHEDOS_REENCRYPT_ESP/key ]]; then
+                _ESP_SELF_MOUNTED=$mp
+                return 0
+            fi
+            umount "$mp" 2>/dev/null || true
+        done
+        [[ ${SHEDOS_REENCRYPT_SETTLE:-1} == 0 ]] && break   # tests/e2es: no retry wait
+        sleep 0.1
     done
     echo "shedos-reencrypt: no ESP carrying the encryption state — booting normally" >&2
     return 1
