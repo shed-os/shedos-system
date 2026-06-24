@@ -3,11 +3,16 @@ Description=In-place root reencryption driver
 # Initrd-only one-shot. Unlike shedos-initrd-recovery it deliberately does
 # NOT order after cryptsetup.target and never mounts the live root: on the
 # fresh-encrypt path the root partition is about to be reencrypted under us,
-# so the normal unlock path must not run and root must stay unmounted. The
-# driver reads the ESP state, branches, and either passes through (plaintext
-# box) or drives the conversion before sysroot.mount.
+# so the normal unlock path must not run and root must stay unmounted. It does
+# order after initrd-root-device.target (pulled into the transaction by Wants)
+# so the disk has been probed and the root + ESP partition nodes exist before
+# the driver's blkid/isLuks/getsize64 calls run. The driver reads the ESP state,
+# branches, and either passes through (plaintext box) or drives the conversion
+# before sysroot.mount.
 DefaultDependencies=no
 ConditionPathExists=/etc/initrd-release
+After=initrd-root-device.target
+Wants=initrd-root-device.target
 Before=sysroot.mount
 
 [Service]
