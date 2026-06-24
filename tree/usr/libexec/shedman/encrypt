@@ -17,6 +17,13 @@ MEMINFO=${SHEDMAN_ENCRYPT_MEMINFO:-/proc/meminfo}
 # btrfs shrink and the cryptsetup reduction MUST agree to the byte).
 _HEADER_TAIL_BYTES=33554432   # 32 MiB
 
+# Arm-step seams (the offline driver reads the same ESP paths).
+ESP=${SHEDOS_REENCRYPT_ESP:-/boot/efi/shedos-encrypt}
+KEYFILE=${SHEDOS_REENCRYPT_KEYFILE:-$ESP/key}
+MKINITCPIO_CONF=${SHEDOS_MKINITCPIO_CONF:-/etc/mkinitcpio.conf}
+PROC_CMDLINE=${SHEDMAN_ENCRYPT_PROC_CMDLINE:-/proc/cmdline}
+BINDIR=${SHEDOS_REENCRYPT_BINDIR:-/usr/lib/shedos}
+
 _die() { echo "$PROG: $1" >&2; exit "${2:-1}"; }
 
 _require_root() {
@@ -32,6 +39,17 @@ _read_secret() {
     local p=$1 v
     if [[ -t 0 ]]; then read -r -s -p "$p" v; echo >&2; else read -r v; fi
     printf '%s' "$v"
+}
+
+# Read a new secret twice and confirm it matches; refuse an empty one. The disk
+# passphrase is chosen here and becomes the LUKS keyslot the offline run creates.
+_read_new_secret() {  # $1=label
+    local v1 v2
+    v1=$(_read_secret "New $1: ")
+    v2=$(_read_secret "Repeat $1: ")
+    [[ $v1 == "$v2" ]] || _die "the two entries did not match" 1
+    [[ -n $v1 ]] || _die "an empty $1 is refused" 1
+    printf '%s' "$v1"
 }
 
 # Gate on an explicit yes (a typed "yes", not just Enter). A non-TTY proceeds
@@ -138,6 +156,151 @@ EOF
     return 0
 }
 
+# --- arm ---------------------------------------------------------------------
+
+_firmware() {
+    [[ -n ${SHEDOS_FIRMWARE:-} ]] && { printf '%s' "$SHEDOS_FIRMWARE"; return 0; }
+    [[ -d /sys/firmware/efi ]] && printf 'uefi' || printf 'bios'
+}
+
+# Refuse a box the post-encryption boot reconfigure can't safely convert: it only
+# knows the standard ShedOS layout — a btrfs @ subvolume booted under the systemd
+# initramfs. Gate here, before any data is touched, so a non-standard box is turned
+# away rather than half-converted (a wrong rootflags or a legacy initramfs would
+# brick at the flip, which auto-rollback cannot catch).
+_preflight_assert_standard_layout() {
+    local cmdline hooks
+    cmdline=$(cat "$PROC_CMDLINE" 2>/dev/null)
+    [[ $cmdline == *"rootflags=subvol=@"* ]] \
+        || _die "this box does not boot a btrfs @ subvolume (no rootflags=subvol=@); in-place encryption supports the standard ShedOS layout only" 1
+    # The encrypted root still mounts by its surviving filesystem UUID after the
+    # driver opens the mapper, so the cmdline must boot root=UUID=, not a device
+    # path that becomes a LUKS container.
+    [[ $cmdline == *"root=UUID="* ]] \
+        || _die "this box boots root by device path, not root=UUID=; the encrypted root must mount by its filesystem UUID" 1
+    hooks=$(grep -E '^HOOKS=' "$MKINITCPIO_CONF" 2>/dev/null | head -1)
+    [[ $hooks =~ (^|[^[:alnum:]_])systemd([^[:alnum:]_]|$) ]] \
+        || _die "this box uses a legacy (non-systemd) initramfs; run the mkinitcpio migration first" 1
+}
+
+# Split a partition device into its parent disk and 1-based partition number,
+# handling sdaN/vdaN and the nvme0n1pN/mmcblk0pN p-forms.
+_disk_and_partn() {  # $1=partition -> "disk partn", or rc 1
+    local dev=$1
+    if [[ $dev =~ ^(.+[0-9])p([0-9]+)$ ]]; then
+        printf '%s %s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    elif [[ $dev =~ ^(.+[^0-9])([0-9]+)$ ]]; then
+        printf '%s %s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    else
+        return 1
+    fi
+}
+
+# Add the shedos-reencrypt hook to the initramfs HOOKS so the next boot runs the
+# offline driver before sysroot.mount. Placed before shedos-recovery; idempotent.
+_stage_reencrypt_hook() {  # $1=mkinitcpio.conf
+    local conf=$1 hooks
+    hooks=$(grep -E '^HOOKS=' "$conf" 2>/dev/null | head -1) || _die "no HOOKS= line in $conf" 1
+    if [[ $hooks != *shedos-reencrypt* ]]; then
+        if [[ $hooks == *shedos-recovery* ]]; then
+            sed -i -E '/^HOOKS=/ s/\bshedos-recovery\b/shedos-reencrypt shedos-recovery/' "$conf"
+        else
+            sed -i -E '/^HOOKS=/ s/\bfilesystems\b/shedos-reencrypt filesystems/' "$conf"
+        fi
+    fi
+    grep -qE '^HOOKS=.*\bshedos-reencrypt\b' "$conf" || _die "could not stage the reencrypt hook in $conf" 1
+}
+
+# Remove the reencrypt hook from HOOKS (the disarm inverse). Idempotent.
+_unstage_reencrypt_hook() {  # $1=mkinitcpio.conf
+    sed -i -E '/^HOOKS=/ s/shedos-reencrypt[[:space:]]*//' "$1"
+}
+
+# Rebuild the initramfs and the boot image so a HOOKS change takes effect: the UKI
+# on UEFI, the Limine menu on BIOS. Used by both arm and disarm.
+_rebuild_boot() {
+    "$BINDIR/rebuild-initramfs.sh" || return 1
+    if [[ $(_firmware) == uefi ]]; then "$BINDIR/build-uki.sh" --rebuild; else "$BINDIR/render-limine-config.sh"; fi
+}
+
+# Arm the conversion: run the preflight, capture the passphrase + the geometry the
+# offline driver needs, stash a 0600 keyfile + the orchestration state on the ESP,
+# stage the reencrypt hook into the initramfs, rebuild the boot images, and reboot.
+# The bytes are rewritten on the next boot, offline, by the driver.
+_cmd_arm() {
+    _require_root encrypt
+    local carve=yes
+    [[ -n ${NO_SWAP:-} ]] && carve=no
+
+    local root_dev
+    root_dev=$(_preflight_root_device)
+    [[ -n $root_dev ]] || _die "could not find the device backing /" 1
+    _preflight_assert_btrfs_plain "$root_dev"
+    _preflight_assert_standard_layout
+    _preflight_power_ok
+    _preflight_space_ok "$carve"
+
+    local inner_uuid geom disk rootpn
+    inner_uuid=$(findmnt -n -o UUID / 2>/dev/null)
+    [[ -n $inner_uuid ]] || _die "could not read the root filesystem UUID" 1
+    geom=$(_disk_and_partn "$root_dev") || _die "could not parse the disk and partition from $root_dev" 1
+    read -r disk rootpn <<<"$geom"
+
+    _dataloss_ack
+    local pass; pass=$(_read_new_secret "disk unlock passphrase")
+
+    # shellcheck source=/dev/null
+    source "${SHEDMAN_ENCRYPT_ESP_STATE_LIB:-/usr/lib/shedos/esp-state.sh}"
+
+    # Stage the hook and rebuild the boot images FIRST, reverting the conf if a
+    # rebuild fails, and only then commit the keyfile + armed state. So a rebuild
+    # failure leaves nothing armed — no phase, no keyfile — and the driver no-ops;
+    # a later kernel rebuild can never bake a leftover hook into a silent encrypt.
+    local conf_bak; conf_bak=$(mktemp)
+    cp -- "$MKINITCPIO_CONF" "$conf_bak"
+    _stage_reencrypt_hook "$MKINITCPIO_CONF"
+    if ! _rebuild_boot; then
+        cp -- "$conf_bak" "$MKINITCPIO_CONF"; rm -f -- "$conf_bak"
+        _die "could not rebuild the boot images — nothing was armed" 1
+    fi
+    rm -f -- "$conf_bak"
+
+    install -d -m700 -- "$ESP"
+    ( umask 077; printf '%s' "$pass" > "$KEYFILE" )
+    # containers= is the device the offline driver reencrypts (it reads the first
+    # field); disk + rootpn drive the swap carve; inner_uuid (read by --status, a
+    # later task) is the surviving filesystem UUID the cmdline already mounts by.
+    esp_state_write "phase=armed" "containers=$root_dev" "disk=$disk" "rootpn=$rootpn" \
+        "swap=$carve" "inner_uuid=$inner_uuid"
+
+    echo "$PROG: armed — the disk encrypts on the next boot; keep the machine on power." >&2
+    if [[ -n ${ASSUME_YES:-} ]]; then systemctl reboot; return 0; fi
+    local answer
+    read -r -p "Reboot now to start encryption? [yes/no]: " answer
+    if [[ $answer == yes ]]; then
+        systemctl reboot
+    else
+        echo "$PROG: not rebooting — encryption starts on your next boot. Run 'sudo $PROG --disarm' to cancel." >&2
+    fi
+}
+
+# Cancel an armed-but-not-yet-encrypted conversion: remove the reencrypt hook and
+# rebuild so the next boot no longer runs the driver, then shred the keyfile and
+# clear the state. Only valid while phase=armed (once encryption has started the
+# device is LUKS and the path is --resume, not --disarm).
+_cmd_disarm() {
+    _require_root disarm
+    # shellcheck source=/dev/null
+    source "${SHEDMAN_ENCRYPT_ESP_STATE_LIB:-/usr/lib/shedos/esp-state.sh}"
+    local phase; phase=$(esp_state_get phase 2>/dev/null)
+    [[ $phase == armed ]] || _die "nothing to disarm (no armed encryption; phase=${phase:-none})" 1
+    _unstage_reencrypt_hook "$MKINITCPIO_CONF"
+    _rebuild_boot || _die "could not rebuild the boot images while disarming" 1
+    rm -f -- "$KEYFILE"
+    esp_state_clear
+    echo "$PROG: disarmed — the disk will not be encrypted." >&2
+}
+
 # When sourced (the tests do this to reach the functions), stop here with the
 # functions defined; only a direct run reaches help + dispatch.
 [[ ${BASH_SOURCE[0]} == "${0}" ]] || return 0
@@ -148,13 +311,16 @@ case "${1:-}" in
         exit 0
         ;;
     --complete-bash|--complete-zsh)
-        printf '%s\n' --status --resume --yes -y --help -h
+        printf '%s\n' --status --resume --disarm --no-swap --force-no-ac --yes -y --help -h
         exit 0
         ;;
     --complete-fish)
         cat <<'EOF'
 --status	show what an in-progress encryption is doing
 --resume	resume an interrupted encryption
+--disarm	cancel an armed conversion before it starts
+--no-swap	do not carve an encrypted swap (no hibernation)
+--force-no-ac	arm without the AC/charge check
 --yes	skip the confirmation prompts
 -y	skip the confirmation prompts
 --help	show usage
@@ -162,9 +328,9 @@ case "${1:-}" in
 EOF
         exit 0
         ;;
-    --help|-h|"")
+    --help|-h)
         cat <<EOF
-Usage: sudo $PROG [--yes]
+Usage: sudo $PROG [--no-swap] [--force-no-ac] [--yes]
        sudo $PROG --resume
             $PROG --status
 
@@ -176,6 +342,9 @@ unlock passphrase, and arms the conversion.
   (no subcommand)              run the preflight and arm the encryption
   --resume                     resume an interrupted encryption
   --status                     show what an in-progress encryption is doing
+  --disarm                     cancel an armed conversion before it starts
+  --no-swap                    do not carve an encrypted swap (no hibernation)
+  --force-no-ac                arm without the AC/charge check
   -y, --yes                    skip the confirmation prompts
   -h, --help                   show this help
 EOF
@@ -183,22 +352,32 @@ EOF
         ;;
 esac
 
-action=${1:-}
-ASSUME_YES=
+action=""
+ASSUME_YES=; NO_SWAP=; FORCE_NO_AC=
 args=()
 for arg in "$@"; do
     case "$arg" in
-        --yes|-y)  ASSUME_YES=1 ;;
-        --status)  action=--status ;;
-        --resume)  action=--resume ;;
-        *)         args+=("$arg") ;;
+        --yes|-y)       ASSUME_YES=1 ;;
+        --no-swap)      NO_SWAP=1 ;;
+        --force-no-ac)  FORCE_NO_AC=1 ;;
+        --status)       action=--status ;;
+        --resume)       action=--resume ;;
+        --disarm)       action=--disarm ;;
+        *)              args+=("$arg") ;;
     esac
 done
+
+if (( ${#args[@]} )); then
+    echo "$PROG: unknown argument: ${args[0]}" >&2
+    echo "Try: $PROG --help" >&2
+    exit 2
+fi
 
 case "$action" in
     --status)  _die "reporting an in-progress encryption is wired in a later task" 1 ;;
     --resume)  _die "resuming an interrupted encryption is wired in a later task" 1 ;;
-    "")        _die "arming the conversion is wired in a later task" 1 ;;
+    --disarm)  _cmd_disarm ;;
+    "")        _cmd_arm ;;
     *)
         echo "$PROG: unknown subcommand: $action" >&2
         echo "Try: $PROG --help" >&2
