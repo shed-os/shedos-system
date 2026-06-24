@@ -249,8 +249,23 @@ got=$(_ds 1 armed);        if [[ $got == fresh-encrypt ]];         then _ok DS1_
 got=$(_ds 0 encrypting);   if [[ $got == resume ]];                then _ok DS2_resume;           else _fail DS2_resume "$got"; fi
 got=$(_ds 1 '');           if [[ $got == plaintext-passthrough ]]; then _ok DS3_passthrough;      else _fail DS3_passthrough "$got"; fi
 got=$(_ds 0 '');           if [[ $got == plaintext-passthrough ]]; then _ok DS4_done_passthrough; else _fail DS4_done_passthrough "$got"; fi
-got=$(_ds 0 flip-pending); if [[ $got == resume ]];                then _ok DS5_flip_resume;      else _fail DS5_flip_resume "$got"; fi
+got=$(_ds 0 flip-pending); if [[ $got == bridge ]];                then _ok DS5_flip_bridge;      else _fail DS5_flip_bridge "$got"; fi
 got=$(_ds 1 encrypting);   if [[ $got == resume ]];                then _ok DS6_noluks_encrypting_resume; else _fail DS6_noluks_encrypting_resume "$got"; fi
+
+# BR1-BR2: on a flip-pending boot the driver bridges the unlock. If the mapper is
+# not open yet it opens it and drops the /run marker (the driver bridged); if
+# sd-encrypt already opened it, the driver does nothing and leaves no marker (so
+# finalize can read that sd-encrypt proved itself). The marker semantics' reliability
+# is the QEMU boot's call; these prove the branch's open-or-skip + marker logic.
+d=$(_mk_sandbox); printf 'x' > "$d/key"
+PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_DM_DIR="$d/dm" SHEDOS_REENCRYPT_RUN="$d/run" SHEDOS_REENCRYPT_KEYFILE="$d/key" \
+  bash -c "source '$driver'; _bridge_open /dev/fake-root" >/dev/null 2>&1
+if grep -q 'open --key-file' "$d/cryptsetup.log" 2>/dev/null && [[ -e $d/run/bridged ]]; then _ok BR1_bridges_and_marks; else _fail BR1_bridges_and_marks "cs=[$(cat "$d/cryptsetup.log" 2>/dev/null)] marker=$([[ -e $d/run/bridged ]] && echo yes || echo no)"; fi
+
+d=$(_mk_sandbox); printf 'x' > "$d/key"; mkdir -p "$d/dm"; : > "$d/dm/luks-uuid-fake-root"
+PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_DM_DIR="$d/dm" SHEDOS_REENCRYPT_RUN="$d/run" SHEDOS_REENCRYPT_KEYFILE="$d/key" \
+  bash -c "source '$driver'; _bridge_open /dev/fake-root" >/dev/null 2>&1
+if ! grep -q 'open --key-file' "$d/cryptsetup.log" 2>/dev/null && [[ ! -e $d/run/bridged ]]; then _ok BR2_sd_encrypt_won_no_marker; else _fail BR2_sd_encrypt_won_no_marker "cs=[$(cat "$d/cryptsetup.log" 2>/dev/null)] marker=$([[ -e $d/run/bridged ]] && echo yes || echo no)"; fi
 
 # P1: the unit + hook + driver are actually installed by package() — a staged
 # file PKGBUILD never installs ships nothing (the _libexec_shedman class of bug).

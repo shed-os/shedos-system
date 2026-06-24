@@ -28,6 +28,10 @@ SHEDOS_REENCRYPT_MEMINFO=${SHEDOS_REENCRYPT_MEMINFO:-/proc/meminfo}
 # The EFI System Partition type GUID — how we find the ESP to mount, since a
 # systemd initrd does not mount it for us and the keyfile + state live there.
 SHEDOS_REENCRYPT_ESP_PARTTYPE=${SHEDOS_REENCRYPT_ESP_PARTTYPE:-c12a7328-f81f-11d2-ba4b-00a0c93ec93b}
+# Where device-mapper nodes live, and where the bridge drops its marker. /run is a
+# tmpfs systemd carries across switch-root, so the marker reaches userspace finalize.
+SHEDOS_REENCRYPT_DM_DIR=${SHEDOS_REENCRYPT_DM_DIR:-/dev/mapper}
+SHEDOS_REENCRYPT_RUN=${SHEDOS_REENCRYPT_RUN:-/run/shedos-reencrypt}
 
 # Still a placeholder — the live-box boot reconfigure lands in a later task
 # against real devices.
@@ -275,7 +279,7 @@ _reencrypt_dev() {
 #   no      encrypting       -> resume          (cut after shrink, before the header)
 #   no      (none)           -> plaintext-passthrough (ordinary box / done)
 #   yes     encrypting       -> resume          (power-cut mid-encrypt)
-#   yes     flip-pending     -> resume          (encrypt done, flip not committed)
+#   yes     flip-pending     -> bridge          (encrypt done; bridge the boot until sd-encrypt is proven)
 #   yes     (none)           -> plaintext-passthrough (already encrypted + cleared)
 #
 # The no+encrypting row is load-bearing: the header is initialised only after the
@@ -291,8 +295,9 @@ _detect_state() {
 
     if cryptsetup isLuks "$dev" 2>/dev/null; then
         case $phase in
-            encrypting|flip-pending) echo resume ;;
-            *)                       echo plaintext-passthrough ;;
+            encrypting)   echo resume ;;
+            flip-pending) echo bridge ;;
+            *)            echo plaintext-passthrough ;;
         esac
     else
         case $phase in
@@ -337,12 +342,34 @@ _umount_esp() {
     _ESP_SELF_MOUNTED=
 }
 
+# Flip-pending bridge. The encryption is done and the boot path has been
+# reconfigured to unlock from sd-encrypt, but the flip is not committed yet, so the
+# driver stays in this initramfs as a guaranteed bridge. If sd-encrypt already
+# opened the mapper, leave it and drop no marker; otherwise open it ourselves so the
+# box still boots, and record in /run that the driver — not sd-encrypt — did the
+# unlock. Userspace finalize reads that marker to decide whether sd-encrypt has
+# proven itself before it commits the flip. Whether the mapper-exists read is a
+# reliable proof or a race is what the QEMU flip-pending boot settles; the bridge is
+# brick-safe either way (the box boots whoever opens it).
+_bridge_open() {  # $1=root container
+    local dev=$1 uuid mapper run=$SHEDOS_REENCRYPT_RUN
+    uuid=$(cryptsetup luksUUID "$dev" 2>/dev/null) || return 0
+    mapper=luks-$uuid
+    [[ -e $SHEDOS_REENCRYPT_DM_DIR/$mapper ]] && return 0   # sd-encrypt (or a prior open) already unlocked it
+    if cryptsetup open --key-file="$SHEDOS_REENCRYPT_KEYFILE" "$dev" "$mapper" 2>/dev/null; then
+        mkdir -p -- "$run"; : > "$run/bridged"
+    fi
+}
+
 _drive() {
     local branch dev mapper swap tail rpn
     branch=$(_detect_state)
     # Ordinary boot: hand the device back to the normal path, no-op.
     [[ $branch == plaintext-passthrough ]] && return 0
     dev=$(_reencrypt_dev)
+    # Flip-pending: the conversion is finished; just bridge the boot, nothing to
+    # shrink/encrypt/grow. The flip itself commits from userspace once proven.
+    [[ $branch == bridge ]] && { _bridge_open "$dev"; return 0; }
     swap=$(esp_state_get swap 2>/dev/null)
     if [[ $branch == fresh-encrypt ]]; then
         # Shrink the fs to leave the header tail (plus the RAM swap if carving),
