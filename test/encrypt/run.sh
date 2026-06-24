@@ -327,6 +327,51 @@ if grep -q 'filesystem resize 1:max' "$d/btrfs.log" 2>/dev/null; then _ok GB1_re
 PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SCRATCH="$d/mnt" bash -c "source '$driver'; _do_growback /dev/mapper/luks-test" >/dev/null 2>&1; rc=$?
 if [[ $rc -eq 0 ]]; then _ok GB2_idempotent; else _fail GB2_idempotent "rc=$rc"; fi
 
+# MNT1-MNT3: the reencrypt initramfs does not mount the ESP, so the driver finds it
+# by the ESP partition-type GUID and mounts the one carrying the state dir. blkid +
+# mount are stubbed (a real vfat mount is the QEMU boot's job); these prove the
+# discovery loop — skip an ESP without our marker, keep the one with it, fail loud
+# when none match, and never probe when the state is already reachable.
+_esp_discovery_stubs() {  # $1=dir $2=marker-device
+    cat > "$1/bin/blkid" <<EOF
+#!/usr/bin/env bash
+touch "$1/blkid-was-called"
+printf '%s\n' /dev/fake-esp1 /dev/fake-esp2
+exit 0
+EOF
+    cat > "$1/bin/mount" <<EOF
+#!/usr/bin/env bash
+# args: -t vfat <dev> <mp>
+[[ "\$3" == "$2" ]] && { mkdir -p "\$4/shedos-encrypt"; printf 'phase=armed\n' > "\$4/shedos-encrypt/state"; }
+exit 0
+EOF
+    cat > "$1/bin/umount" <<'EOF'
+#!/usr/bin/env bash
+rm -rf "$1/shedos-encrypt" 2>/dev/null || true
+exit 0
+EOF
+    chmod +x "$1/bin/blkid" "$1/bin/mount" "$1/bin/umount"
+}
+
+# MNT1: the marker ESP is the SECOND device — discovery skips the first, mounts it.
+d=$(_mk_sandbox); _esp_discovery_stubs "$d" /dev/fake-esp2
+out=$(PATH="$d/bin:$PATH" ESP_STATE_FILE="$d/efi/shedos-encrypt/state" SHEDOS_REENCRYPT_ESP="$d/efi/shedos-encrypt" \
+  bash -c "source '$driver'; _mount_esp && cat \"\$ESP_STATE_FILE\"" 2>/dev/null)
+if [[ $out == *phase=armed* ]]; then _ok MNT1_discovers_marker_esp; else _fail MNT1_discovers_marker_esp "$out"; fi
+
+# MNT2: no device carries the marker — _mount_esp fails rather than silently boot.
+d=$(_mk_sandbox); _esp_discovery_stubs "$d" /dev/none
+PATH="$d/bin:$PATH" ESP_STATE_FILE="$d/efi/shedos-encrypt/state" SHEDOS_REENCRYPT_ESP="$d/efi/shedos-encrypt" \
+  bash -c "source '$driver'; _mount_esp" >/dev/null 2>&1; rc=$?
+if [[ $rc -eq 1 ]]; then _ok MNT2_no_esp_fails; else _fail MNT2_no_esp_fails "rc=$rc"; fi
+
+# MNT3: a reachable state short-circuits — no blkid probe (the tests + e2es need this).
+d=$(_mk_sandbox); _esp_discovery_stubs "$d" /dev/fake-esp2
+mkdir -p "$d/efi/shedos-encrypt"; printf 'phase=armed\n' > "$d/efi/shedos-encrypt/state"
+PATH="$d/bin:$PATH" ESP_STATE_FILE="$d/efi/shedos-encrypt/state" SHEDOS_REENCRYPT_ESP="$d/efi/shedos-encrypt" \
+  bash -c "source '$driver'; _mount_esp" >/dev/null 2>&1
+if [[ ! -e $d/blkid-was-called ]]; then _ok MNT3_skips_when_reachable; else _fail MNT3_skips_when_reachable "probed despite a readable state"; fi
+
 # MAIN1: on a fresh-encrypt box, main threads the device through the whole chain
 # — shrink, reencrypt, open the mapper, grow back.
 d=$(_mk_sandbox); _btrfs_shrink_stub "$d"; mkdir -p "$d/esp"

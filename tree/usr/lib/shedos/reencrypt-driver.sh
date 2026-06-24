@@ -25,6 +25,9 @@ SHEDOS_REENCRYPT_ESP=${SHEDOS_REENCRYPT_ESP:-/boot/efi/shedos-encrypt}
 SHEDOS_REENCRYPT_KEYFILE=${SHEDOS_REENCRYPT_KEYFILE:-$SHEDOS_REENCRYPT_ESP/key}
 # The RAM source for swap sizing.
 SHEDOS_REENCRYPT_MEMINFO=${SHEDOS_REENCRYPT_MEMINFO:-/proc/meminfo}
+# The EFI System Partition type GUID — how we find the ESP to mount, since a
+# systemd initrd does not mount it for us and the keyfile + state live there.
+SHEDOS_REENCRYPT_ESP_PARTTYPE=${SHEDOS_REENCRYPT_ESP_PARTTYPE:-c12a7328-f81f-11d2-ba4b-00a0c93ec93b}
 
 # Still a placeholder — the live-box boot reconfigure lands in a later task
 # against real devices.
@@ -300,7 +303,41 @@ _detect_state() {
     fi
 }
 
-main() {
+# The keyfile and orchestration state live on the ESP, which a systemd initrd does
+# not mount — so on a real boot the driver cannot read them without mounting it
+# first. Discover the EFI System Partition that carries our state dir (a box can
+# have more than one ESP) and mount it rw at the ESP's parent. A no-op when the
+# state is already reachable: the tests and the loop e2es point ESP_STATE_FILE at a
+# tmpdir, and a re-entrant call finds it already mounted. _ESP_SELF_MOUNTED records
+# the mountpoint so the caller unmounts only what this mounted.
+_ESP_SELF_MOUNTED=
+_mount_esp() {
+    [[ -f $ESP_STATE_FILE ]] && return 0
+    local mp dev
+    mp=$(dirname -- "$SHEDOS_REENCRYPT_ESP")
+    mkdir -p -- "$mp"
+    for dev in $(blkid -t "PARTTYPE=$SHEDOS_REENCRYPT_ESP_PARTTYPE" -o device 2>/dev/null); do
+        mount -t vfat "$dev" "$mp" 2>/dev/null || continue
+        if [[ -e $SHEDOS_REENCRYPT_ESP/state || -e $SHEDOS_REENCRYPT_ESP/key ]]; then
+            _ESP_SELF_MOUNTED=$mp
+            return 0
+        fi
+        umount "$mp" 2>/dev/null || true
+    done
+    echo "shedos-reencrypt: no ESP carrying the encryption state — booting normally" >&2
+    return 1
+}
+
+# Flush and unmount what _mount_esp mounted, so the writes reach the partition the
+# first-boot userspace services read after switch-root.
+_umount_esp() {
+    [[ -n $_ESP_SELF_MOUNTED ]] || return 0
+    sync
+    umount "$_ESP_SELF_MOUNTED" 2>/dev/null || true
+    _ESP_SELF_MOUNTED=
+}
+
+_drive() {
     local branch dev mapper swap tail rpn
     branch=$(_detect_state)
     # Ordinary boot: hand the device back to the normal path, no-op.
@@ -336,6 +373,17 @@ main() {
     _record_containers "$dev" "${SHEDOS_REENCRYPT_SWAP_PART:-}" || true
     _do_reconfigure_boot                                       || true
     return 0
+}
+
+# Mount the ESP, drive the conversion, then unmount — so the keyfile read and the
+# phase writes hit the real partition. A missing ESP degrades to a normal boot
+# rather than a brick; the conversion just does not start this boot.
+main() {
+    _mount_esp || return 0
+    _drive
+    local rc=$?
+    _umount_esp
+    return "$rc"
 }
 
 # Run main only when executed as the unit's ExecStart, not when sourced by the

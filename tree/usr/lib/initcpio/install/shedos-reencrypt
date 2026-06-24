@@ -21,6 +21,13 @@ build() {
     add_binary /usr/bin/blockdev
     add_binary /usr/bin/partx
 
+    # The driver mounts the ESP itself (a systemd initrd does not): blkid finds it
+    # by the ESP type GUID, and vfat + the FAT codepage modules let it mount.
+    add_binary /usr/bin/blkid
+    add_module 'vfat'
+    add_module 'nls_cp437'
+    add_module 'nls_iso8859-1'
+
     # dm-crypt plus the whole crypto module set: the box may use any LUKS2
     # cipher and the resume path must replay it verbatim, so we cannot prune
     # to a single cipher at build time.
