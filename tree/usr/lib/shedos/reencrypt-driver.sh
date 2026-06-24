@@ -25,9 +25,6 @@ SHEDOS_REENCRYPT_ESP=${SHEDOS_REENCRYPT_ESP:-/boot/efi/shedos-encrypt}
 SHEDOS_REENCRYPT_KEYFILE=${SHEDOS_REENCRYPT_KEYFILE:-$SHEDOS_REENCRYPT_ESP/key}
 # The RAM source for swap sizing.
 SHEDOS_REENCRYPT_MEMINFO=${SHEDOS_REENCRYPT_MEMINFO:-/proc/meminfo}
-# The EFI System Partition type GUID — how we find the ESP to mount, since a
-# systemd initrd does not mount it for us and the keyfile + state live there.
-SHEDOS_REENCRYPT_ESP_PARTTYPE=${SHEDOS_REENCRYPT_ESP_PARTTYPE:-c12a7328-f81f-11d2-ba4b-00a0c93ec93b}
 # Where device-mapper nodes live, and where the bridge drops its marker. /run is a
 # tmpfs systemd carries across switch-root, so the marker reaches userspace finalize.
 SHEDOS_REENCRYPT_DM_DIR=${SHEDOS_REENCRYPT_DM_DIR:-/dev/mapper}
@@ -341,7 +338,12 @@ _mount_esp() {
     local mp dev
     mp=$(dirname -- "$SHEDOS_REENCRYPT_ESP")
     mkdir -p -- "$mp"
-    for dev in $(blkid -t "PARTTYPE=$SHEDOS_REENCRYPT_ESP_PARTTYPE" -o device 2>/dev/null); do
+    # Find the ESP by its vfat filesystem, then confirm it by our state marker. We do
+    # NOT match on the EFI partition-type GUID: blkid in the initramfs reads the fs
+    # superblock, not the GPT, so a PARTTYPE query returns nothing and the conversion
+    # silently never starts (proven in QEMU). Every ESP is vfat, and the
+    # shedos-encrypt marker disambiguates among any vfat volumes.
+    for dev in $(blkid -t TYPE=vfat -o device 2>/dev/null); do
         mount -t vfat "$dev" "$mp" 2>/dev/null || continue
         if [[ -e $SHEDOS_REENCRYPT_ESP/state || -e $SHEDOS_REENCRYPT_ESP/key ]]; then
             _ESP_SELF_MOUNTED=$mp

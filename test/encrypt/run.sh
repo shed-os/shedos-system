@@ -372,7 +372,7 @@ PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SCRATCH="$d/mnt" bash -c "source '$driver';
 if [[ $rc -eq 0 ]]; then _ok GB2_idempotent; else _fail GB2_idempotent "rc=$rc"; fi
 
 # MNT1-MNT3: the reencrypt initramfs does not mount the ESP, so the driver finds it
-# by the ESP partition-type GUID and mounts the one carrying the state dir. blkid +
+# by scanning vfat partitions and mounts the one carrying the state dir. blkid +
 # mount are stubbed (a real vfat mount is the QEMU boot's job); these prove the
 # discovery loop — skip an ESP without our marker, keep the one with it, fail loud
 # when none match, and never probe when the state is already reachable.
