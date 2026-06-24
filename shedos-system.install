@@ -197,6 +197,7 @@ post_install() {
     systemctl enable shedos-firstboot-mirrors.service 2>/dev/null || true
     systemctl enable shedos-boot-success.service 2>/dev/null || true
     systemctl enable shedos-encrypt-enroll.service 2>/dev/null || true
+    systemctl enable shedos-encrypt-finalize.service 2>/dev/null || true
     systemctl enable shedos-mount-report.service 2>/dev/null || true
     systemctl enable shedos-smart-check.timer 2>/dev/null || true
     /usr/lib/shedos/backfill-resume.py || true
@@ -844,6 +845,7 @@ post_upgrade() {
     systemctl enable shedos-firstboot-mirrors.service 2>/dev/null || true
     systemctl enable shedos-boot-success.service 2>/dev/null || true
     systemctl enable shedos-encrypt-enroll.service 2>/dev/null || true
+    systemctl enable shedos-encrypt-finalize.service 2>/dev/null || true
     systemctl enable shedos-mount-report.service 2>/dev/null || true
     systemctl enable shedos-smart-check.timer 2>/dev/null || true
     systemctl enable 'btrfs-scrub@-.timer' 2>/dev/null || true

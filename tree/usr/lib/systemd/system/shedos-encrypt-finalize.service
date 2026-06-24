@@ -1,0 +1,16 @@
+[Unit]
+Description=Finalise in-place disk encryption (reconfigure boot + advance the flip)
+# Only meaningful on a box that ran `shedman encrypt`; on every ordinary boot the
+# state file is absent, so the unit is skipped before it ever starts.
+ConditionPathExists=/boot/efi/shedos-encrypt/state
+# Runs after the recovery key is enrolled — reconfigure reads the container list
+# the enrol service writes, and waits for it to finish before staging the boot.
+After=shedos-encrypt-enroll.service local-fs.target
+Wants=shedos-encrypt-enroll.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/shedos/encrypt-finalize.sh
+
+[Install]
+WantedBy=multi-user.target

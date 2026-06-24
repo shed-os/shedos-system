@@ -162,18 +162,23 @@ package() {
     install -Dm755 tree/usr/lib/initcpio/install/shedos-reencrypt \
         "$pkgdir/usr/lib/initcpio/install/shedos-reencrypt"
 
-    # First-boot finalisation of an in-place encryption, both userspace-only
+    # First-boot finalisation of an in-place encryption, all userspace-only
     # (mkinitcpio/ukify and the interactive recovery-key ceremony cannot run in
     # the headless reencrypt initramfs). encrypt-enroll.sh enrols the recovery
-    # key; encrypt-reconfigure.sh rebuilds the normal sd-encrypt boot path. The
-    # .install scriptlet enables the enrol unit; both self-gate to a no-op on any
-    # box that never ran `shedman encrypt`.
+    # key; encrypt-finalize.sh runs encrypt-reconfigure.sh to rebuild the normal
+    # sd-encrypt boot path and advances the conversion to flip-pending. The
+    # .install scriptlet enables the enrol + finalize units; all self-gate to a
+    # no-op on any box that never ran `shedman encrypt`.
     install -Dm755 tree/usr/lib/shedos/encrypt-enroll.sh \
         "$pkgdir/usr/lib/shedos/encrypt-enroll.sh"
     install -Dm644 tree/usr/lib/systemd/system/shedos-encrypt-enroll.service \
         "$pkgdir/usr/lib/systemd/system/shedos-encrypt-enroll.service"
     install -Dm755 tree/usr/lib/shedos/encrypt-reconfigure.sh \
         "$pkgdir/usr/lib/shedos/encrypt-reconfigure.sh"
+    install -Dm755 tree/usr/lib/shedos/encrypt-finalize.sh \
+        "$pkgdir/usr/lib/shedos/encrypt-finalize.sh"
+    install -Dm644 tree/usr/lib/systemd/system/shedos-encrypt-finalize.service \
+        "$pkgdir/usr/lib/systemd/system/shedos-encrypt-finalize.service"
 
     # Shared palette loader; the Textual TUIs add /usr/lib/shedos to
     # sys.path and `import shedos_palette` to colour themselves live.
