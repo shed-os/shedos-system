@@ -43,7 +43,13 @@ kf="$esp/key"; printf 'e2epass' > "$kf"; chmod 600 "$kf"
 # shellcheck source=/dev/null
 source "$repo_root/packaging/shedos-system/tree/usr/lib/shedos/esp-state.sh"
 export ESP_STATE_FILE="$esp/shedos-encrypt/state"
-esp_state_write "phase=armed" "containers=$rootpart" "disk=$loop" "rootpn=1" "swap=yes"
+# Pin the absolute shrink target the way the arm step does (partition size minus the
+# RAM-GiB swap + 32M header), so this exercises the real pinned-target path.
+psize=$(blockdev --getsize64 "$rootpart")
+ramgib=$(( (262144 + 1048575) / 1048576 ))   # the faked 256MB RAM, rounded up to a GiB
+shrink_target=$(( psize - (ramgib * 1073741824 + 33554432) ))
+esp_state_write "phase=armed" "containers=$rootpart" "disk=$loop" "rootpn=1" "swap=yes" \
+    "shrink_target=$shrink_target"
 
 fail=0
 SHEDOS_REENCRYPT_DEV="$rootpart" SHEDOS_REENCRYPT_ESP="$esp" SHEDOS_REENCRYPT_KEYFILE="$kf" \

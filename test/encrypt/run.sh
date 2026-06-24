@@ -301,25 +301,36 @@ EOF
     chmod +x "$1/bin/btrfs"
 }
 
-# S1-S3: _do_shrink resizes to the ABSOLUTE target (partition size minus the
-# tail), hard-fails if the fs is still bigger than the target (corruption guard),
-# and is idempotent so a power-cut retry never chops a second tail.
+# S1-S4: _do_shrink resizes to the ABSOLUTE target — the pinned shrink_target from
+# the ESP state when present, else the partition size minus the tail. It hard-fails
+# if the fs is still bigger than the target (corruption guard) and is idempotent so a
+# power-cut retry never chops a second tail. ESP_STATE_FILE points at a missing file
+# in S1-S3 so the live-size fallback is exercised deterministically.
 tgt=$(( 10737418240 - 33554432 ))
 d=$(_mk_sandbox); _btrfs_shrink_stub "$d"
-PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SCRATCH="$d/mnt" bash -c "source '$driver'; _do_shrink /dev/loopX 33554432" >/dev/null 2>&1
+PATH="$d/bin:$PATH" ESP_STATE_FILE="$d/esp/state" SHEDOS_REENCRYPT_SCRATCH="$d/mnt" bash -c "source '$driver'; _do_shrink /dev/loopX 33554432" >/dev/null 2>&1
 if grep -q "filesystem resize 1:$tgt" "$d/btrfs.log" 2>/dev/null; then _ok S1_resize_absolute; else _fail S1_resize_absolute "$(cat "$d/btrfs.log" 2>/dev/null)"; fi
 
 # the default _mk_sandbox btrfs stub never shrinks → the guard must fire.
 d=$(_mk_sandbox)
-out=$(PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SCRATCH="$d/mnt" bash -c "source '$driver'; _do_shrink /dev/loopX 33554432" 2>&1); rc=$?
+out=$(PATH="$d/bin:$PATH" ESP_STATE_FILE="$d/esp/state" SHEDOS_REENCRYPT_SCRATCH="$d/mnt" bash -c "source '$driver'; _do_shrink /dev/loopX 33554432" 2>&1); rc=$?
 if [[ $rc -ne 0 && $out == *"did not shrink"* ]]; then _ok S2_verify_guard; else _fail S2_verify_guard "rc=$rc out=$out"; fi
 
 # the second shrink is a no-op: the absolute target means an interrupted run that
 # re-enters fresh-encrypt cannot double-shrink (the resize runs exactly once).
 d=$(_mk_sandbox); _btrfs_shrink_stub "$d"
-PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_SCRATCH="$d/mnt" bash -c "source '$driver'; _do_shrink /dev/loopX 33554432; _do_shrink /dev/loopX 33554432" >/dev/null 2>&1
+PATH="$d/bin:$PATH" ESP_STATE_FILE="$d/esp/state" SHEDOS_REENCRYPT_SCRATCH="$d/mnt" bash -c "source '$driver'; _do_shrink /dev/loopX 33554432; _do_shrink /dev/loopX 33554432" >/dev/null 2>&1
 n=$(grep -c 'filesystem resize 1:' "$d/btrfs.log" 2>/dev/null)
 if (( n == 1 )); then _ok S3_idempotent; else _fail S3_idempotent "resize count=$n"; fi
+
+# S4: a pinned shrink_target in the ESP state wins over the live partition size, so a
+# resume that re-enters after the carve (the partition is now smaller) shrinks to the
+# SAME absolute target instead of re-deriving a smaller one and chopping a second tail.
+d=$(_mk_sandbox); _btrfs_shrink_stub "$d"; mkdir -p "$d/esp"
+pin=$(( 10737418240 - 1073741824 - 33554432 ))
+printf 'shrink_target=%s\n' "$pin" > "$d/esp/state"
+PATH="$d/bin:$PATH" ESP_STATE_FILE="$d/esp/state" SHEDOS_REENCRYPT_SCRATCH="$d/mnt" bash -c "source '$driver'; _do_shrink /dev/loopX 99999999999" >/dev/null 2>&1
+if grep -q "filesystem resize 1:$pin" "$d/btrfs.log" 2>/dev/null && ! grep -q "filesystem resize 1:$tgt" "$d/btrfs.log" 2>/dev/null; then _ok S4_pinned_target; else _fail S4_pinned_target "$(cat "$d/btrfs.log" 2>/dev/null)"; fi
 
 # RE1-RE5: header-init -> test-open -> encrypt order (verify-before-encrypt), the
 # key off argv, the pinned flags, the transient header backup, and the strand

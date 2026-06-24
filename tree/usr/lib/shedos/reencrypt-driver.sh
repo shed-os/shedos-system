@@ -169,10 +169,21 @@ _btrfs_dev_size() {
 # resize to the target, verify, and unmount. A resize that leaves the fs bigger
 # than the target is a hard error: never write a header over an un-shrunk fs.
 _do_shrink() {  # $1=dev $2=tail-bytes
-    local dev=$1 tail=$2 psize target cur after slack=4194304
-    psize=$(blockdev --getsize64 "$dev" 2>/dev/null)
-    [[ $psize =~ ^[0-9]+$ ]] || { echo "shedos-reencrypt: cannot size $dev to shrink" >&2; return 1; }
-    target=$(( psize - tail ))
+    local dev=$1 tail=$2 psize target cur after slack=4194304 pinned
+    # Prefer the target the arm step pinned into the ESP state. It is computed once
+    # from the ORIGINAL partition size, so a resume that re-enters fresh-encrypt after
+    # the swap carve (the partition is now RAM-GiB smaller) shrinks to the SAME target
+    # instead of re-deriving a smaller one off the carved partition and chopping a
+    # second tail. The live-size path stays as a fallback for the tests/e2es that drive
+    # _do_shrink directly with no pinned state.
+    pinned=$(esp_state_get shrink_target 2>/dev/null)
+    if [[ $pinned =~ ^[0-9]+$ ]]; then
+        target=$pinned
+    else
+        psize=$(blockdev --getsize64 "$dev" 2>/dev/null)
+        [[ $psize =~ ^[0-9]+$ ]] || { echo "shedos-reencrypt: cannot size $dev to shrink" >&2; return 1; }
+        target=$(( psize - tail ))
+    fi
     mkdir -p "$SHEDOS_REENCRYPT_SCRATCH"
     mount -t btrfs -o subvolid=5,rw "$dev" "$SHEDOS_REENCRYPT_SCRATCH" \
         || { echo "shedos-reencrypt: cannot mount $dev to shrink" >&2; return 1; }

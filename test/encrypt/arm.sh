@@ -48,6 +48,11 @@ EOF
 printf '%s\n' "\$*" >> "$d/systemctl.log"
 exit 0
 EOF
+    cat > "$d/bin/blockdev" <<EOF
+#!/usr/bin/env bash
+[[ \$1 == --getsize64 ]] && { echo "\${STUB_ROOTSIZE:-10737418240}"; exit 0; }
+exit 0
+EOF
     cat > "$d/bin/id" <<'EOF'
 #!/usr/bin/env bash
 [[ $1 == -u ]] && { echo "${STUB_UID:-0}"; exit 0; }
@@ -118,11 +123,13 @@ if [[ $hooks == *"shedos-reencrypt shedos-recovery"* ]] && (( n == 1 )); then _o
 # AR5: the full arm stashes a 0600 keyfile + the armed state, stages the hook,
 # rebuilds the UKI (UEFI), and reboots.
 d=$(_mk_sandbox)
+# blockdev 10G, MemTotal 4 GiB -> shrink_target = 10G - (4 GiB swap + 32M header).
+exp_shrink=$(( 10737418240 - (4 * 1073741824 + 33554432) ))
 FW=uefi _run_arm "$d" >/dev/null 2>&1; rc=$?
 perm=$(stat -c '%a' "$d/esp/key" 2>/dev/null); key=$(cat "$d/esp/key" 2>/dev/null)
 st=$(cat "$d/esp/state" 2>/dev/null)
 if [[ $rc -eq 0 && $perm == 600 && $key == diskpw \
-   && $st == *"phase=armed"* && $st == *"containers=/dev/sda2"* && $st == *"disk=/dev/sda"* && $st == *"rootpn=2"* && $st == *"swap=yes"* && $st == *"inner_uuid=inner-fs-uuid"* \
+   && $st == *"phase=armed"* && $st == *"containers=/dev/sda2"* && $st == *"disk=/dev/sda"* && $st == *"rootpn=2"* && $st == *"swap=yes"* && $st == *"shrink_target=$exp_shrink"* && $st == *"inner_uuid=inner-fs-uuid"* \
    && $(grep -c shedos-reencrypt "$d/etc/mkinitcpio.conf") -ge 1 \
    ]] && grep -q 'rebuild-initramfs.sh' "$d/writers.log" && grep -q 'build-uki.sh --rebuild' "$d/writers.log" \
      && grep -q 'reboot' "$d/systemctl.log"; then

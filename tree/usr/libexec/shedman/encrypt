@@ -74,6 +74,21 @@ _preflight_root_device() {
     findmnt -n -o SOURCE / 2>/dev/null
 }
 
+# Bytes of free tail the offline shrink must leave: the 32M header always, plus a
+# RAM-sized swap (rounded up to a GiB) when carving. Mirrors the driver's
+# _effective_tail. Pinned into the ESP state at arm so a resume shrinks to the same
+# absolute target rather than re-deriving it off the post-carve (smaller) partition.
+_effective_tail_bytes() {  # $1=carve(yes|no)
+    local mem_kb ramgib
+    if [[ $1 == yes ]]; then
+        mem_kb=$(awk '/^MemTotal:/{print $2}' "$MEMINFO")
+        ramgib=$(( (mem_kb + 1048575) / 1048576 ))
+        printf '%s' "$(( ramgib * 1073741824 + _HEADER_TAIL_BYTES ))"
+    else
+        printf '%s' "$_HEADER_TAIL_BYTES"
+    fi
+}
+
 # Refuse anything we can't (or won't) convert in place. The root must be plain
 # btrfs and must NOT already be a LUKS container — in-place reencrypt only makes
 # sense on an unencrypted btrfs root, and re-encrypting an encrypted disk would
@@ -265,13 +280,21 @@ _cmd_arm() {
     fi
     rm -f -- "$conf_bak"
 
+    # Pin the absolute shrink target now, from the ORIGINAL partition size, so a
+    # resume cannot re-derive it off the post-carve partition and double-shrink the fs.
+    local rootsize shrink_target
+    rootsize=$(blockdev --getsize64 "$root_dev" 2>/dev/null)
+    [[ $rootsize =~ ^[0-9]+$ ]] || _die "could not read the size of $root_dev" 1
+    shrink_target=$(( rootsize - $(_effective_tail_bytes "$carve") ))
+
     install -d -m700 -- "$ESP"
     ( umask 077; printf '%s' "$pass" > "$KEYFILE" )
     # containers= is the device the offline driver reencrypts (it reads the first
-    # field); disk + rootpn drive the swap carve; inner_uuid (read by --status, a
-    # later task) is the surviving filesystem UUID the cmdline already mounts by.
+    # field); disk + rootpn drive the swap carve; shrink_target pins the absolute fs
+    # shrink; inner_uuid (read by --status, a later task) is the surviving filesystem
+    # UUID the cmdline already mounts by.
     esp_state_write "phase=armed" "containers=$root_dev" "disk=$disk" "rootpn=$rootpn" \
-        "swap=$carve" "inner_uuid=$inner_uuid"
+        "swap=$carve" "shrink_target=$shrink_target" "inner_uuid=$inner_uuid"
 
     echo "$PROG: armed — the disk encrypts on the next boot; keep the machine on power." >&2
     if [[ -n ${ASSUME_YES:-} ]]; then systemctl reboot; return 0; fi
