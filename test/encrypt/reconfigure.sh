@@ -46,6 +46,7 @@ _run() {
     SHEDOS_MKINITCPIO_CONF="$d/etc/mkinitcpio.conf" \
     SHEDMAN_KEY_CONTAINERS="$d/etc/shedos/secureboot/containers" \
     SHEDOS_LIMINE_CONF="$d/boot/limine.conf" \
+    SHEDOS_ENCRYPT_FSTAB="$d/etc/fstab" \
     SHEDOS_FIRMWARE="${FW:-uefi}" \
         bash "$recon" "$@"
 }
@@ -67,6 +68,20 @@ cl=$(cat "$d/etc/kernel/cmdline" 2>/dev/null); ok=1
 [[ $cl == *"rootflags=subvol=@"* && $cl == *"lsm=apparmor"* ]] || ok=0
 [[ $cl != *"root=UUID=aaaa"* && $cl != *"resume=UUID=oldswap"* ]] || ok=0
 if (( ok )); then _ok RC1_cmdline_root_and_swap; else _fail RC1_cmdline_root_and_swap "$cl"; fi
+
+# RCF1: a root+swap conversion adds the decrypted swap mapper to fstab so swapon
+# activates it at boot, and a re-run does not duplicate the line.
+d=$(_mk_sandbox)
+printf '/dev/disk/by-uuid/RUUID\n/dev/disk/by-uuid/SUUID\n' > "$d/etc/shedos/secureboot/containers"
+_run "$d" >/dev/null 2>&1
+_run "$d" >/dev/null 2>&1
+n=$(grep -cE '^/dev/mapper/luks-SUUID[[:space:]]+none[[:space:]]+swap' "$d/etc/fstab" 2>/dev/null)
+if [[ $n == 1 ]]; then _ok RCF1_swap_fstab_idempotent; else _fail RCF1_swap_fstab_idempotent "n=$n fstab=[$(cat "$d/etc/fstab" 2>/dev/null)]"; fi
+
+# RCF2: a root-only conversion writes no swap fstab line.
+d=$(_mk_sandbox)
+_run "$d" >/dev/null 2>&1
+if ! grep -qE 'swap' "$d/etc/fstab" 2>/dev/null; then _ok RCF2_root_only_no_swap_fstab; else _fail RCF2_root_only_no_swap_fstab "fstab=[$(cat "$d/etc/fstab" 2>/dev/null)]"; fi
 
 # RC2: a root-only conversion adds the root LUKS tokens, names no swap, and leaves
 # the box's existing resume= untouched (swap was not encrypted).

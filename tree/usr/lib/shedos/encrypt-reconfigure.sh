@@ -22,6 +22,7 @@ MKINITCPIO_CONF=${SHEDOS_MKINITCPIO_CONF:-/etc/mkinitcpio.conf}
 CONTAINERS_FILE=${SHEDMAN_KEY_CONTAINERS:-/etc/shedos/secureboot/containers}
 BINDIR=${SHEDOS_REENCRYPT_BINDIR:-/usr/lib/shedos}
 LIMINE_CONF=${SHEDOS_LIMINE_CONF:-${SHEDOS_BOOT_DIR:-/boot}/limine.conf}
+FSTAB=${SHEDOS_ENCRYPT_FSTAB:-/etc/fstab}
 # /etc/kernel/cmdline ships carrying this sentinel; a pre-UKI box keeps its real
 # cmdline only in limine.conf's kernel_cmdline: line (same fact backfill-uki-cmdline.py
 # relies on). Transforming the placeholder would brick the box.
@@ -120,6 +121,18 @@ _add_sd_encrypt_hook() {  # $1=mkinitcpio.conf
     grep -qE '^HOOKS=.*\bsd-encrypt\b' "$conf" || { log "could not insert sd-encrypt into HOOKS (no anchor)"; return 1; }
 }
 
+# Add the encrypted swap to fstab so swapon activates it at boot. sd-encrypt opens it
+# to /dev/mapper/luks-<uuid> from the cmdline, but nothing uses it as swap — and
+# hibernation has nowhere to resume to — without this line. Idempotent: skip when a
+# line already names this mapper.
+_ensure_swap_fstab() {  # $1=swap-uuid
+    local mapper="/dev/mapper/luks-$1"
+    grep -qE "^[[:space:]]*${mapper}[[:space:]]" "$FSTAB" 2>/dev/null && return 0
+    printf '%s none swap defaults 0 0\n' "$mapper" >> "$FSTAB" \
+        || { log "could not add the encrypted swap to $FSTAB"; return 1; }
+    log "added the encrypted swap to $FSTAB"
+}
+
 reconfigure_boot() {
     local -a containers
     mapfile -t containers < <(grep -vE '^[[:space:]]*(#|$)' "$CONTAINERS_FILE" 2>/dev/null)
@@ -154,6 +167,10 @@ reconfigure_boot() {
     _add_sd_encrypt_hook "$MKINITCPIO_CONF" || return 1
     printf '%s\n' "$new" > "$KERNEL_CMDLINE_FILE" || { log "could not write $KERNEL_CMDLINE_FILE"; return 1; }
     printf '%s\n' "$fallback" > "$KERNEL_CMDLINE_FALLBACK" || { log "could not write $KERNEL_CMDLINE_FALLBACK"; return 1; }
+
+    # Wire the decrypted swap into fstab so swapon activates it (and hibernation has a
+    # target); sd-encrypt only opens the mapper, it does not mount it as swap.
+    [[ -n $swap_uuid ]] && { _ensure_swap_fstab "$swap_uuid" || return 1; }
 
     "$BINDIR/rebuild-initramfs.sh" || { log "initramfs rebuild failed"; return 1; }
 
