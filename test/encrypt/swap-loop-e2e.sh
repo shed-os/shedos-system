@@ -35,6 +35,14 @@ mkfs.btrfs -q "$rootpart"
 mkdir -p "$mnt"; mount -t btrfs -o subvolid=5,rw "$rootpart" "$mnt"
 echo "shedos-swap-e2e" > "$mnt/SENTINEL"; sync; umount "$mnt"
 
+# Capture the root identity the way arm does: the PARTUUID via blkid (lowercase) is the
+# anchor the driver resolves by, and the btrfs UUID feeds the inner-uuid cross-check.
+# Record the GPT PARTUUID now (uppercase from sgdisk, lowercased) to prove the carve
+# preserves it — a post-carve resume resolves root by it.
+rpu=$(blkid -s PARTUUID -o value "$rootpart")
+iuuid=$(blkid -s UUID -o value "$rootpart")
+puuid_before=$(sgdisk -i 1 "$loop" | awk -F': *' '/Partition unique GUID/{print tolower($2)}')
+
 # Fake 256 MB RAM so the carved swap is a manageable 1 GiB, not host RAM.
 printf 'MemTotal:         262144 kB\n' > "$work/meminfo"
 mkdir -p "$esp/shedos-encrypt"
@@ -48,11 +56,11 @@ export ESP_STATE_FILE="$esp/shedos-encrypt/state"
 psize=$(blockdev --getsize64 "$rootpart")
 ramgib=$(( (262144 + 1048575) / 1048576 ))   # the faked 256MB RAM, rounded up to a GiB
 shrink_target=$(( psize - (ramgib * 1073741824 + 33554432) ))
-esp_state_write "phase=armed" "containers=$rootpart" "disk=$loop" "rootpn=1" "swap=yes" \
-    "shrink_target=$shrink_target"
+esp_state_write "phase=armed" "root_partuuid=$rpu" "inner_uuid=$iuuid" \
+    "containers=$rootpart" "disk=$loop" "rootpn=1" "swap=yes" "shrink_target=$shrink_target"
 
 fail=0
-SHEDOS_REENCRYPT_DEV="$rootpart" SHEDOS_REENCRYPT_ESP="$esp" SHEDOS_REENCRYPT_KEYFILE="$kf" \
+SHEDOS_REENCRYPT_DISKS="$loop" SHEDOS_REENCRYPT_ESP="$esp" SHEDOS_REENCRYPT_KEYFILE="$kf" \
 SHEDOS_REENCRYPT_SCRATCH="$mnt" SHEDOS_REENCRYPT_MEMINFO="$work/meminfo" \
     bash -c "source '$driver'; main" || { echo "FAIL: main returned non-zero"; fail=1; }
 
@@ -73,5 +81,12 @@ fi
 swappart="${loop}p2"
 if [[ -b $swappart ]] && cryptsetup isLuks "$swappart" 2>/dev/null; then :; else echo "FAIL: encrypted swap was not carved"; fail=1; fi
 
-[[ $fail -eq 0 ]] && echo "swap-loop-e2e: PASS (carve-before-reencrypt; root data intact + encrypted swap carved)"
+# The carve recreated the root partition entry; -u must preserve its PARTUUID (the
+# driver resolves root by it on a resume) AND it must equal what blkid captured at arm.
+puuid_after=$(sgdisk -i 1 "$loop" | awk -F': *' '/Partition unique GUID/{print tolower($2)}')
+if [[ -n $puuid_before && $puuid_after == "$puuid_before" && $puuid_after == "$rpu" ]]; then :; else
+    echo "FAIL: root PARTUUID changed through the carve (before=$puuid_before after=$puuid_after blkid=$rpu)"; fail=1
+fi
+
+[[ $fail -eq 0 ]] && echo "swap-loop-e2e: PASS (PARTUUID-resolved; carve-before-reencrypt; root data + PARTUUID intact + encrypted swap carved)"
 exit "$fail"

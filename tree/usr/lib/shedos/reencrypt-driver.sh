@@ -127,8 +127,15 @@ _do_swap_carve() {  # $1=disk $2=root-partnum $3=keyfile
     start=$(sgdisk -i "$rootpn" "$disk" | awk '/First sector/{print $3}')
     sectors_per_gib=$(( 1024 * 1024 * 1024 / 512 ))
     new_end=$(( $(sgdisk -i "$rootpn" "$disk" | awk '/Last sector/{print $3}') - ramgib * sectors_per_gib ))
+    # Recreating the root entry reassigns its PARTUUID by default, which would break a
+    # post-carve resume: the driver resolves root by that PARTUUID. -u pins it back to
+    # the value arm captured, so the GPT identity survives the carve (applied after the
+    # -n that recreates the partition).
+    local rguid; local -a keepuuid=()
+    rguid=$(esp_state_get root_partuuid 2>/dev/null)
+    [[ -n $rguid ]] && keepuuid=(-u "$rootpn:$rguid")
     sgdisk -d "$rootpn" \
-           -n "$rootpn:$start:$new_end" -t "$rootpn:8300" -c "$rootpn:root" \
+           -n "$rootpn:$start:$new_end" -t "$rootpn:8300" -c "$rootpn:root" "${keepuuid[@]}" \
            -n "0:0:0" -t "0:8300" -c "0:swap" "$disk" \
         || { echo "reencrypt: GPT carve failed — restoring backup, swap stays on zram" >&2; sgdisk "--load-backup=$bak" "$disk"; return 1; }
     # Make the kernel pick up the new table, then wait for the swap node to
@@ -278,13 +285,57 @@ _record_containers() {  # $1=root-part $2=swap-part(optional)
     esp_state_write "enroll_containers=$list"
 }
 
-# The root partition to convert. The arm step pins it into the ESP state
-# (containers=, root first, space-separated); the override is for the tests.
-_reencrypt_dev() {
-    if [[ -n ${SHEDOS_REENCRYPT_DEV:-} ]]; then
-        printf '%s\n' "$SHEDOS_REENCRYPT_DEV"; return
+# Whole disks to scan for the root PARTUUID. /sys/block lists every block device the
+# kernel knows (real disks, not their partitions); lsblk is not staged in this
+# initramfs, so read /sys directly and skip the non-disk classes. A test override
+# points the scan at fake nodes.
+_candidate_disks() {
+    [[ -n ${SHEDOS_REENCRYPT_DISKS:-} ]] && { printf '%s\n' "$SHEDOS_REENCRYPT_DISKS"; return 0; }
+    local p name
+    for p in /sys/block/*; do
+        name=${p##*/}
+        case $name in loop*|ram*|sr*|fd*|dm-*|md*|zram*) continue ;; esac
+        printf '/dev/%s\n' "$name"
+    done
+}
+
+# Resolve the root partition by the PARTUUID the arm step pinned, instead of a device
+# path that enumeration may have reassigned to a different disk between arm and this
+# boot (a USB inserted, a second disk, a SATA reorder — converting the WRONG disk is
+# the data loss this guards). sgdisk reads each disk's GPT straight off the device —
+# no udev, no /dev/disk/by-partuuid symlink, neither of which is staged here — so the
+# scan is reliable in this minimal initramfs. blkid writes the PARTUUID lowercase and
+# sgdisk prints it uppercase, so both sides are lowercased before comparing. Echoes
+# "disk partnum"; rc 1 (fail loud, touch nothing) unless EXACTLY one partition matches.
+_resolve_root_part() {
+    local want; want=$(esp_state_get root_partuuid 2>/dev/null | tr '[:upper:]' '[:lower:]')
+    [[ -n $want ]] || { echo "reencrypt: no root_partuuid in the ESP state — refusing to guess the disk" >&2; return 1; }
+    local disk pn guid; local -a matches=()
+    for disk in $(_candidate_disks); do
+        for pn in $(sgdisk -p "$disk" 2>/dev/null | awk '/^[[:space:]]*[0-9]+/{print $1}'); do
+            guid=$(sgdisk -i "$pn" "$disk" 2>/dev/null | awk -F': *' '/Partition unique GUID/{print tolower($2)}')
+            [[ $guid == "$want" ]] && matches+=("$disk $pn")
+        done
+    done
+    if (( ${#matches[@]} != 1 )); then
+        echo "reencrypt: root PARTUUID $want matched ${#matches[@]} partition(s) — refusing (need exactly 1)" >&2
+        return 1
     fi
-    esp_state_get containers | awk '{print $1}'
+    printf '%s\n' "${matches[0]}"
+}
+
+# The resolved partition must still hold the btrfs the arm step measured (inner_uuid):
+# a guard against the PARTUUID resolving to wrong content — a stale GPT restored onto a
+# reimaged disk. Only meaningful while the root is still plain btrfs, so the caller
+# runs it on the fresh-encrypt path only. Skips when arm recorded no inner_uuid.
+_check_inner_uuid() {  # $1=dev
+    local want got
+    want=$(esp_state_get inner_uuid 2>/dev/null)
+    [[ -n $want ]] || return 0
+    got=$(blkid -s UUID -o value "$1" 2>/dev/null)
+    [[ $got == "$want" ]] && return 0
+    echo "reencrypt: resolved $1 has fs UUID '$got', arm recorded '$want' — refusing" >&2
+    return 1
 }
 
 # Decide what this boot does, read-only — no byte is touched here. Two facts:
@@ -305,9 +356,8 @@ _reencrypt_dev() {
 # re-shrink. The inner btrfs UUID survives in-place encryption, so even a stale
 # cmdline token still opens the right container — this brancher, not the cmdline,
 # is the source of truth during the window.
-_detect_state() {
-    local dev phase
-    dev=$(_reencrypt_dev)
+_detect_state() {  # $1=root device (resolved by PARTUUID in _drive)
+    local dev=$1 phase
     phase=$(esp_state_get phase 2>/dev/null)
 
     if cryptsetup isLuks "$dev" 2>/dev/null; then
@@ -395,16 +445,25 @@ _bridge_open() {  # $1=root container
 }
 
 _drive() {
-    local branch dev mapper swap tail rpn
-    branch=$(_detect_state)
+    local branch dev disk pn mapper swap tail resolved
+    # Resolve the root partition by its PARTUUID — the device path the arm step saw may
+    # name a different disk now. State detection, the target, the carve, and the resume
+    # all derive from this one resolution; a fail-loud (missing/ambiguous) touches nothing.
+    resolved=$(_resolve_root_part) || return 0
+    read -r disk pn <<<"$resolved"
+    dev=$(_wait_partnode "$disk" "$pn") || { echo "reencrypt: resolved root partition node missing" >&2; return 0; }
+
+    branch=$(_detect_state "$dev")
     # Ordinary boot: hand the device back to the normal path, no-op.
     [[ $branch == plaintext-passthrough ]] && return 0
-    dev=$(_reencrypt_dev)
     # Flip-pending: the conversion is finished; just bridge the boot, nothing to
     # shrink/encrypt/grow. The flip itself commits from userspace once proven.
     [[ $branch == bridge ]] && { _bridge_open "$dev"; return 0; }
     swap=$(esp_state_get swap 2>/dev/null)
     if [[ $branch == fresh-encrypt ]]; then
+        # The resolved partition must hold the fs arm measured — refuse a PARTUUID that
+        # resolved to wrong content. Only readable while still plain btrfs, so gate here.
+        _check_inner_uuid "$dev" || return 0
         # Shrink the fs to leave the header tail (plus the RAM swap if carving),
         # then carve the encrypted swap from the freed tail while the root is still
         # PLAINTEXT — a table edit only; the fs already fits and there is no LUKS
@@ -416,14 +475,14 @@ _drive() {
         tail=$(_effective_tail "$swap")
         _do_shrink "$dev" "$tail" || return 0
         if [[ $swap == yes ]]; then
-            _do_swap_carve "$(esp_state_get disk)" "$(esp_state_get rootpn)" "$SHEDOS_REENCRYPT_KEYFILE" || true
+            _do_swap_carve "$disk" "$pn" "$SHEDOS_REENCRYPT_KEYFILE" || true
         fi
         esp_state_write "phase=encrypting"
     elif [[ $swap == yes ]]; then
         # Resume: the carve already happened on the fresh run; re-derive the swap
-        # partition so the recovery enrol + boot wiring still see it.
-        rpn=$(esp_state_get rootpn 2>/dev/null)
-        SHEDOS_REENCRYPT_SWAP_PART=$(_partnode_exists "$(esp_state_get disk 2>/dev/null)" "$(( ${rpn:-0} + 1 ))" || true)
+        # partition from the resolved root's disk + partnum so the recovery enrol +
+        # boot wiring still see it.
+        SHEDOS_REENCRYPT_SWAP_PART=$(_partnode_exists "$disk" "$(( pn + 1 ))" || true)
         export SHEDOS_REENCRYPT_SWAP_PART
     fi
     _do_root_reencrypt "$dev" "$SHEDOS_REENCRYPT_KEYFILE" || return 0

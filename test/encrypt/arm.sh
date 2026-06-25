@@ -39,6 +39,12 @@ case "\$*" in
 esac
 exit 0
 EOF
+    cat > "$d/bin/blkid" <<EOF
+#!/usr/bin/env bash
+# arm captures the root PARTUUID with: blkid -s PARTUUID -o value <dev>
+[[ " \$* " == *" PARTUUID "* ]] && { printf '%s\n' "\${STUB_PARTUUID:-1111aaaa-2222-3333-4444-555566667777}"; exit 0; }
+exit 0
+EOF
     local t
     for t in rebuild-initramfs.sh build-uki.sh render-limine-config.sh; do
         printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" "%s" "$*" >> "%s/writers.log"\nexit 0\n' "$t" "$d" > "$d/bin/$t"

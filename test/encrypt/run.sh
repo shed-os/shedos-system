@@ -245,8 +245,8 @@ _ds() {  # $1=isluks-exit(1=plaintext,0=luks) $2=phase
     local dd; dd=$(_mk_sandbox); mkdir -p "$dd/esp/shedos-encrypt"
     [[ -n $2 ]] && printf 'phase=%s\n' "$2" > "$dd/esp/shedos-encrypt/state"
     PATH="$dd/bin:$PATH" STUB_ISLUKS="$1" \
-    ESP_STATE_FILE="$dd/esp/shedos-encrypt/state" SHEDOS_REENCRYPT_DEV=/dev/fake-root \
-        bash -c "source '$driver'; _detect_state"
+    ESP_STATE_FILE="$dd/esp/shedos-encrypt/state" \
+        bash -c "source '$driver'; _detect_state /dev/fake-root"
 }
 got=$(_ds 1 armed);        if [[ $got == fresh-encrypt ]];         then _ok DS1_fresh;            else _fail DS1_fresh "$got"; fi
 got=$(_ds 0 encrypting);   if [[ $got == resume ]];                then _ok DS2_resume;           else _fail DS2_resume "$got"; fi
@@ -269,6 +269,54 @@ d=$(_mk_sandbox); printf 'x' > "$d/key"; mkdir -p "$d/dm"; : > "$d/dm/luks-uuid-
 PATH="$d/bin:$PATH" SHEDOS_REENCRYPT_DM_DIR="$d/dm" SHEDOS_REENCRYPT_RUN="$d/run" SHEDOS_REENCRYPT_KEYFILE="$d/key" \
   bash -c "source '$driver'; _bridge_open /dev/fake-root" >/dev/null 2>&1
 if ! grep -q 'open --key-file' "$d/cryptsetup.log" 2>/dev/null && [[ ! -e $d/run/bridged ]]; then _ok BR2_sd_encrypt_won_no_marker; else _fail BR2_sd_encrypt_won_no_marker "cs=[$(cat "$d/cryptsetup.log" 2>/dev/null)] marker=$([[ -e $d/run/bridged ]] && echo yes || echo no)"; fi
+
+# RR1-RR4: _resolve_root_part finds the root partition by its PARTUUID across the
+# candidate disks, case-insensitively (blkid stores it lowercase, sgdisk prints it
+# UPPERCASE), and FAILS LOUD on zero or more-than-one match — never guessing a disk
+# when enumeration is ambiguous. A sgdisk stub returns per-partition uppercase GUIDs.
+_mk_resolve() {  # $1=stored root_partuuid (lowercase, as blkid writes it)
+    local rd; rd=$(mktemp -d); mkdir -p "$rd/bin" "$rd/esp/shedos-encrypt"
+    printf 'phase=armed\nroot_partuuid=%s\n' "$1" > "$rd/esp/shedos-encrypt/state"
+    cat > "$rd/bin/sgdisk" <<'EOF'
+#!/usr/bin/env bash
+disk=${@: -1}
+if [[ $1 == -p ]]; then
+    case "$disk" in */diska) printf '   1\n   2\n' ;; */diskb) printf '   1\n' ;; esac
+    exit 0
+fi
+if [[ $1 == -i ]]; then
+    case "$disk:$2" in
+        */diska:1) g=$STUB_A1 ;; */diska:2) g=$STUB_A2 ;; */diskb:1) g=$STUB_B1 ;; *) g= ;;
+    esac
+    printf 'Partition unique GUID: %s\n' "$g"
+    exit 0
+fi
+exit 0
+EOF
+    chmod +x "$rd/bin/sgdisk"; printf '%s\n' "$rd"
+}
+_resolve() {  # $1=dir ; caller exports STUB_A1/A2/B1
+    PATH="$1/bin:$PATH" ESP_STATE_FILE="$1/esp/shedos-encrypt/state" \
+    SHEDOS_REENCRYPT_DISKS="/dev/diska /dev/diskb" \
+        bash -c "source '$driver'; _resolve_root_part"
+}
+UU=11112222-3333-4444-5555-666677778888   # lowercase, as blkid -s PARTUUID writes it
+# RR1: exactly one match (its sgdisk GUID is UPPERCASE) -> "disk partn".
+d=$(_mk_resolve "$UU")
+out=$(STUB_A1=ffff0000-0000-0000-0000-000000000000 STUB_A2=${UU^^} STUB_B1=dddd0000-0000-0000-0000-000000000000 _resolve "$d" 2>/dev/null); rc=$?
+if [[ $rc -eq 0 && $out == "/dev/diska 2" ]]; then _ok RR1_resolves_case_insensitive; else _fail RR1_resolves_case_insensitive "rc=$rc out=[$out]"; fi
+# RR2: no partition matches -> fail loud, no output.
+d=$(_mk_resolve "$UU")
+out=$(STUB_A1=aaaa0000-0000-0000-0000-000000000000 STUB_A2=bbbb0000-0000-0000-0000-000000000000 STUB_B1=cccc0000-0000-0000-0000-000000000000 _resolve "$d" 2>/dev/null); rc=$?
+if [[ $rc -ne 0 && -z $out ]]; then _ok RR2_zero_match_fails; else _fail RR2_zero_match_fails "rc=$rc out=[$out]"; fi
+# RR3: two partitions match -> fail loud (PARTUUID is globally unique; ambiguity is a bug).
+d=$(_mk_resolve "$UU")
+out=$(STUB_A1=${UU^^} STUB_A2=eeee0000-0000-0000-0000-000000000000 STUB_B1=${UU^^} _resolve "$d" 2>/dev/null); rc=$?
+if [[ $rc -ne 0 ]]; then _ok RR3_multi_match_fails; else _fail RR3_multi_match_fails "rc=$rc out=[$out]"; fi
+# RR4: no root_partuuid stored -> fail loud, never guess.
+d=$(_mk_resolve "")
+out=$(STUB_A2="$UU" _resolve "$d" 2>/dev/null); rc=$?
+if [[ $rc -ne 0 ]]; then _ok RR4_missing_partuuid_fails; else _fail RR4_missing_partuuid_fails "rc=$rc out=[$out]"; fi
 
 # P1: the unit + hook + driver are actually installed by package() — a staged
 # file PKGBUILD never installs ships nothing (the _libexec_shedman class of bug).
@@ -420,8 +468,19 @@ if [[ ! -e $d/blkid-was-called ]]; then _ok MNT3_skips_when_reachable; else _fai
 # MAIN1: on a fresh-encrypt box, main threads the device through the whole chain
 # — shrink, reencrypt, open the mapper, grow back.
 d=$(_mk_sandbox); _btrfs_shrink_stub "$d"; mkdir -p "$d/esp"
-printf 'phase=armed\n' > "$d/esp/state"; printf 'e2e' > "$d/esp/key"
-PATH="$d/bin:$PATH" STUB_ISLUKS=1 ESP_STATE_FILE="$d/esp/state" SHEDOS_REENCRYPT_DEV=/dev/fake-root \
+# A resolver sgdisk (swap=no here, no carve): -p lists the root partn, -i returns its
+# UPPERCASE PARTUUID. Inline because _swap_stubs is declared later in the file.
+cat > "$d/bin/sgdisk" <<'SG'
+#!/usr/bin/env bash
+case "$1" in
+  -p) printf '   2\n' ;;
+  -i) printf 'Partition unique GUID: AAAA1111-2222-3333-4444-555566667777\n' ;;
+esac
+exit 0
+SG
+chmod +x "$d/bin/sgdisk"
+{ printf 'phase=armed\n'; printf 'root_partuuid=aaaa1111-2222-3333-4444-555566667777\n'; } > "$d/esp/state"; printf 'e2e' > "$d/esp/key"
+PATH="$d/bin:$PATH" STUB_ISLUKS=1 SHEDOS_REENCRYPT_SETTLE=0 ESP_STATE_FILE="$d/esp/state" SHEDOS_REENCRYPT_DISKS=/dev/fake-root \
   SHEDOS_REENCRYPT_SCRATCH="$d/mnt" SHEDOS_REENCRYPT_ESP="$d/esp" SHEDOS_REENCRYPT_KEYFILE="$d/esp/key" \
   bash -c "source '$driver'; main" >/dev/null 2>&1
 if grep -q 'reencrypt --encrypt' "$d/cryptsetup.log" 2>/dev/null \
@@ -439,7 +498,13 @@ _swap_stubs() {  # $1=dir
     cat > "$1/bin/sgdisk" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "$1/sgdisk.log"
-[[ "\$*" == *--backup=* ]] && { bk=\$(printf '%s' "\$*" | sed -n 's/.*--backup=\([^ ]*\).*/\1/p'); : > "\$bk"; }
+# Serve the PARTUUID resolver (-p lists the root partn, -i returns its UPPERCASE GUID)
+# and the carve (-i also gives First/Last sectors; --backup touches the backup file).
+case "\$1" in
+  -p) printf '   2\n' ;;
+  -i) printf 'Partition unique GUID: AAAA1111-2222-3333-4444-555566667777\nFirst sector: 2048\nLast sector: 209715200\n' ;;
+  --backup=*) bk=\$(printf '%s' "\$1" | sed -n 's/--backup=//p'); : > "\$bk" ;;
+esac
 exit 0
 EOF
     printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/mkswap.log"\nexit 0\n' "$1" > "$1/bin/mkswap"
@@ -461,9 +526,9 @@ if [[ $swapout == *"SWAPPART=/dev/sda3"* ]]; then _ok SC4_swap_part_exported; el
 # MAIN2: with swap=yes in the ESP state, main carves swap after the reencrypt and
 # records both containers (root + carved swap) by-uuid into the ESP handoff.
 d=$(_mk_sandbox); _btrfs_shrink_stub "$d"; _swap_stubs "$d"; mkdir -p "$d/esp"
-{ printf 'phase=armed\n'; printf 'swap=yes\n'; printf 'disk=/dev/sda\n'; printf 'rootpn=2\n'; } > "$d/esp/state"
+{ printf 'phase=armed\n'; printf 'swap=yes\n'; printf 'root_partuuid=aaaa1111-2222-3333-4444-555566667777\n'; printf 'disk=/dev/sda\n'; printf 'rootpn=2\n'; } > "$d/esp/state"
 printf 'e2e' > "$d/esp/key"; printf 'MemTotal: 262144 kB\n' > "$d/meminfo"
-PATH="$d/bin:$PATH" STUB_ISLUKS=1 SHEDOS_REENCRYPT_SETTLE=0 ESP_STATE_FILE="$d/esp/state" SHEDOS_REENCRYPT_DEV=/dev/sda2 \
+PATH="$d/bin:$PATH" STUB_ISLUKS=1 SHEDOS_REENCRYPT_SETTLE=0 ESP_STATE_FILE="$d/esp/state" SHEDOS_REENCRYPT_DISKS=/dev/sda \
   SHEDOS_REENCRYPT_SCRATCH="$d/mnt" SHEDOS_REENCRYPT_ESP="$d/esp" SHEDOS_REENCRYPT_KEYFILE="$d/esp/key" \
   SHEDOS_REENCRYPT_MEMINFO="$d/meminfo" \
   bash -c "source '$driver'; main" >/dev/null 2>&1

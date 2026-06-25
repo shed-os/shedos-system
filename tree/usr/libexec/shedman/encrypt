@@ -265,6 +265,11 @@ _cmd_arm() {
     [[ -n $inner_uuid ]] || _die "could not read the root filesystem UUID" 1
     geom=$(_disk_and_partn "$root_dev") || _die "could not parse the disk and partition from $root_dev" 1
     read -r disk rootpn <<<"$geom"
+    # The offline driver finds the root by this PARTUUID, not by the device path, which
+    # enumeration can reassign to another disk before the reboot. Fail here, not silently
+    # in the initramfs, if the partition has none.
+    local root_partuuid; root_partuuid=$(blkid -s PARTUUID -o value "$root_dev" 2>/dev/null)
+    [[ -n $root_partuuid ]] || _die "could not read the PARTUUID of $root_dev — needed to find the disk at reboot" 1
 
     _dataloss_ack
     local pass; pass=$(_read_new_secret "disk unlock passphrase")
@@ -294,12 +299,13 @@ _cmd_arm() {
 
     install -d -m700 -- "$ESP"
     ( umask 077; printf '%s' "$pass" > "$KEYFILE" )
-    # containers= is the device the offline driver reencrypts (it reads the first
-    # field); disk + rootpn drive the swap carve; shrink_target pins the absolute fs
-    # shrink; inner_uuid (read by --status, a later task) is the surviving filesystem
-    # UUID the cmdline already mounts by.
-    esp_state_write "phase=armed" "containers=$root_dev" "disk=$disk" "rootpn=$rootpn" \
-        "swap=$carve" "shrink_target=$shrink_target" "inner_uuid=$inner_uuid"
+    # root_partuuid is how the offline driver finds the root — a stable GPT identity, not
+    # a device path enumeration can reassign. containers=/disk=/rootpn= stay for --status
+    # and back-compat; shrink_target pins the absolute fs shrink; inner_uuid is the
+    # surviving fs UUID the driver cross-checks the resolved partition against.
+    esp_state_write "phase=armed" "root_partuuid=$root_partuuid" "containers=$root_dev" \
+        "disk=$disk" "rootpn=$rootpn" "swap=$carve" "shrink_target=$shrink_target" \
+        "inner_uuid=$inner_uuid"
 
     echo "$PROG: armed — the disk encrypts on the next boot; keep the machine on power." >&2
     if [[ -n ${ASSUME_YES:-} ]]; then systemctl reboot; return 0; fi
