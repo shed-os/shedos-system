@@ -47,15 +47,83 @@ d=$(_mk); printf 'phase=encrypting\n' > "$d/esp/state"; touch "$d/recon-fail"
 _run "$d"
 if [[ -e $d/reconfigure-called ]] && grep -qx 'phase=encrypting' "$d/esp/state"; then _ok F3_reconfigure_fail_retries; else _fail F3_reconfigure_fail_retries "state=[$(cat "$d/esp/state")]"; fi
 
-# F4: phase=flip-pending -> reports only, no reconfigure, no phase change.
-d=$(_mk); printf 'phase=flip-pending\n' > "$d/esp/state"
-_run "$d"
-if [[ ! -e $d/reconfigure-called ]] && grep -qx 'phase=flip-pending' "$d/esp/state"; then _ok F4_flip_pending_reports; else _fail F4_flip_pending_reports "called=$([[ -e $d/reconfigure-called ]] && echo y || echo n) state=[$(cat "$d/esp/state")]"; fi
-
 # F5: phase=armed (the driver has not run yet) -> no-op, no reconfigure.
 d=$(_mk); printf 'phase=armed\n' > "$d/esp/state"
 _run "$d"
 if [[ ! -e $d/reconfigure-called ]]; then _ok F5_armed_noop; else _fail F5_armed_noop "reconfigure ran on armed"; fi
+
+# --- flip commit (phase=flip-pending) -------------------------------------------
+# A flip-pending sandbox primed to commit: no bridge marker (sd-encrypt proven), enrol
+# done, root is a LUKS mapper, the container carries a recovery token. Stubs: findmnt
+# (root source), cryptsetup (luksDump token), the three rebuild writers. The caller
+# tweaks one precondition per test.
+_mk_flip() {
+    local d; d=$(mktemp -d); mkdir -p "$d/esp" "$d/run" "$d/bin"
+    printf 'phase=flip-pending\n' > "$d/esp/state"
+    printf 'diskpass' > "$d/esp/key"
+    printf '/dev/disk/by-uuid/RUUID\n' > "$d/containers"
+    printf 'HOOKS=(base systemd autodetect block plymouth shedos-reencrypt sd-encrypt shedos-recovery filesystems)\n' > "$d/mkinitcpio.conf"
+    : > "$d/esp/header-RUUID.img"; : > "$d/esp/gpt-vda.bak"
+    cat > "$d/bin/findmnt" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\${STUB_ROOTSRC:-/dev/mapper/luks-RUUID[/@]}"
+EOF
+    cat > "$d/bin/cryptsetup" <<EOF
+#!/usr/bin/env bash
+[[ \$1 == luksDump ]] && { [[ -z \${STUB_NO_TOKEN:-} ]] && printf '"type": "shedos-recovery"\n'; exit 0; }
+exit 0
+EOF
+    local t
+    for t in rebuild-initramfs.sh build-uki.sh render-limine-config.sh; do
+        cat > "$d/bin/$t" <<EOF
+#!/usr/bin/env bash
+echo "$t \$*" >> "$d/rebuild.log"
+[[ -e "$d/rebuild-fail" ]] && exit 1
+exit 0
+EOF
+    done
+    chmod +x "$d/bin/"*
+    printf '%s\n' "$d"
+}
+_run_flip() {  # $1=dir ; extra env via the caller's prefix
+    PATH="$1/bin:$PATH" SHEDOS_FIRMWARE=uefi SHEDOS_REENCRYPT_RUN="$1/run" \
+    ESP_STATE_FILE="$1/esp/state" SHEDOS_REENCRYPT_ESP="$1/esp" SHEDOS_REENCRYPT_KEYFILE="$1/esp/key" \
+    SHEDOS_MKINITCPIO_CONF="$1/mkinitcpio.conf" SHEDOS_REENCRYPT_BINDIR="$1/bin" \
+    SHEDMAN_KEY_CONTAINERS="$1/containers" \
+        bash -c "source '$fin'; main" >/dev/null 2>&1
+}
+
+# FC1: a bridge marker means the driver opened the root, not sd-encrypt -> do NOT commit.
+d=$(_mk_flip); : > "$d/run/bridged"
+_run_flip "$d"
+if [[ ! -s $d/rebuild.log && -e $d/esp/key ]] && grep -qx 'phase=flip-pending' "$d/esp/state"; then _ok FC1_marker_no_commit; else _fail FC1_marker_no_commit "rebuild=[$(cat "$d/rebuild.log" 2>/dev/null)] key=$([[ -e $d/esp/key ]] && echo y) state=[$(cat "$d/esp/state")]"; fi
+
+# FC2: no marker but enrol not finished -> do NOT commit.
+d=$(_mk_flip); { printf 'phase=flip-pending\n'; printf 'enroll_containers=/dev/disk/by-uuid/RUUID\n'; } > "$d/esp/state"
+_run_flip "$d"
+if [[ ! -s $d/rebuild.log && -e $d/esp/key ]]; then _ok FC2_enrol_pending_no_commit; else _fail FC2_enrol_pending_no_commit "rebuild=[$(cat "$d/rebuild.log" 2>/dev/null)]"; fi
+
+# FC3: no marker + enrol done + root is the LUKS mapper + recovery token -> COMMIT:
+# hook unstaged, boot rebuilt, keyfile + backups shredded, state cleared.
+d=$(_mk_flip)
+_run_flip "$d"
+if [[ -s $d/rebuild.log && ! -e $d/esp/key && ! -e $d/esp/state && ! -e $d/esp/header-RUUID.img ]] \
+   && ! grep -q 'shedos-reencrypt' "$d/mkinitcpio.conf"; then _ok FC3_commit; else _fail FC3_commit "rebuild=[$(cat "$d/rebuild.log" 2>/dev/null)] key=$([[ -e $d/esp/key ]] && echo y) state=$([[ -e $d/esp/state ]] && echo y) hooks=[$(grep ^HOOKS "$d/mkinitcpio.conf")]"; fi
+
+# FC4: root is NOT a LUKS mapper -> refuse (affirmative recheck), nothing shredded.
+d=$(_mk_flip)
+STUB_ROOTSRC='/dev/vda2[/@]' _run_flip "$d"
+if [[ ! -s $d/rebuild.log && -e $d/esp/key ]] && grep -q 'shedos-reencrypt' "$d/mkinitcpio.conf"; then _ok FC4_non_luks_root_refused; else _fail FC4_non_luks_root_refused "rebuild=[$(cat "$d/rebuild.log" 2>/dev/null)] key=$([[ -e $d/esp/key ]] && echo y)"; fi
+
+# FC5: no recovery keyslot on the container -> refuse, nothing shredded.
+d=$(_mk_flip)
+STUB_NO_TOKEN=1 _run_flip "$d"
+if [[ ! -s $d/rebuild.log && -e $d/esp/key ]] && grep -q 'shedos-reencrypt' "$d/mkinitcpio.conf"; then _ok FC5_no_recovery_token_refused; else _fail FC5_no_recovery_token_refused "rebuild=[$(cat "$d/rebuild.log" 2>/dev/null)] key=$([[ -e $d/esp/key ]] && echo y)"; fi
+
+# FC6: rebuild fails -> revert (hook re-staged), keyfile intact, state NOT cleared.
+d=$(_mk_flip); touch "$d/rebuild-fail"
+_run_flip "$d"
+if [[ -e $d/esp/key && -e $d/esp/state ]] && grep -q 'shedos-reencrypt' "$d/mkinitcpio.conf"; then _ok FC6_rebuild_fail_reverts; else _fail FC6_rebuild_fail_reverts "key=$([[ -e $d/esp/key ]] && echo y) state=$([[ -e $d/esp/state ]] && echo y) hooks=[$(grep ^HOOKS "$d/mkinitcpio.conf")]"; fi
 
 printf 'encrypt-finalize: %d/%d passed\n' "$pass" "$((pass + fail))"
 (( fail == 0 )) || { printf 'failed: %s\n' "${failures[*]}" >&2; exit 1; }
