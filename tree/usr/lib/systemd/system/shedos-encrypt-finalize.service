@@ -4,9 +4,12 @@ Description=Finalise in-place disk encryption (reconfigure boot + advance the fl
 # state file is absent, so the unit is skipped before it ever starts.
 ConditionPathExists=/boot/efi/shedos-encrypt/state
 # Runs after the recovery key is enrolled — reconfigure reads the container list
-# the enrol service writes, and waits for it to finish before staging the boot.
+# the enrol service writes, and waits for it to finish before staging the boot. The
+# ESP is a nofail mount that can flap during boot, so RequiresMountsFor keeps it
+# mounted; otherwise the ConditionPathExists silently skips against an unmounted ESP.
 After=shedos-encrypt-enroll.service local-fs.target
 Wants=shedos-encrypt-enroll.service
+RequiresMountsFor=/boot/efi
 
 [Service]
 Type=oneshot

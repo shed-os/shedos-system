@@ -3,8 +3,11 @@ Description=Enrol the recovery key after in-place disk encryption
 # Only meaningful on a box that ran `shedman encrypt`; on every ordinary boot the
 # state file is absent, so the unit is skipped before it ever starts.
 ConditionPathExists=/boot/efi/shedos-encrypt/state
-# Needs the encrypted root and ESP mounted and the LUKS by-uuid symlinks settled.
+# The ESP is a nofail fstab mount, so it is not guaranteed by local-fs.target and can
+# flap during boot; RequiresMountsFor pulls it in and keeps it mounted, or the
+# ConditionPathExists above evaluates against an unmounted /boot/efi and silently skips.
 After=local-fs.target
+RequiresMountsFor=/boot/efi
 
 [Service]
 Type=oneshot
