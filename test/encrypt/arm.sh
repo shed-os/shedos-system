@@ -197,5 +197,70 @@ else
     _fail AR12_decline_stays_armed "out=$out reboot=[$(cat "$d/systemctl.log" 2>/dev/null)]"
 fi
 
+# --- --status / --resume (#201) ------------------------------------------------
+# Both read the ESP phase; --status reports it (read-only), --resume re-drives a
+# stalled conversion. The phase is seeded straight into the ESP state file.
+
+# ST1: phase=armed -> reports armed + the target device.
+d=$(_mk_sandbox); printf 'phase=armed\ncontainers=/dev/sda2\n' > "$d/esp/state"
+out=$(_run "$d" '' --status 2>&1)
+if [[ $out == *armed* && $out == */dev/sda2* ]]; then _ok ST1_status_armed; else _fail ST1_status_armed "out=$out"; fi
+
+# ST2: phase=encrypting -> reports the finalizing state.
+d=$(_mk_sandbox); printf 'phase=encrypting\n' > "$d/esp/state"
+out=$(_run "$d" '' --status 2>&1)
+if [[ $out == *encrypting* ]]; then _ok ST2_status_encrypting; else _fail ST2_status_encrypting "out=$out"; fi
+
+# ST3: phase=flip-pending -> reports the switchover state.
+d=$(_mk_sandbox); printf 'phase=flip-pending\n' > "$d/esp/state"
+out=$(_run "$d" '' --status 2>&1)
+if [[ $out == *flip-pending* ]]; then _ok ST3_status_flip_pending; else _fail ST3_status_flip_pending "out=$out"; fi
+
+# ST4: no state + root is an opened LUKS mapper -> already encrypted.
+d=$(_mk_sandbox)
+out=$(STUB_ROOTDEV=/dev/mapper/luks-abc _run "$d" '' --status 2>&1)
+if [[ $out == *"already encrypted"* ]]; then _ok ST4_status_already_encrypted; else _fail ST4_status_already_encrypted "out=$out"; fi
+
+# ST5: no state + a plain root -> nothing armed or in progress.
+d=$(_mk_sandbox)
+out=$(_run "$d" '' --status 2>&1)
+if [[ $out == *"no in-place encryption"* ]]; then _ok ST5_status_none; else _fail ST5_status_none "out=$out"; fi
+
+# ST6: non-root -> refused (the ESP state is on a root-only mount).
+d=$(_mk_sandbox); printf 'phase=armed\n' > "$d/esp/state"
+out=$(STUB_UID=1000 _run "$d" '' --status 2>&1); rc=$?
+if [[ $rc -ne 0 && $out == *"requires root"* ]]; then _ok ST6_status_needs_root; else _fail ST6_status_needs_root "rc=$rc out=$out"; fi
+
+# RS1: --resume on phase=armed with the hook already staged -> no rebuild, points at a reboot.
+d=$(_mk_sandbox); printf 'phase=armed\n' > "$d/esp/state"
+sed -i -E '/^HOOKS=/ s/\bshedos-recovery\b/shedos-reencrypt shedos-recovery/' "$d/etc/mkinitcpio.conf"
+out=$(_run "$d" '' --resume 2>&1)
+if [[ $out == *reboot* && ! -s "$d/writers.log" ]]; then _ok RS1_resume_armed_staged; else _fail RS1_resume_armed_staged "out=$out writers=[$(cat "$d/writers.log" 2>/dev/null)]"; fi
+
+# RS2: --resume on phase=armed with the hook missing -> re-stage + rebuild.
+d=$(_mk_sandbox); printf 'phase=armed\n' > "$d/esp/state"
+out=$(_run "$d" '' --resume 2>&1)
+if grep -q 'shedos-reencrypt' "$d/etc/mkinitcpio.conf" && [[ -s "$d/writers.log" && $out == *reboot* ]]; then _ok RS2_resume_armed_restages; else _fail RS2_resume_armed_restages "out=$out hooks=[$(grep '^HOOKS' "$d/etc/mkinitcpio.conf")] writers=[$(cat "$d/writers.log" 2>/dev/null)]"; fi
+
+# RS3: --resume on phase=encrypting -> re-drives the finalize unit (which pulls enrol).
+d=$(_mk_sandbox); printf 'phase=encrypting\n' > "$d/esp/state"
+_run "$d" '' --resume >/dev/null 2>&1
+if grep -q 'start shedos-encrypt-finalize.service' "$d/systemctl.log" 2>/dev/null; then _ok RS3_resume_encrypting_finalizes; else _fail RS3_resume_encrypting_finalizes "systemctl=[$(cat "$d/systemctl.log" 2>/dev/null)]"; fi
+
+# RS4: --resume on phase=flip-pending -> same finalize re-drive.
+d=$(_mk_sandbox); printf 'phase=flip-pending\n' > "$d/esp/state"
+_run "$d" '' --resume >/dev/null 2>&1
+if grep -q 'start shedos-encrypt-finalize.service' "$d/systemctl.log" 2>/dev/null; then _ok RS4_resume_flip_pending_finalizes; else _fail RS4_resume_flip_pending_finalizes "systemctl=[$(cat "$d/systemctl.log" 2>/dev/null)]"; fi
+
+# RS5: --resume with no conversion in flight -> refuses.
+d=$(_mk_sandbox)
+out=$(_run "$d" '' --resume 2>&1); rc=$?
+if [[ $rc -ne 0 && $out == *"nothing to resume"* ]]; then _ok RS5_resume_nothing; else _fail RS5_resume_nothing "rc=$rc out=$out"; fi
+
+# RS6: --resume non-root -> refused.
+d=$(_mk_sandbox); printf 'phase=armed\n' > "$d/esp/state"
+out=$(STUB_UID=1000 _run "$d" '' --resume 2>&1); rc=$?
+if [[ $rc -ne 0 && $out == *"requires root"* ]]; then _ok RS6_resume_needs_root; else _fail RS6_resume_needs_root "rc=$rc out=$out"; fi
+
 total=$((pass + fail)); echo; echo "encrypt-arm: $pass/$total passed"
 (( fail == 0 ))

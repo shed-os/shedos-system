@@ -329,6 +329,79 @@ _cmd_disarm() {
     echo "$PROG: disarmed — the disk will not be encrypted." >&2
 }
 
+# --- status / resume ---------------------------------------------------------
+
+# True when / is an opened LUKS mapper — i.e. the box is already running encrypted.
+# findmnt annotates the btrfs subvol as /dev/X[/@]; strip it before matching.
+_root_is_luks() {
+    local src; src=$(findmnt -n -o SOURCE / 2>/dev/null)
+    [[ ${src%%[*} == /dev/mapper/luks-* ]]
+}
+
+# Report where an in-place conversion stands, from the ESP phase. Read-only, but
+# the state lives on a root-only mount so it still needs root to read it.
+_cmd_status() {
+    _require_root status
+    # shellcheck source=/dev/null
+    source "${SHEDMAN_ENCRYPT_ESP_STATE_LIB:-/usr/lib/shedos/esp-state.sh}"
+    local phase; phase=$(esp_state_get phase 2>/dev/null)
+    case $phase in
+        armed)
+            local target; target=$(esp_state_get containers 2>/dev/null | awk '{print $1}')
+            echo "armed — the next reboot will encrypt ${target:-the root}; '$PROG --disarm' cancels it"
+            ;;
+        encrypting)
+            echo "encrypting — the disk is encrypted and finalizing (recovery key + boot reconfigure); reboot if it does not finish on its own"
+            ;;
+        flip-pending)
+            echo "flip-pending — encrypted and booting the encrypted path; reboot once more to finish the switchover"
+            ;;
+        '')
+            if _root_is_luks; then echo "this disk is already encrypted"
+            else echo "no in-place encryption is armed or in progress"; fi
+            ;;
+        *)
+            _die "unrecognised encryption phase '$phase'" 1
+            ;;
+    esac
+}
+
+# Re-drive a stalled conversion from its current phase. The offline byte-move
+# already auto-resumes in the initramfs each boot and the enrol/finalize units
+# auto-run; this is the manual lever for when that automatic flow stalls.
+# Idempotent at every phase.
+_cmd_resume() {
+    _require_root resume
+    # shellcheck source=/dev/null
+    source "${SHEDMAN_ENCRYPT_ESP_STATE_LIB:-/usr/lib/shedos/esp-state.sh}"
+    local phase; phase=$(esp_state_get phase 2>/dev/null)
+    case $phase in
+        armed)
+            # The byte-move only runs offline, so the most a resume can do here is
+            # make sure the hook is staged (in case a later rebuild dropped it) and
+            # send the user back to a reboot.
+            if ! grep -qE '^HOOKS=.*\bshedos-reencrypt\b' "$MKINITCPIO_CONF" 2>/dev/null; then
+                _stage_reencrypt_hook "$MKINITCPIO_CONF"
+                _rebuild_boot || _die "could not rebuild the boot images while resuming" 1
+            fi
+            echo "$PROG: armed — reboot to start the encryption" >&2
+            ;;
+        encrypting|flip-pending)
+            # Byte-move done; push the userspace finalize. The finalize unit Wants=
+            # the enrol unit, so starting it pulls both; both self-gate on the phase.
+            systemctl start shedos-encrypt-finalize.service \
+                || _die "could not start the finalize service" 1
+            echo "$PROG: re-drove the finalize; '$PROG --status' shows where it landed" >&2
+            ;;
+        '')
+            _die "nothing to resume (no encryption is armed or in progress)" 1
+            ;;
+        *)
+            _die "unrecognised encryption phase '$phase'; cannot resume" 1
+            ;;
+    esac
+}
+
 # When sourced (the tests do this to reach the functions), stop here with the
 # functions defined; only a direct run reaches help + dispatch.
 [[ ${BASH_SOURCE[0]} == "${0}" ]] || return 0
@@ -360,7 +433,7 @@ EOF
         cat <<EOF
 Usage: sudo $PROG [--no-swap] [--force-no-ac] [--yes]
        sudo $PROG --resume
-            $PROG --status
+       sudo $PROG --status
 
 Encrypt this machine's root (and an optional encrypted swap) in place. The
 actual reencryption runs offline in the initramfs across a reboot; this command
@@ -402,8 +475,8 @@ if (( ${#args[@]} )); then
 fi
 
 case "$action" in
-    --status)  _die "reporting an in-progress encryption is wired in a later task" 1 ;;
-    --resume)  _die "resuming an interrupted encryption is wired in a later task" 1 ;;
+    --status)  _cmd_status ;;
+    --resume)  _cmd_resume ;;
     --disarm)  _cmd_disarm ;;
     "")        _cmd_arm ;;
     *)
