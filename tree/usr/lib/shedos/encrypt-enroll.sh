@@ -56,8 +56,12 @@ _machine_key() {  # $1=container-list
         return 1
     fi
     local key; key=$(_gen_recovery)
-    install -d -m700 -- "$(dirname -- "$STASH")"
+    install -d -m755 -- "$(dirname -- "$STASH")"
     ( umask 077; printf '%s\n' "$key" > "$STASH" )
+    # The first-login tour (a wheel desktop user) reads this then shreds it; wheel
+    # already has disk access via sudo, so wheel-readable leaks nothing new.
+    chmod 0660 -- "$STASH"
+    chgrp wheel -- "$STASH" 2>/dev/null || true
     printf '%s' "$key"
     return 0
 }

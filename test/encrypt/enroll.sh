@@ -174,13 +174,16 @@ else
     _fail EN7_defer_no_auth "rc=$rc cont=[$(cat "$d/containers" 2>/dev/null)]"
 fi
 
-# EN8: when it enrols, the minted key is stashed 0600 for the first-login display.
+# EN8: when it enrols, the minted key is stashed 0660 in a 0755 dir so the first-login
+# tour (a wheel desktop user) can read it then shred it; the chgrp to wheel is
+# best-effort (root-only), so the test asserts only the modes.
 d=$(_mk_sandbox)
 printf 'phase=flip-pending\nenroll_containers=/dev/disk/by-uuid/AA\n' > "$d/esp/state"
 printf 'diskpw' > "$d/esp/key"; chmod 600 "$d/esp/key"
 DUMP_JSON='{"keyslots":{"0":{}},"tokens":{}}' _run_enroll "$d" >/dev/null 2>&1
 perm=$(stat -c '%a' "$d/stash/recovery-key" 2>/dev/null)
-if [[ -s $d/stash/recovery-key && $perm == 600 ]]; then _ok EN8_stash_minted; else _fail EN8_stash_minted "perm=$perm exists=$([[ -f $d/stash/recovery-key ]] && echo y || echo n)"; fi
+dperm=$(stat -c '%a' "$d/stash" 2>/dev/null)
+if [[ -s $d/stash/recovery-key && $perm == 660 && $dperm == 755 ]]; then _ok EN8_stash_minted; else _fail EN8_stash_minted "perm=$perm dir=$dperm exists=$([[ -f $d/stash/recovery-key ]] && echo y || echo n)"; fi
 
 # EN11: a retry reuses the key a prior run stashed — every container converges on
 # the SAME key, never a split key (the blocker the adversarial review caught). The
