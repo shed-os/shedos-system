@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# List installed DKMS modules with no build for a given kernel.
+#
+# retire-shedos-kernel (before dropping the old kernel) and shedman doctor both
+# need the same answer: for kernel K, is every DKMS module built for it? A gap
+# means the driver dies on K — nvidia built only for shedos-kernel would vanish
+# the moment linux-zen is the only kernel left.
+#
+# Usage: dkms-coverage <kernelrelease>
+#   prints each installed DKMS module with no build for <kernelrelease>;
+#   exit 0 all covered, 1 some missing, 2 usage/error.
+set -uo pipefail
+
+dkms=${SHEDOS_DKMS:-dkms}
+kernel=${1:-}
+
+if [[ -z $kernel ]]; then
+    echo "usage: dkms-coverage <kernelrelease>" >&2
+    exit 2
+fi
+
+status=$("$dkms" status 2>/dev/null) || {
+    echo "dkms-coverage: 'dkms status' failed" >&2
+    exit 2
+}
+
+# dkms 3.x line: "<module>/<version>, <kernel>, <arch>: <state>". A module with
+# no build yet shows "<module>/<version>: added" (no kernel field), which never
+# matches and so counts as uncovered.
+declare -A modules=()
+declare -A covered=()
+while IFS= read -r line; do
+    [[ -z $line ]] && continue
+    mod=${line%%/*}
+    modules[$mod]=1
+    rest=${line#*, }         # drop "<module>/<version>, "
+    k=${rest%%, *}           # the kernel field (or the whole line if none)
+    state=${line##*: }
+    if [[ $k == "$kernel" && ( $state == installed || $state == built ) ]]; then
+        covered[$mod]=1
+    fi
+done <<<"$status"
+
+missing=()
+for mod in "${!modules[@]}"; do
+    [[ -n ${covered[$mod]:-} ]] || missing+=("$mod")
+done
+
+if (( ${#missing[@]} )); then
+    printf '%s\n' "${missing[@]}" | sort
+    exit 1
+fi
+exit 0

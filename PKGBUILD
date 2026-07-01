@@ -152,6 +152,11 @@ package() {
     install -Dm644 tree/usr/lib/shedos/esp-state.sh \
         "$pkgdir/usr/lib/shedos/esp-state.sh"
 
+    # Cross-kernel DKMS coverage check, shared by retire-shedos-kernel and the
+    # shedman doctor DKMS audit.
+    install -Dm755 tree/usr/lib/shedos/dkms-coverage \
+        "$pkgdir/usr/lib/shedos/dkms-coverage"
+
     # The reencrypt driver (the initramfs one-shot ExecStart) plus its unit and
     # mkinitcpio install hook. The arm step builds a transient initramfs that
     # stages the hook; without these lines none of the machinery ships.

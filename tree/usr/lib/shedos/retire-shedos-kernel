@@ -18,9 +18,23 @@ fi
 # Fail-closed gate: only retire the old kernel when linux-zen is the kernel
 # we actually booted. The running kernel's modules dir names its package.
 running=$(uname -r)
-booted_pkgbase=$(cat "/usr/lib/modules/$running/pkgbase" 2>/dev/null || true)
+booted_pkgbase=$(cat "${SHEDOS_MODULES_DIR:-/usr/lib/modules}/$running/pkgbase" 2>/dev/null || true)
 if [[ $booted_pkgbase != linux-zen ]]; then
     echo "retire-shedos-kernel: booted kernel is '${booted_pkgbase:-$running}', not linux-zen — deferring to a later boot"
+    exit 0
+fi
+
+# Driver-safety: don't strip shedos-kernel while linux-zen is still missing a
+# DKMS module (e.g. nvidia built only for the old kernel) — that would leave the
+# box with no working driver. Keep the old kernel until every module builds.
+dkms_coverage=${SHEDOS_DKMS_COVERAGE:-/usr/lib/shedos/dkms-coverage}
+uncovered=$("$dkms_coverage" "$running")
+cov_rc=$?
+if (( cov_rc == 1 )); then
+    echo "retire-shedos-kernel: linux-zen ($running) is missing DKMS module(s) [${uncovered//$'\n'/ }] — keeping shedos-kernel until they build" >&2
+    exit 0
+elif (( cov_rc != 0 )); then
+    echo "retire-shedos-kernel: could not verify DKMS coverage for linux-zen ($running) — keeping shedos-kernel this boot" >&2
     exit 0
 fi
 
