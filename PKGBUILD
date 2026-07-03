@@ -7,8 +7,8 @@
 # lives in shedos-hyprland, not here.
 
 pkgname=shedos-system
-pkgver=2026.06.19
-pkgrel=20
+pkgver=2026.07.02
+pkgrel=1
 pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
 url='https://github.com/Theshedman/shedos'
