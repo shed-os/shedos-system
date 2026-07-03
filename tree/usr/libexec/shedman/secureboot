@@ -23,6 +23,7 @@ SBCTL=${SHEDOS_SECUREBOOT_SBCTL:-sbctl}
 SBVERIFY=${SHEDOS_SECUREBOOT_SBVERIFY:-sbverify}
 OPENSSL=${SHEDOS_SECUREBOOT_OPENSSL:-openssl}
 BUILD_UKI=${SHEDOS_SECUREBOOT_BUILD_UKI:-/usr/lib/shedos/build-uki.sh}
+BUILD_RECOVERY_UKI=${SHEDOS_SECUREBOOT_BUILD_RECOVERY_UKI:-/usr/lib/shedos/build-recovery-uki.sh}
 # SetupMode EFI var (1 = firmware in Setup Mode, platform key cleared).
 SETUP_EFIVAR=${SHEDOS_SECUREBOOT_SETUP_EFIVAR:-/sys/firmware/efi/efivars/SetupMode-8be4df61-93ca-11d2-aa0d-00e098032b8c}
 # ESP roots that hold the signed UKIs, same discovery the placer/renderer use.
@@ -317,6 +318,10 @@ EOF
     _ensure_keys
     _rewrite_uki_conf_signing
     "$BUILD_UKI" --rebuild || _die "signing the kernel images failed; Secure Boot NOT armed" 1
+    # The recovery image is built by its own path, so the kernel rebuild above
+    # leaves the install-time unsigned copy in place — and verify would then
+    # rightly refuse to arm. Rebuild it under the signing config too.
+    "$BUILD_RECOVERY_UKI" || _die "signing the recovery image failed; Secure Boot NOT armed" 1
     _sign_limine
     _verify_all || _die "the boot chain did not fully verify — Secure Boot NOT armed, the box still boots. Re-run once resolved" 1
     # Everything is signed and verified — only now arm firmware.
@@ -330,6 +335,7 @@ _cmd_sign() {
     _keys_present || _die "no keys for this machine yet — run: sudo $PROG enroll" 1
     _on_uki_path || _die "this box is not on the signed-UKI boot path" 1
     "$BUILD_UKI" --rebuild || _die "re-signing the kernel images failed" 1
+    "$BUILD_RECOVERY_UKI" || _die "re-signing the recovery image failed" 1
     _sign_limine
     _verify_all || _die "some boot images did not verify after signing" 1
     echo "$PROG: boot images re-signed and verified."
@@ -341,6 +347,7 @@ _cmd_repair() {
     _keys_present || _die "no keys for this machine yet — run: sudo $PROG enroll" 1
     _on_uki_path || _die "this box is not on the signed-UKI boot path" 1
     "$BUILD_UKI" --rebuild || _die "rebuilding the kernel images failed" 1
+    "$BUILD_RECOVERY_UKI" || _die "rebuilding the recovery image failed" 1
     _sign_limine
     _verify_all || _die "the rebuilt images did not verify — free ESP space and re-run" 1
     echo "$PROG: boot images rebuilt, re-signed, and verified."

@@ -79,6 +79,11 @@ EOF
 printf '%s ' "\$@" >> "$t/builduki.log"; echo >> "$t/builduki.log"
 exit 0
 EOF
+    cat >"$t/stubs/build-recovery-uki" <<EOF
+#!/usr/bin/env bash
+printf '%s ' "\$@" >> "$t/buildrecovery.log"; echo >> "$t/buildrecovery.log"
+exit 0
+EOF
     _stub_sbverify "$t/stubs/sbverify"
     chmod +x "$t/stubs/"*
 }
@@ -91,6 +96,7 @@ _menv() {
        SHEDOS_SECUREBOOT_SBCTL="$t/stubs/sbctl"
        SHEDOS_SECUREBOOT_SBVERIFY="$t/stubs/sbverify"
        SHEDOS_SECUREBOOT_BUILD_UKI="$t/stubs/build-uki"
+       SHEDOS_SECUREBOOT_BUILD_RECOVERY_UKI="$t/stubs/build-recovery-uki"
        SHEDOS_SECUREBOOT_SETUP_EFIVAR="$t/setupmode"
        SHEDOS_ESP_DIRS="$t/esp"
        SHEDOS_SECUREBOOT_LIMINE_COPIES="$t/esp/EFI/BOOT/BOOTX64.EFI"
@@ -201,6 +207,13 @@ if (( rc == 0 )) && grep -q 'enroll-keys' "$t/sbctl.log" \
     _ok M4_enroll_arms_with_microsoft
 else
     _fail M4_enroll_arms_with_microsoft "rc=$rc sbctl.log=$(cat "$t/sbctl.log" 2>/dev/null)"
+fi
+# The recovery image is built by its own path; enroll must rebuild it under
+# the signing config or verify rejects the chain (bit a real Latitude enroll).
+if [[ -s $t/buildrecovery.log ]]; then
+    _ok M4b_enroll_rebuilds_recovery_image
+else
+    _fail M4b_enroll_rebuilds_recovery_image "build-recovery-uki was never invoked"
 fi
 rm -rf "$t"
 
