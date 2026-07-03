@@ -14,66 +14,98 @@ _add_shedos_repo() {
     # marker at container / isn't visible to them; they get normal behavior.
     [[ -e /.shedos-build-environment ]] && return 0
 
-    # /etc/pacman.conf is owned by `pacman`. We append a fenced block.
-    # The strip-then-append flow is idempotent AND handles bare [shedos]
-    # blocks left behind by older airootfs templates (rc16 and earlier
-    # baked one in, which collided with this hook's marker-fenced append
-    # and produced `database already registered` from pacman -Sy).
-    local pacman_conf=/etc/pacman.conf
+    # /etc/pacman.conf is owned by `pacman`; we manage two fenced blocks in
+    # it. [shedos] ALWAYS points at the stable channel. [shedostest] carries
+    # the canary channel and sits BEFORE [shedos]: pacman hands a package to
+    # the first repo that lists it, so this order is what lets an enabled
+    # canary override stable during an RC soak. The strip-then-append flow
+    # is idempotent AND handles bare [shedos] blocks left behind by older
+    # airootfs templates (rc16 and earlier baked one in, which collided with
+    # this hook's marker-fenced append and produced `database already
+    # registered` from pacman -Sy). Paths are overridable for the test
+    # harness only.
+    local pacman_conf=${SHEDOS_PACMAN_CONF:-/etc/pacman.conf}
+    local channel_file=${SHEDOS_CHANNEL_FILE:-/etc/shedos/channel}
+    local state_dir=${SHEDOS_STATE_DIR:-/var/lib/shedos}
     [[ -f $pacman_conf ]] || return 0
+
+    # Whether [shedostest] should be enabled, decided BEFORE any rewrite.
+    # The live Server line is the only reliable signal of the user's current
+    # choice — the header and SigLevel lines can be edited independently,
+    # and a half-commented block is a fatal pacman error, so whatever state
+    # we detect is re-emitted fully coherent below.
+    local testing_enabled=0
+    if grep -qE '^\[shedostest\][[:space:]]*$' "$pacman_conf" \
+        || sed -n '/^# >>> shedostest <<<$/,/^# <<< shedostest >>>$/p' "$pacman_conf" \
+            | grep -qE '^Server = '; then
+        testing_enabled=1
+    fi
+
+    # One-shot heal, sentinel-gated so a later deliberate opt-out sticks:
+    # a [shedos] block on the canary URL (the rc1/rc2 routing bug) or an
+    # RC-baked channel marker means this box is meant to soak the canary —
+    # switch [shedostest] on once; from then on the live state is the
+    # user's to keep.
+    local sentinel=$state_dir/.pacman-channels-seeded
+    if [[ ! -f $sentinel ]]; then
+        # Any live Server line on the canary URL counts, fenced or bare — an
+        # already-enabled [shedostest] matching too is a harmless no-op.
+        if grep -qE '^Server = https://repo\.shedos\.org/test/\$arch$' "$pacman_conf" \
+            || [[ "$(cat "$channel_file" 2>/dev/null)" == "test" ]]; then
+            testing_enabled=1
+        fi
+        mkdir -p "$state_dir"
+        : > "$sentinel"
+    fi
+
     local tmp
     tmp=$(mktemp)
 
-    # Drop every existing [shedos] block (fenced or bare) so we end up
-    # with at most one canonical block after appending below.
+    # Drop every existing copy of both blocks (fenced or bare) so exactly
+    # one canonical pair remains after the append. The bare scans also stop
+    # at any fence marker so an adjacent block without a blank separator is
+    # never swallowed.
     awk '
-        /^# >>> shedos <<<$/                  { skip=1; next }
-        /^# <<< shedos >>>$/                  { skip=0; next }
-        /^\[shedos\][[:space:]]*$/            { skip=2; next }
-        skip==2 && (/^\[/ || /^[[:space:]]*$/) { skip=0 }
-        !skip                                 { print }
+        /^# >>> shedos <<<$/                                { skip=1; next }
+        /^# <<< shedos >>>$/                                { skip=0; next }
+        /^# >>> shedostest <<<$/                            { skip=1; next }
+        /^# <<< shedostest >>>$/                            { skip=0; next }
+        /^\[shedos\][[:space:]]*$/                          { skip=2; next }
+        /^\[shedostest\][[:space:]]*$/                      { skip=2; next }
+        skip==2 && (/^\[/ || /^[[:space:]]*$/ || /^# >>> /) { skip=0 }
+        !skip                                               { print }
     ' "$pacman_conf" > "$tmp"
+    # Squeeze trailing blank lines so the blank the append adds below doesn't
+    # accumulate one copy per run — the rewrite must be byte-idempotent.
+    printf '%s\n' "$(< "$tmp")" > "$tmp"
 
-    # Channel routing: an RC ISO bakes `test` into /etc/shedos/channel
-    # (build-iso.yml) so its installs actually soak the RC packages;
-    # everything else — stable ISOs, existing systems with no marker —
-    # tracks /stable. The escaped \$arch stays literal for pacman.
-    local channel="stable"
-    if [[ "$(cat /etc/shedos/channel 2>/dev/null)" == "test" ]]; then
-        channel="test"
-    fi
+    # Comment prefix for the canary lines; the whole block toggles as one.
+    local c="#"
+    [[ $testing_enabled == 1 ]] && c=""
 
     cat >> "$tmp" <<EOF
+
+# >>> shedostest <<<
+# ShedOS canary channel; RC packages land here before they are promoted
+# to the stable channel behind [shedos]. Listed first: pacman prefers the
+# first repo that carries a package, so enabling this is what makes an RC
+# install track the canary. Enable or comment the three lines below as one
+# to opt in or out; RC installs ship it enabled, stable installs commented.
+${c}[shedostest]
+${c}SigLevel = Required DatabaseRequired
+${c}Server = https://repo.shedos.org/test/\$arch
+# <<< shedostest >>>
 
 # >>> shedos <<<
 # Managed by shedos-system; do not edit between these markers.
 # Run \`pacman -R shedos-system\` to remove automatically.
 [shedos]
 SigLevel = Required DatabaseRequired
-Server = https://repo.shedos.org/$channel/\$arch
+Server = https://repo.shedos.org/stable/\$arch
 # <<< shedos >>>
 EOF
     install -Dm644 "$tmp" "$pacman_conf"
     rm -f "$tmp"
-
-    # Also append a *commented-out* [shedostest] block so users who
-    # want to opt into the canary channel can do so by uncommenting,
-    # without having to remember the URL or SigLevel. Match either the
-    # old or new marker so a migrated box never gets a duplicate.
-    if ! grep -qE '^# >>> (shedos-testing|shedostest) <<<' "$pacman_conf"; then
-        cat >>"$pacman_conf" <<'EOF'
-
-# >>> shedostest <<<
-# ShedOS canary channel; RC packages land here before reaching
-# [shedos]. Uncomment the four lines below to opt in. Stable cuts
-# also publish to /test/x86_64/, so opting in only changes
-# behavior during RC windows.
-#[shedostest]
-#SigLevel = Required DatabaseRequired
-#Server = https://repo.shedos.org/test/$arch
-# <<< shedostest >>>
-EOF
-    fi
 }
 
 _migrate_repo_url() {
@@ -227,6 +259,7 @@ post_install() {
     systemctl --global enable shedos-doctor.timer || true
     systemctl --global enable shedos-claude-seed.service || true
 
+    _migrate_repo_url
     _add_shedos_repo
     _bootstrap_greetd
     _bootstrap_snapper
