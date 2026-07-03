@@ -56,7 +56,10 @@ _machine_key() {  # $1=container-list
         return 1
     fi
     local key; key=$(_gen_recovery)
-    install -d -m755 -- "$(dirname -- "$STASH")"
+    # Wheel-writable dir: the tour must be able to UNLINK the stash after
+    # showing it, and unlink needs write on the parent dir, not the file.
+    install -d -m770 -- "$(dirname -- "$STASH")"
+    chgrp wheel -- "$(dirname -- "$STASH")" 2>/dev/null || true
     ( umask 077; printf '%s\n' "$key" > "$STASH" )
     # The first-login tour (a wheel desktop user) reads this then shreds it; wheel
     # already has disk access via sudo, so wheel-readable leaks nothing new.

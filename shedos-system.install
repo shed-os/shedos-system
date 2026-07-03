@@ -273,6 +273,7 @@ post_install() {
     # then locale.
     _strip_leaked_welcome_autostart
     _strip_leaked_installer_launcher
+    _clean_recovery_stash_residue
     _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens
     # Lift the cmdline into /etc/kernel/cmdline for the signed-UKI boot path;
@@ -851,6 +852,22 @@ _strip_leaked_installer_launcher() {
     rm -f /usr/share/applications/shedos-install.desktop 2>/dev/null || true
 }
 
+_clean_recovery_stash_residue() {
+    # The tour empties the recovery-key stash once the user acknowledges it,
+    # but on installs whose stash dir was root-owned the unlink failed and a
+    # zero-filled leftover stayed behind — which re-triggers the recovery
+    # slide with a garbage key on every login. Drop content-free residue and
+    # open the dir to wheel so the tour's unlink works from now on. A stash
+    # with real content (an unacknowledged key) is left strictly alone.
+    local dir=/var/lib/shedos/encrypt stash=/var/lib/shedos/encrypt/recovery-key
+    [[ -d $dir ]] || return 0
+    chgrp wheel "$dir" 2>/dev/null || true
+    chmod 0770 "$dir" 2>/dev/null || true
+    if [[ -f $stash ]] && [[ -z "$(tr -d '[:space:]\000' < "$stash" 2>/dev/null)" ]]; then
+        rm -f "$stash"
+    fi
+}
+
 _retire_legacy_kernel_setup() {
     # Part of the shedos-kernel -> linux-zen migration. shedos-kernel is
     # intentionally kept installed through this upgrade so the box always
@@ -908,6 +925,7 @@ post_upgrade() {
     _apply_faillock_policy
     _strip_leaked_welcome_autostart
     _strip_leaked_installer_launcher
+    _clean_recovery_stash_residue
     # Must precede anything that could re-trigger mkinitcpio.
     _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens
