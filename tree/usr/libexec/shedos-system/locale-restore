@@ -33,9 +33,13 @@ fi
 
 # Best-effort network gate beyond systemd's network-online.target.
 # Some networks let the target fire before DNS works; check explicitly
-# so we don't churn through pacman with a half-up stack.
+# so we don't churn through pacman with a half-up stack. Exit clean: a
+# WiFi box has no network this early on its first boots, and a failed
+# unit keeps the whole system 'degraded' — the missing marker already
+# re-fires the unit next boot.
 if ! getent ahosts archlinux.org >/dev/null 2>&1; then
-    die "no network (getent ahosts archlinux.org failed); retry on next boot"
+    log "no network yet (getent ahosts archlinux.org failed); retrying next boot"
+    exit 0
 fi
 
 log "scanning pacman db for files-in-db-missing-on-disk..."

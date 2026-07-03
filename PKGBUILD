@@ -464,6 +464,10 @@ package() {
         "$pkgdir/usr/lib/systemd/system/shedos-locale-restore.service"
     install -Dm644 tree/usr/lib/systemd/system/shedos-retire-kernel.service \
         "$pkgdir/usr/lib/systemd/system/shedos-retire-kernel.service"
+    # First match wins across preset files: keeps first-boot preset-all from
+    # enabling networkd on a NetworkManager system.
+    install -Dm644 tree/usr/lib/systemd/system-preset/00-shedos.preset \
+        "$pkgdir/usr/lib/systemd/system-preset/00-shedos.preset"
 
     # Systemd (user-scope): update-check timer
     install -Dm644 tree/usr/lib/systemd/user/shedos-update-check.service \

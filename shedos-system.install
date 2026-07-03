@@ -276,6 +276,7 @@ post_install() {
     _clean_recovery_stash_residue
     _fix_vconsole_keymap
     _dedupe_tmp_fstab
+    _quiet_networkd
     _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens
     # Lift the cmdline into /etc/kernel/cmdline for the signed-UKI boot path;
@@ -883,6 +884,23 @@ _dedupe_tmp_fstab() {
     fi
 }
 
+_quiet_networkd() {
+    # systemd's own preset enables networkd at first boot (preset-all on a
+    # fresh machine-id), but NetworkManager owns networking on ShedOS — the
+    # stray wait-online then times out on every boot and leaves the system
+    # degraded. The shipped 00-shedos.preset stops fresh installs; this
+    # one-shot quiets boxes that were already bitten. Sentinel-gated so a
+    # user who deliberately runs networkd later keeps it.
+    local sentinel=/var/lib/shedos/.networkd-quieted
+    [[ -f $sentinel ]] && return 0
+    if systemctl is-enabled NetworkManager.service &>/dev/null; then
+        systemctl disable systemd-networkd.service systemd-networkd.socket \
+            systemd-networkd-wait-online.service 2>/dev/null || true
+    fi
+    mkdir -p "$(dirname "$sentinel")"
+    : > "$sentinel"
+}
+
 _clean_recovery_stash_residue() {
     # The tour empties the recovery-key stash once the user acknowledges it,
     # but on installs whose stash dir was root-owned the unlink failed and a
@@ -959,6 +977,7 @@ post_upgrade() {
     _clean_recovery_stash_residue
     _fix_vconsole_keymap
     _dedupe_tmp_fstab
+    _quiet_networkd
     # Must precede anything that could re-trigger mkinitcpio.
     _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens

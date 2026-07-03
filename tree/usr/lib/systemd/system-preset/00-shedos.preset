@@ -1,0 +1,8 @@
+# NetworkManager owns networking on ShedOS. Without this, systemd's own
+# 90-systemd.preset enables systemd-networkd at first boot (preset-all runs
+# on a fresh machine-id), and its wait-online then times out on every boot —
+# networkd manages no links here — leaving the system degraded. First match
+# wins across preset files, so these lines shadow the systemd defaults.
+disable systemd-networkd.service
+disable systemd-networkd.socket
+disable systemd-networkd-wait-online.service
