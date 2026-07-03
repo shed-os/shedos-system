@@ -275,6 +275,7 @@ post_install() {
     _strip_leaked_installer_launcher
     _clean_recovery_stash_residue
     _fix_vconsole_keymap
+    _dedupe_tmp_fstab
     _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens
     # Lift the cmdline into /etc/kernel/cmdline for the signed-UKI boot path;
@@ -868,6 +869,20 @@ _fix_vconsole_keymap() {
     echo "  → replaced console-less KEYMAP=$keymap with us in $conf"
 }
 
+_dedupe_tmp_fstab() {
+    # The installer's fstab step added a tmpfs /tmp line on SSDs even though
+    # /tmp is the @tmp btrfs subvolume — systemd's fstab-generator errors on
+    # the duplicate every boot and the tmpfs line is dead (the subvol wins).
+    local fstab=/etc/fstab
+    [[ -f $fstab ]] || return 0
+    awk '$1 !~ /^#/ && $2 == "/tmp" && $4 ~ /subvol/ { found=1 } END { exit !found }' "$fstab" \
+        || return 0
+    if grep -qE '^[[:space:]]*tmpfs[[:space:]]+/tmp[[:space:]]+tmpfs[[:space:]]' "$fstab"; then
+        sed -i -E '/^[[:space:]]*tmpfs[[:space:]]+\/tmp[[:space:]]+tmpfs[[:space:]]/d' "$fstab"
+        echo "  → dropped the duplicate tmpfs /tmp line from $fstab"
+    fi
+}
+
 _clean_recovery_stash_residue() {
     # The tour empties the recovery-key stash once the user acknowledges it,
     # but on installs whose stash dir was root-owned the unlink failed and a
@@ -943,6 +958,7 @@ post_upgrade() {
     _strip_leaked_installer_launcher
     _clean_recovery_stash_residue
     _fix_vconsole_keymap
+    _dedupe_tmp_fstab
     # Must precede anything that could re-trigger mkinitcpio.
     _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens
