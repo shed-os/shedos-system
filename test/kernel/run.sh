@@ -154,6 +154,33 @@ fi
 rm -rf "$t6"
 
 # ---------------------------------------------------------------------------
+# K6b: on UEFI the boot payload is UKIs, so ANY raw vmlinuz/initramfs on the
+#      ESP is pre-UKI vestige from a migrated install — it strands space and
+#      starves the UKIs on a tight ESP. Reap them all, including an installed
+#      kernel's, while leaving the UKIs untouched. (Regression: the reap used
+#      to run on BIOS only, so migrated UEFI boxes never reclaimed the space.)
+# ---------------------------------------------------------------------------
+t6b=$(mktemp -d)
+mkdir -p "$t6b/modules/9.9-zen" "$t6b/boot" "$t6b/esp/EFI/Linux"
+echo linux-zen > "$t6b/modules/9.9-zen/pkgbase"
+: > "$t6b/esp/limine.conf"                        # marks $t6b/esp as a live ESP
+: > "$t6b/esp/EFI/Linux/shedos-linux-zen.efi"     # the real UEFI boot payload
+printf 'vestige\n' > "$t6b/esp/vmlinuz-linux-zen"          # installed, but vestige on UEFI
+printf 'vestige\n' > "$t6b/esp/initramfs-linux-zen.img"
+printf 'stale\n'   > "$t6b/esp/vmlinuz-shedos-kernel"      # retired
+printf 'stale\n'   > "$t6b/esp/initramfs-shedos-kernel.img"
+SHEDOS_LIMINE_CMDLINE="root=UUID=test rw quiet" SHEDOS_FIRMWARE=uefi \
+SHEDOS_BOOT_DIR="$t6b/boot" SHEDOS_MODULES_DIR="$t6b/modules" \
+SHEDOS_ESP_DIRS="$t6b/esp" bash "$renderer" >/dev/null 2>&1
+leftover=$(find "$t6b/esp" -maxdepth 1 \( -name 'vmlinuz-*' -o -name 'initramfs-*.img' \) 2>/dev/null)
+if [[ -z $leftover && -e "$t6b/esp/EFI/Linux/shedos-linux-zen.efi" ]]; then
+    _ok K6b_uefi_reaps_all_raw_images
+else
+    _fail K6b_uefi_reaps_all_raw_images "leftover=[$leftover] uki_present=$([[ -e $t6b/esp/EFI/Linux/shedos-linux-zen.efi ]] && echo y || echo n)"
+fi
+rm -rf "$t6b"
+
+# ---------------------------------------------------------------------------
 # K7: the regression that bricked the fleet — when an image won't fit, the
 #     renderer must FAIL LOUD (non-zero), never truncate the existing ESP
 #     image, and leave the last-good config untouched. SHEDOS_ESP_FAKE_AVAIL=0

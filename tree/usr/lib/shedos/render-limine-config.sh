@@ -181,12 +181,13 @@ done
 
 failed=0
 
-# ── Reap stale images ─────────────────────────────────────────────────
-# Images for kernels no longer installed (a retired shedos-kernel) keep
-# the FAT volume full forever. Drop anything whose pkgbase isn't in the
-# live boot order, freeing space before the current set is copied in.
+# ── Reap raw kernel images ────────────────────────────────────────────
+# On BIOS these raw images are the boot payload, so keep the ones for an
+# installed kernel and drop only orphans (e.g. a retired shedos-kernel).
+# On UEFI the payload is UKIs and no entry ever references a raw image, so
+# any that exist are pre-UKI vestige from a migrated install — reap them
+# all. Either way this frees the FAT volume before the current set lands.
 for d in "${esp_img_dirs[@]}"; do
-    [[ $FIRMWARE == bios ]] || continue   # UEFI ships UKIs, not raw images
     for img in "$d"/vmlinuz-* "$d"/initramfs-*.img; do
         [[ -e $img ]] || continue
         base=${img##*/}
@@ -196,9 +197,8 @@ for d in "${esp_img_dirs[@]}"; do
             initramfs-*.img)          k=${base#initramfs-}; k=${k%.img} ;;
             *) continue ;;
         esac
-        if ! _is_ordered "$k"; then
-            rm -f -- "$img" && echo "render-limine-config: pruned stale $base from $d"
-        fi
+        [[ $FIRMWARE == bios ]] && _is_ordered "$k" && continue
+        rm -f -- "$img" && echo "render-limine-config: pruned stale $base from $d"
     done
 done
 
