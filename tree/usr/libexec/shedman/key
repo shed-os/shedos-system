@@ -92,6 +92,12 @@ _cmd_status() {
     for dev in "${CONTAINERS[@]}"; do
         echo "$dev:"
         json=$(_dump_json "$dev")
+        if [[ -z $json ]]; then
+            # Reading the LUKS header needs root; without it luksDump is empty.
+            # Say so instead of printing a device with no keyslots under it.
+            echo "  unable to read (try: sudo $PROG --status)"
+            continue
+        fi
         slots=$(jq -r '.keyslots | keys[]' <<<"$json" 2>/dev/null | sort -n)
         for s in $slots; do
             role=$(_role_in_json "$json" "$s")

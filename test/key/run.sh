@@ -77,6 +77,15 @@ else
     _fail C4_status_roles "$out"
 fi
 
+# C5: --status can't read the header (non-root) → points at sudo, not empty slots.
+printf '/dev/mapper/fake\n' > "$d/containers"
+out=$(DUMP_JSON='' _run "$d" --status 2>&1)
+if [[ $out == *"unable to read"* && $out == *"sudo shedman key --status"* && $out != *"slot "* ]]; then
+    _ok C5_status_unreadable_hint
+else
+    _fail C5_status_unreadable_hint "$out"
+fi
+
 # CP1: change-passphrase runs luksChangeKey on every container.
 d=$(_mk_sandbox)
 printf '/dev/mapper/root\n/dev/mapper/swap\n' > "$d/containers"
