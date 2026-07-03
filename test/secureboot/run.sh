@@ -170,6 +170,45 @@ if (( rc == 1 )) && grep -qi 'no boot images' <<<"$out" \
 else _fail C5_verify_no_images_not_vacuous "rc=$rc out=$out (expected 1, no vacuous pass)"; fi
 rm -rf "$t"
 
+# --- C6: status as non-root can't read the root-only ESP -> points at sudo ---
+# (regression: it used to misreport the unreachable ESP as "none placed yet")
+t=$(mktemp -d)
+mkdir -p "$t/keys" "$t/stubs" "$t/esp"                # no EFI/Linux -> ESP unreachable
+_stub_bootctl "$t/stubs/bootctl" enabled user
+_stub_sbverify "$t/stubs/sbverify"
+: > "$t/keys/db.pem"; : > "$t/keys/db.key"
+cat >"$t/stubs/id" <<'IDEOF'
+#!/usr/bin/env bash
+[[ "$1" == -u ]] && { echo 1000; exit 0; }
+exec /usr/bin/id "$@"
+IDEOF
+chmod +x "$t/stubs/id"
+_env "$t"
+out=$(env "${E[@]}" PATH="$t/stubs:$PATH" "$tool" status 2>&1); rc=$?
+if (( rc == 0 )) && grep -qi 'sudo' <<<"$out" \
+   && ! grep -qi 'none placed yet' <<<"$out"; then _ok C6_status_non_root_esp_hint
+else _fail C6_status_non_root_esp_hint "rc=$rc out=$out"; fi
+rm -rf "$t"
+
+# --- C7: status as root with no images -> plain "none placed yet", not the hint
+t=$(mktemp -d)
+mkdir -p "$t/keys" "$t/stubs" "$t/esp/EFI/Linux"      # reachable, empty
+_stub_bootctl "$t/stubs/bootctl" enabled user
+_stub_sbverify "$t/stubs/sbverify"
+: > "$t/keys/db.pem"; : > "$t/keys/db.key"
+cat >"$t/stubs/id" <<'IDEOF'
+#!/usr/bin/env bash
+[[ "$1" == -u ]] && { echo 0; exit 0; }
+exec /usr/bin/id "$@"
+IDEOF
+chmod +x "$t/stubs/id"
+_env "$t"
+out=$(env "${E[@]}" PATH="$t/stubs:$PATH" "$tool" status 2>&1); rc=$?
+if (( rc == 0 )) && grep -qi 'none placed yet' <<<"$out" \
+   && ! grep -qi 'sudo' <<<"$out"; then _ok C7_status_root_no_images_plain
+else _fail C7_status_root_no_images_plain "rc=$rc out=$out"; fi
+rm -rf "$t"
+
 # --- M1: enroll refuses on a BIOS box (rc 2), even as root -----------------
 t=$(mktemp -d); _mutator_setup "$t" 1; _menv "$t"
 out=$(env "${E[@]}" SHEDOS_SECUREBOOT_FORCE_BIOS=1 "$tool" enroll --yes 2>&1); rc=$?

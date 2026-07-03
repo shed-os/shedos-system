@@ -177,15 +177,23 @@ _cmd_status() {
     esac
     if _keys_present; then echo "keys: set up for this machine"
     else echo "keys: not set up for this machine"; fi
-    local u count=0 bad=0
+    local u count=0 bad=0 esp
+    esp=$(_esp_root) || esp=""
     while IFS= read -r u; do
         [[ -z $u ]] && continue
         ((count++))
         "$SBVERIFY" --cert "$KEYDIR/db.pem" "$u" >/dev/null 2>&1 || ((bad++))
     done < <(_list_ukis)
-    if (( count == 0 )); then echo "boot images: none placed yet"
-    elif (( bad == 0 )); then echo "boot images: $count signed and valid"
-    else echo "boot images: $bad of $count NOT valid"; fi
+    if (( count > 0 )); then
+        if (( bad == 0 )); then echo "boot images: $count signed and valid"
+        else echo "boot images: $bad of $count NOT valid"; fi
+    elif [[ -z $esp && "$(id -u)" -ne 0 ]]; then
+        # The ESP is mounted root-only, so a non-root run can't reach it — say so
+        # instead of misreporting an unreadable ESP as having no images placed.
+        echo "boot images: re-run with sudo to inspect (the ESP is root-only)"
+    else
+        echo "boot images: none placed yet"
+    fi
 }
 
 _cmd_verify() {
