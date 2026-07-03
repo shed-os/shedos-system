@@ -274,6 +274,7 @@ post_install() {
     _strip_leaked_welcome_autostart
     _strip_leaked_installer_launcher
     _clean_recovery_stash_residue
+    _fix_vconsole_keymap
     _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens
     # Lift the cmdline into /etc/kernel/cmdline for the signed-UKI boot path;
@@ -852,6 +853,21 @@ _strip_leaked_installer_launcher() {
     rm -f /usr/share/applications/shedos-install.desktop 2>/dev/null || true
 }
 
+_fix_vconsole_keymap() {
+    # The installer's keyboard step used to write the X11 layout name into
+    # /etc/vconsole.conf; layouts with no console keymap (ng, in, …) make
+    # loadkeys fail on every boot. Such layouts are US-ASCII at the console
+    # anyway, so rewrite to us. A loadable keymap is left strictly alone.
+    local conf=/etc/vconsole.conf
+    [[ -f $conf ]] || return 0
+    local keymap
+    keymap=$(sed -n 's/^KEYMAP=//p' "$conf" | head -1 | tr -d '"'"'")
+    [[ -n $keymap && $keymap != us ]] || return 0
+    find /usr/share/kbd/keymaps -name "$keymap.map*" 2>/dev/null | grep -q . && return 0
+    sed -i 's/^KEYMAP=.*/KEYMAP=us/' "$conf"
+    echo "  → replaced console-less KEYMAP=$keymap with us in $conf"
+}
+
 _clean_recovery_stash_residue() {
     # The tour empties the recovery-key stash once the user acknowledges it,
     # but on installs whose stash dir was root-owned the unlink failed and a
@@ -926,6 +942,7 @@ post_upgrade() {
     _strip_leaked_welcome_autostart
     _strip_leaked_installer_launcher
     _clean_recovery_stash_residue
+    _fix_vconsole_keymap
     # Must precede anything that could re-trigger mkinitcpio.
     _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens
