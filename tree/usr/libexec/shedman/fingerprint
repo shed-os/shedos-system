@@ -5,7 +5,10 @@ set -uo pipefail
 
 FPRINT_DEST=net.reactivated.Fprint
 FPRINT_IFACE=net.reactivated.Fprint.Device
-FPRINT_MGR_IFACE=net.reactivated.Fprint.Manager
+
+# fprintd acts on a named user. Under sudo that must be the invoking
+# user — $USER is root there, and enrolling root's finger helps nobody.
+FP_USER=${SUDO_USER:-$USER}
 
 VALID_FINGERS=(
     left-thumb left-index-finger left-middle-finger left-ring-finger left-little-finger
@@ -50,7 +53,7 @@ require_fprintd() {
 device_path() {
     # fprintd-list prints "Device at /net/reactivated/Fprint/Device/N" on stderr
     # for both empty and populated enrollments. Tolerate either by reading both.
-    fprintd-list "$USER" 2>&1 \
+    fprintd-list "$FP_USER" 2>&1 \
         | awk '/Device at/ { print $3; exit }'
 }
 
@@ -62,7 +65,7 @@ is_valid_finger() {
 
 cmd_list() {
     require_fprintd
-    fprintd-list "$USER"
+    fprintd-list "$FP_USER"
 }
 
 cmd_enroll() {
@@ -70,7 +73,7 @@ cmd_enroll() {
     local finger="${1:-right-index-finger}"
     is_valid_finger "$finger" \
         || die "unknown finger '$finger' — see 'shedman fingerprint --help'"
-    fprintd-enroll -f "$finger" "$USER"
+    fprintd-enroll -f "$finger" "$FP_USER"
 }
 
 cmd_delete() {
@@ -85,7 +88,7 @@ cmd_delete() {
     # fprintd's Claim is scoped to its D-Bus connection. gdbus opens
     # a new connection per invocation, so Claim and DeleteEnrolledFinger
     # can't share state. The inline python holds one bus.
-    FPRINT_DEV_PATH="$dev" FPRINT_USER="$USER" FPRINT_FINGER="$finger" \
+    FPRINT_DEV_PATH="$dev" FPRINT_USER="$FP_USER" FPRINT_FINGER="$finger" \
     python3 - <<'PYEOF' || die "could not delete '$finger' — see error above"
 import os, sys, dbus
 bus = dbus.SystemBus()
@@ -114,7 +117,7 @@ PYEOF
 
 cmd_clear() {
     require_fprintd
-    fprintd-delete "$USER"
+    fprintd-delete "$FP_USER"
 }
 
 cmd_detect() {
@@ -164,7 +167,7 @@ cmd_status() {
         printf 'fprintd:     inactive (started on demand by D-Bus activation)\n'
     fi
     printf '\n== Enrollments ==\n'
-    fprintd-list "$USER" 2>&1 | sed -n '/Fingerprints\|^ - #/p'
+    fprintd-list "$FP_USER" 2>&1 | sed -n '/Fingerprints\|^ - #/p'
 }
 
 cmd_test() {
@@ -185,7 +188,7 @@ cmd_test() {
         shift
     done
     [[ -t 0 && -t 1 ]] || die "test must be run interactively in a terminal"
-    fprintd-list "$USER" 2>&1 | grep -q '^ - #' \
+    fprintd-list "$FP_USER" 2>&1 | grep -q '^ - #' \
         || die "no fingers enrolled — run 'shedman fingerprint enroll' first"
 
     cat <<EOF
@@ -204,7 +207,7 @@ EOF
             "$i" "$right_trials"
         read -r _
         local out
-        out=$(fprintd-verify "$USER" 2>&1)
+        out=$(fprintd-verify "$FP_USER" 2>&1)
         if grep -q 'verify-match' <<<"$out"; then
             right_match=$((right_match + 1)); printf '  -> match\n'
         else
@@ -219,7 +222,7 @@ EOF
             "$i" "$wrong_trials"
         read -r _
         local out
-        out=$(fprintd-verify "$USER" 2>&1)
+        out=$(fprintd-verify "$FP_USER" 2>&1)
         if grep -q 'verify-match' <<<"$out"; then
             wrong_match=$((wrong_match + 1)); printf '  -> match (FALSE ACCEPT)\n'
         else
