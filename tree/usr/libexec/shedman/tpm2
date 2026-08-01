@@ -5,6 +5,10 @@ set -uo pipefail
 
 PROG="shedman tpm2"
 CONTAINERS_FILE=${SHEDMAN_TPM2_CONTAINERS:-/etc/shedos/secureboot/containers}
+# Flips a PIN-enrolled box onto systemd-cryptsetup's native unlock path
+# (five PIN attempts, then the passphrase prompt) and back.
+PIN_BOOT=${SHEDMAN_TPM2_PIN_BOOT:-/usr/lib/shedos/tpm2-pin-boot.sh}
+PIN_DROPIN=${SHEDOS_TPM2_PIN_DROPIN:-/etc/systemd/system/systemd-cryptsetup@.service.d/10-shedos-tpm2-pin.conf}
 PCR_PUBKEY=${SHEDMAN_PCR_PUBKEY:-/etc/shedos/secureboot/pcr-public.pem}
 CRYPTTAB=${SHEDMAN_CRYPTTAB:-/etc/crypttab}
 EFI_DIR=${SHEDMAN_EFI_DIR:-/sys/firmware/efi}
@@ -157,6 +161,14 @@ Tradeoff: a TPM2 slot bound to the signing key unlocks for any kernel that key
 has ever signed, so a physical attacker could roll back to an older signed
 kernel. Re-run with --with-pin to also require a PIN at unlock.
 EOF
+    if [[ -n ${WITH_PIN:-} ]]; then
+        cat >&2 <<EOF
+
+--with-pin also changes the boot prompt: it asks for the TPM2 PIN,
+gives up after five wrong entries, and falls back to the passphrase
+prompt. The passphrase and recovery key stay enrolled throughout.
+EOF
+    fi
 }
 
 _enroll_one() {
@@ -205,6 +217,12 @@ case "$action" in
             fi
         done
         (( ${#failed[@]} == 0 )) || exit 1
+        if [[ -n ${WITH_PIN:-} ]]; then
+            "$PIN_BOOT" configure || {
+                echo "$PROG: PIN enrolled but the passphrase fallback did not configure — the boot prompt would ask for the PIN forever. Re-run: sudo $PROG re-enroll --with-pin" >&2
+                exit 1
+            }
+        fi
         ;;
     re-enroll)
         _require_root re-enroll
@@ -223,6 +241,17 @@ case "$action" in
             fi
         done
         (( ${#failed[@]} == 0 )) || exit 1
+        if [[ -n ${WITH_PIN:-} ]]; then
+            "$PIN_BOOT" configure || {
+                echo "$PROG: PIN enrolled but the passphrase fallback did not configure — the boot prompt would ask for the PIN forever. Re-run: sudo $PROG re-enroll --with-pin" >&2
+                exit 1
+            }
+        else
+            "$PIN_BOOT" deconfigure || {
+                echo "$PROG: the PIN boot configuration did not fully revert. Re-run: sudo $PIN_BOOT deconfigure" >&2
+                exit 1
+            }
+        fi
         ;;
     remove)
         _require_root remove
@@ -238,19 +267,46 @@ case "$action" in
             fi
         done
         (( ${#failed[@]} == 0 )) || exit 1
+        "$PIN_BOOT" deconfigure || {
+            echo "$PROG: the PIN boot configuration did not fully revert. Re-run: sudo $PIN_BOOT deconfigure" >&2
+            exit 1
+        }
         ;;
     --status)
         _load_containers
+        pin_seen=
         for dev in "${CONTAINERS[@]}"; do
             dump=$(cryptsetup luksDump "$dev" 2>/dev/null)
             if [[ -z $dump ]]; then
                 echo "  $dev: unable to read (try: sudo $PROG --status)"
             elif grep -q 'systemd-tpm2' <<<"$dump"; then
-                echo "  $dev: TPM2 unlock enrolled"
+                if grep -qE 'tpm2-pin:[[:space:]]*true' <<<"$dump"; then
+                    echo "  $dev: TPM2 unlock enrolled (PIN required at boot)"
+                    pin_seen=1
+                else
+                    echo "  $dev: TPM2 unlock enrolled"
+                fi
             else
                 echo "  $dev: passphrase only (run: sudo $PROG enroll)"
             fi
         done
+        if [[ -n $pin_seen ]]; then
+            if [[ -f $PIN_DROPIN ]]; then
+                cat <<EOF
+
+The boot prompt asks for the TPM2 PIN, gives up after five wrong
+entries, and falls back to the passphrase prompt. The passphrase and
+recovery key stay enrolled throughout.
+EOF
+            else
+                cat <<EOF
+
+WARNING: a PIN is enrolled but the passphrase fallback is not
+configured — the boot prompt would ask for the PIN forever. Fix it:
+sudo $PROG re-enroll --with-pin
+EOF
+            fi
+        fi
         ;;
     *)
         echo "$PROG: unknown option: $action" >&2

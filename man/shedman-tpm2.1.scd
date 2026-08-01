@@ -50,6 +50,12 @@ enrolled first. See *shedman-secureboot*(1).
 	state. Restores resistance to the offline rollback described under THE
 	PASSWORDLESS TRADEOFF; without it, unlock is fully passwordless.
 
+	The boot prompt then asks for the TPM2 PIN, gives up after five wrong
+	entries, and falls back to the passphrase prompt; the passphrase and
+	recovery key stay enrolled throughout. Enrolling with a PIN configures
+	this bounded prompt automatically, and *re-enroll* without
+	*--with-pin* or *remove* restores the default flow.
+
 *-y*, *--yes*
 	Skip the confirmation prompt (non-interactive).
 

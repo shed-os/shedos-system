@@ -283,6 +283,7 @@ post_install() {
     _fix_vconsole_keymap
     _dedupe_tmp_fstab
     _quiet_networkd
+    _heal_tpm2_pin_boot
     _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens
     # Lift the cmdline into /etc/kernel/cmdline for the signed-UKI boot path;
@@ -907,6 +908,24 @@ _quiet_networkd() {
     : > "$sentinel"
 }
 
+_heal_tpm2_pin_boot() {
+    # Boxes that enrolled a TPM2 PIN before the native-path fix would ask
+    # for the PIN forever at boot; flip them onto the bounded path once.
+    local helper=/usr/lib/shedos/tpm2-pin-boot.sh
+    local dropin=/etc/systemd/system/systemd-cryptsetup@.service.d/10-shedos-tpm2-pin.conf
+    local containers=/etc/shedos/secureboot/containers
+    [[ -x $helper && ! -f $dropin && -r $containers ]] || return 0
+    local dev
+    while IFS= read -r dev; do
+        [[ -z $dev || $dev == \#* ]] && continue
+        if cryptsetup luksDump "$dev" 2>/dev/null | grep -qE 'tpm2-pin:[[:space:]]*true'; then
+            "$helper" configure \
+                || echo "shedos-system: the TPM2 PIN passphrase fallback did not configure; run: sudo shedman tpm2 re-enroll --with-pin" >&2
+            return 0
+        fi
+    done < "$containers"
+}
+
 _clean_recovery_stash_residue() {
     # The tour empties the recovery-key stash once the user acknowledges it,
     # but on installs whose stash dir was root-owned the unlink failed and a
@@ -984,6 +1003,7 @@ post_upgrade() {
     _fix_vconsole_keymap
     _dedupe_tmp_fstab
     _quiet_networkd
+    _heal_tpm2_pin_boot
     # Must precede anything that could re-trigger mkinitcpio.
     _migrate_mkinitcpio_hooks
     _backfill_cmdline_ux_tokens

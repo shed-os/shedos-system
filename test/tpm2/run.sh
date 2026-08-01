@@ -44,7 +44,12 @@ EOF
 [[ $1 == -u ]] && { echo "${STUB_UID:-0}"; exit 0; }
 exec /usr/bin/id "$@"
 EOF
-    chmod +x "$d/bin/systemd-cryptenroll" "$d/bin/cryptsetup" "$d/bin/id"
+    cat > "$d/bin/pin-boot" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$d/pinboot.log"
+exit \${PINBOOT_RC:-0}
+EOF
+    chmod +x "$d/bin/systemd-cryptenroll" "$d/bin/cryptsetup" "$d/bin/id" "$d/bin/pin-boot"
     printf '%s\n' "$d"
 }
 
@@ -76,6 +81,8 @@ _run() { # $1=sandbox $2=action ...flags  (env: SB, PCR, CONTAINERS, CRYPTTAB, S
     SHEDMAN_CRYPTTAB="$crypttab" \
     SHEDMAN_EFI_DIR="$efi" \
     SHEDMAN_SECUREBOOT_EFIVAR="$efivar" \
+    SHEDMAN_TPM2_PIN_BOOT="$d/bin/pin-boot" \
+    SHEDOS_TPM2_PIN_DROPIN="${PIN_DROPIN:-$d/pin-dropin.conf}" \
         bash "$verb" "$action" "$@"
 }
 
@@ -145,6 +152,26 @@ if grep -q -- '--tpm2-with-pin=yes' "$d/enroll.log"; then
     _ok T4_with_pin
 else
     _fail T4_with_pin "--with-pin did not append --tpm2-with-pin=yes: $(cat "$d/enroll.log")"
+fi
+# The consent warning must say what the PIN does to the boot prompt.
+err=$(_run "$d" enroll --yes --with-pin 2>&1 >/dev/null)
+if grep -q 'gives up after five wrong entries' <<<"$err"; then
+    _ok T4b_with_pin_warns_boot_prompt
+else
+    _fail T4b_with_pin_warns_boot_prompt "enroll --with-pin consent text missing the boot-prompt warning: $err"
+fi
+# --with-pin must configure the native boot path; a plain enroll must not.
+if grep -qx 'configure' "$d/pinboot.log" 2>/dev/null; then
+    _ok T4c_with_pin_configures_boot_path
+else
+    _fail T4c_with_pin_configures_boot_path "pin-boot configure never ran: $(cat "$d/pinboot.log" 2>/dev/null)"
+fi
+rm -f "$d/pinboot.log"
+_run "$d" enroll --yes >/dev/null 2>&1
+if [[ ! -f $d/pinboot.log ]]; then
+    _ok T4d_plain_enroll_leaves_boot_path
+else
+    _fail T4d_plain_enroll_leaves_boot_path "plain enroll touched pin-boot: $(cat "$d/pinboot.log")"
 fi
 rm -rf "$d"
 
@@ -238,6 +265,26 @@ else
     _fail T9b_status_passphrase_only "status misreported a passphrase-only disk: $out"
 fi
 rm -rf "$d"
+# A PIN-carrying token must be called out, and a missing passphrase
+# fallback is the one state status must never stay quiet about.
+d=$(_mk_sandbox 0 $'Tokens:\n  0: systemd-tpm2\n\ttpm2-pin: true')
+printf '/dev/mapper/root\n' > "$d/containers"
+out=$(_run "$d" --status 2>/dev/null)
+if grep -q 'PIN required at boot' <<<"$out" \
+   && grep -q 'passphrase fallback is not' <<<"$out"; then
+    _ok T9c_status_warns_unconfigured_pin
+else
+    _fail T9c_status_warns_unconfigured_pin "status hid the missing fallback: $out"
+fi
+# With the drop-in in place, status reports the bounded prompt instead.
+: > "$d/pin-dropin.conf"
+out=$(_run "$d" --status 2>/dev/null)
+if grep -q 'falls back to the passphrase prompt' <<<"$out"; then
+    _ok T9d_status_reports_bounded_prompt
+else
+    _fail T9d_status_reports_bounded_prompt "status missed the configured fallback: $out"
+fi
+rm -rf "$d"
 
 # --------------------------------------------------------------------------
 # T10: an empty container set fails loud (no cryptenroll) — never a silent
@@ -279,6 +326,51 @@ if (( rc != 0 )) && [[ ! -f $d/enroll.log ]]; then
 else
     _fail T12_enroll_needs_root "enroll ran without root (rc=$rc)"
 fi
+rm -rf "$d"
+
+# --------------------------------------------------------------------------
+# T13: tpm2-pin-boot.sh — the native-path flip itself: drop-in written,
+#      cmdline gains tpm2-device=auto, UKIs rebuild, all idempotent, and
+#      deconfigure restores the exact original state.
+# --------------------------------------------------------------------------
+helper=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/tpm2-pin-boot.sh
+d=$(mktemp -d); mkdir -p "$d/bin"
+cat > "$d/bin/build-uki" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$d/builduki.log"; exit 0
+EOF
+cat > "$d/bin/cryptsetup" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$d/bin/build-uki" "$d/bin/cryptsetup"
+printf 'rd.luks.name=U=lr rd.luks.options=discard,tries=0 root=/dev/mapper/lr rw quiet\n' > "$d/cmdline"
+cp "$d/cmdline" "$d/cmdline.orig"
+printf '/dev/mapper/root\n' > "$d/containers"
+_helper() {
+    SHEDOS_TPM2_PIN_DROPIN="$d/dropins/10-shedos-tpm2-pin.conf" \
+    SHEDOS_TPM2_PIN_CMDLINES="$d/cmdline" \
+    SHEDOS_TPM2_PIN_BUILD_UKI="$d/bin/build-uki" \
+    SHEDOS_TPM2_PIN_CONTAINERS="$d/containers" \
+    PATH="$d/bin:$PATH" \
+        bash "$helper" "$@"
+}
+_helper configure
+ok=1
+grep -q 'SYSTEMD_CRYPTSETUP_USE_TOKEN_MODULE=0' "$d/dropins/10-shedos-tpm2-pin.conf" 2>/dev/null || ok=0
+grep -q 'rd\.luks\.options=discard,tries=0,tpm2-device=auto' "$d/cmdline" || ok=0
+[[ $(wc -l < "$d/builduki.log") -eq 1 ]] || ok=0
+if (( ok )); then _ok T13a_configure; else _fail T13a_configure "dropin/cmdline/rebuild wrong: $(cat "$d/cmdline") | $(cat "$d/builduki.log" 2>/dev/null)"; fi
+_helper configure
+if [[ $(wc -l < "$d/builduki.log") -eq 1 ]]; then _ok T13b_configure_idempotent; else _fail T13b_configure_idempotent "rebuild ran again on a no-op configure"; fi
+_helper deconfigure
+ok=1
+[[ ! -f $d/dropins/10-shedos-tpm2-pin.conf ]] || ok=0
+cmp -s "$d/cmdline" "$d/cmdline.orig" || ok=0
+[[ $(wc -l < "$d/builduki.log") -eq 2 ]] || ok=0
+if (( ok )); then _ok T13c_deconfigure_restores; else _fail T13c_deconfigure_restores "revert incomplete: $(cat "$d/cmdline")"; fi
+_helper deconfigure
+if [[ $(wc -l < "$d/builduki.log") -eq 2 ]]; then _ok T13d_deconfigure_idempotent; else _fail T13d_deconfigure_idempotent "rebuild ran again on a no-op deconfigure"; fi
 rm -rf "$d"
 
 # --------------------------------------------------------------------------

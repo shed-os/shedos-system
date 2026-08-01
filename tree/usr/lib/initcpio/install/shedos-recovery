@@ -4,6 +4,14 @@
 # full system, which resets the counter once the greeter is up.
 
 build() {
+    # TPM2-PIN boxes carry a drop-in that flips systemd-cryptsetup onto
+    # its native unlock path (five PIN attempts, then the passphrase
+    # prompt). It has to ride into the initrd; no-op everywhere else.
+    local pin_dropin=/etc/systemd/system/systemd-cryptsetup@.service.d/10-shedos-tpm2-pin.conf
+    if [[ -f $pin_dropin ]]; then
+        add_file "$pin_dropin"
+    fi
+
     add_binary /usr/bin/btrfs
     # initrd-recovery.sh is #!/bin/bash and uses bashisms ([[, ((, =~,
     # $(<file)); a systemd initrd carries only busybox /bin/sh, so bash

@@ -162,6 +162,8 @@ package() {
     # stages the hook; without these lines none of the machinery ships.
     install -Dm755 tree/usr/lib/shedos/reencrypt-driver.sh \
         "$pkgdir/usr/lib/shedos/reencrypt-driver.sh"
+    install -Dm755 tree/usr/lib/shedos/tpm2-pin-boot.sh \
+        "$pkgdir/usr/lib/shedos/tpm2-pin-boot.sh"
     install -Dm644 tree/usr/lib/systemd/system/shedos-reencrypt.service \
         "$pkgdir/usr/lib/systemd/system/shedos-reencrypt.service"
     install -Dm755 tree/usr/lib/initcpio/install/shedos-reencrypt \
