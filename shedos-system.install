@@ -155,7 +155,13 @@ _bootstrap_greetd() {
     local pam_src=/usr/share/shedos/greetd/greetd.pam
     local pam_dst=/etc/pam.d/greetd
     if [[ -f $pam_src ]]; then
-        if [[ ! -f $pam_dst ]] || ! grep -q 'shedos-managed' "$pam_dst"; then
+        # Stock, unmanaged, or an older shedos revision resyncs (the
+        # superseded copy is kept beside it once); a current managed copy
+        # with local edits gets the new version as .shedosnew instead.
+        if [[ ! -f $pam_dst ]] || ! grep -q 'shedos-managed v2' "$pam_dst"; then
+            if [[ -f $pam_dst ]] && ! cmp -s "$pam_src" "$pam_dst"; then
+                cp -a "$pam_dst" "$pam_dst.shedosold"
+            fi
             install -Dm644 "$pam_src" "$pam_dst"
         elif ! cmp -s "$pam_src" "$pam_dst"; then
             install -Dm644 "$pam_src" "$pam_dst.shedosnew"
