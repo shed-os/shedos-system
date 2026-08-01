@@ -12,6 +12,22 @@ build() {
         add_file "$pin_dropin"
     fi
 
+    # One prompt that takes a PIN, a passphrase, or a recovery key, handed to
+    # systemd-cryptsetup as a credential so it never asks a second time.
+    # cryptsetup is here for the keyslot test, not to open anything.
+    add_binary /usr/bin/cryptsetup
+    add_binary /usr/bin/systemd-ask-password
+    add_file /usr/lib/shedos/shedos-unlock
+    add_systemd_unit shedos-unlock.service
+    add_systemd_unit shedos-unlock-disarm.service
+    # mkinitcpio has no add_systemd_drop_in, and the drop-in is what orders
+    # every generated systemd-cryptsetup@ instance after the prompt.
+    add_file /usr/lib/systemd/system/systemd-cryptsetup@.service.d/10-shedos-unlock.conf
+    cd "$BUILDROOT" || return 1
+    mkdir -p usr/lib/systemd/system/initrd.target.wants
+    ln -sf ../shedos-unlock-disarm.service \
+        usr/lib/systemd/system/initrd.target.wants/shedos-unlock-disarm.service
+
     add_binary /usr/bin/btrfs
     # initrd-recovery.sh is #!/bin/bash and uses bashisms ([[, ((, =~,
     # $(<file)); a systemd initrd carries only busybox /bin/sh, so bash
@@ -19,7 +35,6 @@ build() {
     add_binary /usr/bin/bash
     add_file /usr/lib/shedos/initrd-recovery.sh
     add_systemd_unit shedos-initrd-recovery.service
-    cd "$BUILDROOT" || return 1
     mkdir -p usr/lib/systemd/system/initrd-root-fs.target.wants
     ln -sf ../shedos-initrd-recovery.service \
         usr/lib/systemd/system/initrd-root-fs.target.wants/shedos-initrd-recovery.service

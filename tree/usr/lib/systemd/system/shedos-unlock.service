@@ -1,0 +1,24 @@
+[Unit]
+Description=Ask once for the disk secret
+Documentation=man:shedman-tpm2(1)
+# Initrd-only, and only where something is actually encrypted.
+DefaultDependencies=no
+ConditionPathExists=/etc/initrd-release
+ConditionKernelCommandLine=rd.luks.name
+# Ordering only against what has to exist first -- the block devices. Nothing
+# here may order against cryptsetup.target or initrd-root-device.target: both
+# sit downstream of the unlock this feeds, so either would close a cycle and
+# systemd would silently drop an edge to break it.
+After=cryptsetup-pre.target systemd-udevd.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/shedos/shedos-unlock arm
+# Bounded on purpose, and set above three full prompt timeouts plus the device
+# wait. Waiting forever would turn "no password agent came up" into a box that
+# hangs at boot with nothing on screen; when this expires systemd asks for the
+# passphrase itself, which is exactly today's behaviour.
+TimeoutStartSec=360

@@ -164,6 +164,14 @@ package() {
         "$pkgdir/usr/lib/shedos/reencrypt-driver.sh"
     install -Dm755 tree/usr/lib/shedos/tpm2-pin-boot.sh \
         "$pkgdir/usr/lib/shedos/tpm2-pin-boot.sh"
+    install -Dm755 tree/usr/lib/shedos/shedos-unlock \
+        "$pkgdir/usr/lib/shedos/shedos-unlock"
+    install -Dm644 tree/usr/lib/systemd/system/shedos-unlock.service \
+        "$pkgdir/usr/lib/systemd/system/shedos-unlock.service"
+    install -Dm644 tree/usr/lib/systemd/system/shedos-unlock-disarm.service \
+        "$pkgdir/usr/lib/systemd/system/shedos-unlock-disarm.service"
+    install -Dm644 tree/usr/lib/systemd/system/systemd-cryptsetup@.service.d/10-shedos-unlock.conf \
+        "$pkgdir/usr/lib/systemd/system/systemd-cryptsetup@.service.d/10-shedos-unlock.conf"
     install -Dm644 tree/usr/lib/systemd/system/shedos-reencrypt.service \
         "$pkgdir/usr/lib/systemd/system/shedos-reencrypt.service"
     install -Dm755 tree/usr/lib/initcpio/install/shedos-reencrypt \

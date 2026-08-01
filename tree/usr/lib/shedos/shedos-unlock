@@ -1,0 +1,286 @@
+#!/bin/bash
+# One boot prompt that takes whichever secret the user has.
+#
+# systemd asks for a TPM2 PIN and a LUKS passphrase separately, because the chip
+# and the LUKS header are different validators, and it only offers the second
+# after the first has given up. A user holding a recovery key therefore meets a
+# prompt that will not accept it.
+#
+# Rather than unlock anything ourselves, ask once and hand the answer to
+# systemd-cryptsetup the way it already expects to receive one: as a credential.
+# It picks the credential up per container, so both the root and the swap
+# container open from the single answer, and a passphrase is matched against
+# every keyslot -- which spelling of the recovery key the user kept does not
+# matter.
+#
+#   arm      ask once, leave the answer in the credstore
+#   disarm   shred it again once the containers are open
+#
+# Opening the containers here instead would not work: systemd-cryptsetup has no
+# early "already open" check, so it asks for a password first and only then
+# notices the volume exists. That is the second prompt this exists to remove.
+#
+# Every failure path is a no-op: the script exits and systemd's stock flow
+# prompts exactly as it does today. It can leave the boot no worse than it
+# found it.
+set -uo pipefail
+
+CMDLINE=${SHEDOS_UNLOCK_CMDLINE:-/proc/cmdline}
+# ImportCredential= reads the credstore, not /run/credentials -- that tree is
+# systemd's output, one directory per unit, written when the unit starts.
+CREDSTORE=${SHEDOS_UNLOCK_CREDSTORE:-/run/credstore}
+PROMPT=${SHEDOS_UNLOCK_PROMPT:-"Enter your PIN, passphrase, or recovery key"}
+TRIES=${SHEDOS_UNLOCK_TRIES:-3}
+# Slow disks can take a moment to show up under /dev/disk/by-uuid. Waiting
+# matters more than it looks: the keyslot test on a missing device fails the
+# same way a wrong answer does, so without this a correct passphrase could be
+# rejected three times on a slow box.
+SETTLE_SECONDS=${SHEDOS_UNLOCK_SETTLE_SECONDS:-30}
+# systemd-ask-password's own default, and the right bound here for the same
+# reason: an unanswered prompt has to hand back to systemd's rather than sit
+# there. Nothing is lost by timing out -- the stock prompt takes the same
+# passphrase, and rd.luks.options carries tries=0, so it asks until answered.
+ASK_SECONDS=${SHEDOS_UNLOCK_ASK_SECONDS:-90}
+# Where the cryptsetup generator leaves its per-container units, and where a
+# runtime drop-in overriding one belongs.
+GENDIR=${SHEDOS_UNLOCK_GENDIR:-/run/systemd/generator}
+RUNSYSTEMD=${SHEDOS_UNLOCK_RUNSYSTEMD:-/run/systemd/system}
+DAEMON_RELOAD=${SHEDOS_UNLOCK_DAEMON_RELOAD:-"systemctl daemon-reload"}
+
+# The two names systemd-cryptsetup imports. Which one is written depends on
+# what the answer proved to be: a keyslot match becomes the passphrase
+# credential and the TPM is taken out of the boot entirely (_suppress_tpm2);
+# only an answer no keyslot accepts is offered to the chip, as a PIN. So a
+# passphrase or recovery-key boot never costs the TPM anything -- only a wrong
+# answer does, and that cost is bounded. test/unlock/tpm2.sh pins both down.
+CRED_PASSPHRASE=cryptsetup.passphrase
+CRED_PIN=cryptsetup.tpm2-pin
+
+_log() { echo "shedos-unlock: $*" >&2; }
+
+# Encrypted containers, from the kernel command line. The containers file the
+# rest of the tooling uses lives on the root filesystem, which is precisely
+# what is still locked at this point.
+_containers() {
+    local w
+    for w in $(< "$CMDLINE"); do
+        case $w in
+            rd.luks.name=*)
+                w=${w#rd.luks.name=}
+                # UUID=NAME
+                printf '%s\t%s\n' "${w%%=*}" "${w#*=}"
+                ;;
+        esac
+    done
+}
+
+# Does this secret open the container through an ordinary keyslot? Covers the
+# passphrase and every recovery-key spelling in one test, and never touches the
+# TPM, so a wrong guess costs nothing.
+_keyslot_takes() {  # $1=device $2=secret-file
+    cryptsetup open --test-passphrase --key-file="$2" "$1" >/dev/null 2>&1
+}
+
+# A PIN cannot be checked without spending a TPM attempt, so the only thing
+# worth knowing locally is whether a PIN is even possible here. Where no
+# container carries a TPM2 token, an answer no keyslot took is simply wrong and
+# the user is better off being asked again than watching the boot fail.
+_has_tpm2_token() {  # $1=device
+    # Matched on the whole token line rather than anywhere in the dump: the
+    # header is attacker-influenced in the sense that any token type can be
+    # imported, and a loose match would let an unrelated token decide that a
+    # wrong answer must be a PIN. jq would be the obvious tool and is not in
+    # the initrd.
+    cryptsetup luksDump "$1" 2>/dev/null \
+        | grep -qE '^[[:space:]]+[0-9]+:[[:space:]]+systemd-tpm2[[:space:]]*$'
+}
+
+# Every container, or none of them. A credential is global: one that a
+# container's keyslots reject would be retried against it forever under
+# tries=0, so an answer is only worth storing once it has been proved against
+# all of them. Settling for the containers that turned up in time would mean
+# storing a secret the late one might refuse.
+_wait_for_devices() {  # $@=devices
+    local deadline=$(( SECONDS + SETTLE_SECONDS )) dev missing
+    while :; do
+        missing=0
+        for dev; do
+            [[ -e $dev ]] || missing=1
+        done
+        (( missing )) || return 0
+        (( SECONDS < deadline )) || break
+        sleep 0.5
+    done
+    _log "gave up waiting for $* to appear"
+    return 1
+}
+
+# systemd refuses credstore entries that anyone but root can read, and does it
+# quietly, so the modes here are load-bearing rather than tidiness.
+_store_credential() {  # $1=name $2=secret-file
+    install -d -m 0700 "$CREDSTORE" || return 1
+    install -m 0400 "$2" "$CREDSTORE/$1"
+}
+
+# Take the TPM out of this boot's unlock path.
+#
+# Offering the chip a secret it will reject is not a single wasted attempt: it
+# retries, on every container at once, until the whole dictionary-attack
+# allowance is gone and the TPM locks out -- so a passphrase boot would disable
+# the PIN. Once a keyslot has accepted the answer the TPM has nothing left to
+# contribute, so drop tpm2-device= for this boot and never approach it.
+#
+# The generator has already written a complete unit per container. Its
+# ExecStart line is edited rather than rebuilt: the device path and key file
+# carry through byte for byte, and only the options field changes. Rebuilding
+# it from the command line would risk getting a device wrong, and a wrong
+# device here is an unbootable machine.
+_suppress_tpm2() {
+    local unit base dropin exec_line new count=0
+    for unit in "$GENDIR"/systemd-cryptsetup@*.service; do
+        [[ -f $unit ]] || continue
+        exec_line=$(grep -m1 '^ExecStart=' "$unit") || continue
+        [[ $exec_line == *tpm2-device=* ]] || continue
+        # Drop the option and any comma it brought with it, then tidy a comma
+        # left stranded against the closing quote.
+        new=$(printf '%s' "$exec_line" | sed -E "s/tpm2-device=[^,']*,?//; s/,'/'/")
+        [[ $new == ExecStart=* && $new != *tpm2-device=* ]] || continue
+        base=${unit##*/}
+        dropin="$RUNSYSTEMD/$base.d"
+        mkdir -p "$dropin" || continue
+        printf '[Service]\nExecStart=\n%s\n' "$new" > "$dropin/50-shedos-no-tpm2.conf" || continue
+        count=$((count + 1))
+    done
+    (( count )) || return 1
+    $DAEMON_RELOAD || return 1
+    _log "took the TPM out of this boot for $count container(s)"
+}
+
+_shred() {  # $1=path
+    [[ -e $1 ]] || return 0
+    chmod 0600 "$1" 2>/dev/null
+    command -v shred >/dev/null 2>&1 && shred -u "$1" 2>/dev/null && return 0
+    : > "$1" 2>/dev/null
+    rm -f "$1" 2>/dev/null
+}
+
+disarm() {
+    _shred "$CREDSTORE/$CRED_PASSPHRASE"
+    _shred "$CREDSTORE/$CRED_PIN"
+    rmdir "$CREDSTORE" 2>/dev/null
+    return 0
+}
+
+arm() {
+    # Assigned empty, not just declared: an unencrypted box never enters the
+    # loop below, and under `set -u` a declared-but-unassigned array makes
+    # ${#devs[@]} a fatal error rather than zero.
+    local -a devs=() names=()
+    local uuid name
+    while IFS=$'\t' read -r uuid name; do
+        [[ -n $uuid ]] || continue
+        devs+=("/dev/disk/by-uuid/$uuid")
+        names+=("$name")
+    done < <(_containers)
+
+    (( ${#devs[@]} )) || { _log "no encrypted containers on the command line"; return 0; }
+
+    _wait_for_devices "${devs[@]}" || return 0
+
+    local dev tpm2=0
+    for dev in "${devs[@]}"; do
+        _has_tpm2_token "$dev" && { tpm2=1; break; }
+    done
+
+    local rundir=${SHEDOS_UNLOCK_RUNDIR:-/run/shedos-unlock}
+    install -d -m 0700 "$rundir" 2>/dev/null || return 0
+    local secret="$rundir/secret"
+
+    local attempt
+    for (( attempt = 1; attempt <= TRIES; attempt++ )); do
+        ( umask 077; : > "$secret" ) || return 0
+        # --no-tty routes this through the running agent, which is the Plymouth
+        # prompt the user is already looking at.
+        if ! systemd-ask-password --no-tty --icon=drive-harddisk \
+                --timeout="$ASK_SECONDS" --id="shedos-unlock" \
+                "$PROMPT" > "$secret" 2>/dev/null; then
+            _log "no answer; leaving the stock prompt to it"
+            break
+        fi
+        [[ -s $secret ]] || break
+        # systemd-ask-password terminates the answer with a newline; a keyslot
+        # secret does not include it.
+        printf '%s' "$(< "$secret")" > "$secret"
+
+        local took=0
+        for dev in "${devs[@]}"; do
+            _keyslot_takes "$dev" "$secret" && took=$((took + 1))
+        done
+
+        if (( took == ${#devs[@]} )); then
+            _log "answer matches a keyslot on all ${#devs[@]} container(s)"
+            # Order matters: the TPM has to be out of the picture before the
+            # credential goes in, or systemd may reach the chip first and
+            # hammer it with a passphrase it was never going to accept.
+            if (( tpm2 )) && ! _suppress_tpm2; then
+                # Boot anyway. A hammered TPM locks the PIN out for a while and
+                # recovers on its own; a box that will not unlock does not.
+                _log "could not take the TPM out of this boot; the PIN may lock out"
+            fi
+            _store_credential "$CRED_PASSPHRASE" "$secret"
+            _shred "$secret"
+            rmdir "$rundir" 2>/dev/null
+            return 0
+        fi
+
+        if (( took )); then
+            # Opens some but not all -- containers with different passphrases.
+            # Storing it would unlock the ones that take it and hang the ones
+            # that do not, so this is the case that has to go back to systemd,
+            # which asks per container and gets the right answer for each.
+            _log "answer opens $took of ${#devs[@]} containers; leaving all of them to systemd"
+            _shred "$secret"
+            rmdir "$rundir" 2>/dev/null
+            return 0
+        fi
+
+        if (( tpm2 )); then
+            # No keyslot took it, and a TPM2 token is enrolled, so it is either
+            # the PIN or wrong -- and only the chip can tell the two apart.
+            #
+            # Only the PIN goes in. Storing it as a passphrase too would be
+            # storing a secret we have just proved no keyslot accepts, and
+            # systemd prefers a credential over asking: with rd.luks.options
+            # carrying tries=0 it would retry that same wrong secret forever,
+            # never prompting, and the boot would hang on a silent spinner.
+            # A wrong PIN cannot hang like that: systemd retries the unseal a
+            # handful of times, the chip refuses, and it falls back to asking
+            # in the ordinary way. The bounded cost lands on the TPM's
+            # dictionary-attack allowance, not on the boot.
+            _log "no keyslot matched; handing the answer to the TPM"
+            _store_credential "$CRED_PIN" "$secret"
+            _shred "$secret"
+            rmdir "$rundir" 2>/dev/null
+            return 0
+        fi
+
+        _log "attempt $attempt of $TRIES did not match any keyslot"
+    done
+
+    _shred "$secret"
+    rmdir "$rundir" 2>/dev/null
+    return 0
+}
+
+# Sourcing the script exposes the helpers without unlocking anything, which is
+# how the test suite exercises them.
+if [[ ${BASH_SOURCE[0]} == "${0}" ]]; then
+    case ${1:-arm} in
+        arm) arm ;;
+        disarm) disarm ;;
+        *) _log "usage: shedos-unlock [arm|disarm]" ;;
+    esac
+    # Never fail the boot: a non-zero exit here would order-fail the units that
+    # want us, and systemd's own prompt is a complete fallback.
+    exit 0
+fi

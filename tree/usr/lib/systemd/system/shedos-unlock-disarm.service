@@ -1,0 +1,23 @@
+[Unit]
+Description=Shred the disk secret handed to systemd-cryptsetup
+Documentation=man:shedman-tpm2(1)
+# /run survives the switch to the real root, so without this the passphrase
+# would sit in the credstore for the rest of the uptime. Runs in the initrd
+# once the containers are open, and again on the real system in case the initrd
+# leg never got there.
+DefaultDependencies=no
+# The directory, not one file inside it. Keying this on the passphrase meant a
+# boot unlocked by PIN -- which writes only the PIN -- never cleaned up, and
+# left the PIN readable in /run for the rest of the session.
+ConditionPathExists=/run/credstore
+After=cryptsetup.target initrd-root-device.target
+Before=initrd-switch-root.target sysinit.target
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/shedos/shedos-unlock disarm
+
+[Install]
+WantedBy=initrd.target sysinit.target
