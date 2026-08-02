@@ -476,6 +476,10 @@ package() {
         "$pkgdir/usr/lib/systemd/system/shedos-retire-kernel.service"
     install -Dm755 tree/usr/lib/shedos/nvidia-reap \
         "$pkgdir/usr/lib/shedos/nvidia-reap"
+    install -Dm755 tree/usr/lib/shedos/shell-migrate \
+        "$pkgdir/usr/lib/shedos/shell-migrate"
+    install -Dm644 tree/usr/lib/systemd/system/shedos-shell-migrate.service \
+        "$pkgdir/usr/lib/systemd/system/shedos-shell-migrate.service"
     install -Dm644 tree/usr/lib/systemd/system/shedos-nvidia-reap.service \
         "$pkgdir/usr/lib/systemd/system/shedos-nvidia-reap.service"
     # First match wins across preset files: keeps first-boot preset-all from
@@ -606,8 +610,8 @@ package() {
     # `--complete-{bash,zsh,fish}`.
     install -Dm644 tree/usr/share/zsh/site-functions/_shedman \
         "$pkgdir/usr/share/zsh/site-functions/_shedman"
-    install -Dm644 tree/etc/bash_completion.d/shedman \
-        "$pkgdir/etc/bash_completion.d/shedman"
+    install -Dm644 tree/usr/share/bash-completion/completions/shedman \
+        "$pkgdir/usr/share/bash-completion/completions/shedman"
     install -Dm644 tree/usr/share/fish/vendor_completions.d/shedman.fish \
         "$pkgdir/usr/share/fish/vendor_completions.d/shedman.fish"
 

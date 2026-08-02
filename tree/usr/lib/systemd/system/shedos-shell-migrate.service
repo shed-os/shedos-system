@@ -1,0 +1,11 @@
+[Unit]
+Description=Move existing users onto the bash default once
+ConditionPathExists=/usr/lib/shedos/shell-migrate
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/shedos/shell-migrate
+
+[Install]
+WantedBy=multi-user.target

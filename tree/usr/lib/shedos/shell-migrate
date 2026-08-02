@@ -1,0 +1,58 @@
+#!/bin/bash
+# Move zsh users onto bash once, seed the bash dotfiles where that is
+# provably safe, and disarm. Doubt leaves a user untouched.
+set -uo pipefail
+
+PASSWD=${SHEDOS_SM_PASSWD:-/etc/passwd}
+SKEL=${SHEDOS_SM_SKEL:-/etc/skel}
+CHSH=${SHEDOS_SM_CHSH:-chsh}
+HOME_ROOT=${SHEDOS_SM_HOME_ROOT:-}
+
+# A seed may only overwrite the stock skel pair from the bash package;
+# anything else is a user's file. sha256 of each shipped version:
+#   bash 5.3.15-1
+STOCK_SHA=(
+    959bc596166c9758fdd68836581f6b8f1d6fdb947d580bf24dce607998a077b8  # .bashrc
+    e149407c2bee17779caec70a7edd3d0000d172e7e4347429b80cb4d55bcec9c2  # .bash_profile
+)
+
+_disarm() { systemctl disable shedos-shell-migrate.service 2>/dev/null || true; }
+
+_stockish() {  # $1=path — absent, or matching a stock hash
+    [[ ! -e $1 ]] && return 0
+    local h s
+    h=$(sha256sum "$1" | cut -d' ' -f1)
+    for s in "${STOCK_SHA[@]}"; do [[ $h == "$s" ]] && return 0; done
+    return 1
+}
+
+_seed() {  # $1=home $2=uid $3=gid
+    local f
+    for f in .bashrc .bash_profile; do
+        [[ -f $SKEL/$f ]] || continue
+        if _stockish "$1/$f"; then
+            install -m 0644 -o "$2" -g "$3" "$SKEL/$f" "$1/$f" \
+                && echo "shell-migrate: seeded $1/$f"
+        else
+            echo "shell-migrate: kept customized $1/$f (shedman config --sync offers the update)"
+        fi
+    done
+}
+
+main() {
+    local user uid gid home shell
+    while IFS=: read -r user _ uid gid _ home shell; do
+        [[ $shell == /usr/bin/zsh ]] || continue
+        [[ $uid -ge 1000 || $user == root ]] || continue
+        if [[ -n $HOME_ROOT ]]; then home="$HOME_ROOT$home"; fi
+        if ! "$CHSH" -s /usr/bin/bash "$user"; then
+            echo "shell-migrate: chsh failed for $user; left on zsh" >&2
+            continue
+        fi
+        echo "shell-migrate: $user moved to bash"
+        [[ -d $home ]] && _seed "$home" "$uid" "$gid"
+    done < "$PASSWD"
+    _disarm
+}
+
+main "$@"
