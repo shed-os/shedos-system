@@ -975,6 +975,8 @@ post_upgrade() {
     systemctl enable 'btrfs-scrub@-.timer' 2>/dev/null || true
     systemctl enable shedos-nvidia-reap.service 2>/dev/null || true
     systemctl enable shedos-shell-migrate.service 2>/dev/null || true
+    # Bundled-driver payloads used to live here; clear leftovers.
+    rm -rf /usr/share/shedos/aur-pkgs
     # Hibernation retrofit for machines with disk swap; idempotent.
     /usr/lib/shedos/backfill-resume.py || true
     # Advance installs still on the previous default wallpaper.
