@@ -431,5 +431,5 @@ enable = true
 #
 # [[users]]
 # name   = "shedrack"
-# shell  = "/usr/bin/zsh"          # absolute path; applied only at creation
+# shell  = "/usr/bin/bash"          # absolute path; applied only at creation
 # groups = ["wheel", "docker", "libvirt"]
