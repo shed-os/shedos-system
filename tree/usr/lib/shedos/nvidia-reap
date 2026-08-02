@@ -1,0 +1,46 @@
+#!/bin/bash
+# Remove the nvidia stack where no nvidia device exists; mark it
+# explicit where one does. Runs once, disables itself. Doubt keeps.
+set -uo pipefail
+
+STACK=(nvidia-open-dkms nvidia-utils nvidia-settings nvidia-prime
+       libva-nvidia-driver nvidia-container-toolkit libnvidia-container
+       libxnvctrl egl-wayland egl-wayland2 egl-gbm egl-x11 eglexternalplatform
+       linux-firmware-nvidia)
+SYS=${SHEDOS_NVIDIA_SYS:-/sys/bus/pci/devices}
+PACMAN=${SHEDOS_NVIDIA_PACMAN:-pacman}
+
+_disarm() { systemctl disable shedos-nvidia-reap.service 2>/dev/null || true; }
+
+# 0 = keep: nvidia found, or nothing readable to prove its absence.
+_keep() {
+    local v any=0
+    for v in "$SYS"/*/vendor; do
+        [[ -r $v ]] || continue
+        any=1
+        [[ $(<"$v") == 0x10de ]] && return 0
+    done
+    (( any == 0 ))
+}
+
+main() {
+    local p
+    local -a have=()
+    for p in "${STACK[@]}"; do
+        "$PACMAN" -Qq "$p" >/dev/null 2>&1 && have+=("$p")
+    done
+    if (( ${#have[@]} == 0 )); then
+        _disarm
+        return 0
+    fi
+    if _keep; then
+        "$PACMAN" -D --asexplicit "${have[@]}" >/dev/null \
+            || echo "nvidia-reap: could not mark the stack explicit" >&2
+    else
+        "$PACMAN" -Rns --noconfirm "${have[@]}" \
+            || echo "nvidia-reap: removal refused; stack left in place" >&2
+    fi
+    _disarm
+}
+
+main "$@"

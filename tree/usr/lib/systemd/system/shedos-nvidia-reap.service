@@ -1,0 +1,11 @@
+[Unit]
+Description=Reconcile the nvidia stack with the installed hardware
+ConditionPathExists=/usr/lib/shedos/nvidia-reap
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/shedos/nvidia-reap
+
+[Install]
+WantedBy=multi-user.target

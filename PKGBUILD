@@ -474,6 +474,10 @@ package() {
         "$pkgdir/usr/lib/systemd/system/shedos-locale-restore.service"
     install -Dm644 tree/usr/lib/systemd/system/shedos-retire-kernel.service \
         "$pkgdir/usr/lib/systemd/system/shedos-retire-kernel.service"
+    install -Dm755 tree/usr/lib/shedos/nvidia-reap \
+        "$pkgdir/usr/lib/shedos/nvidia-reap"
+    install -Dm644 tree/usr/lib/systemd/system/shedos-nvidia-reap.service \
+        "$pkgdir/usr/lib/systemd/system/shedos-nvidia-reap.service"
     # First match wins across preset files: keeps first-boot preset-all from
     # enabling networkd on a NetworkManager system.
     install -Dm644 tree/usr/lib/systemd/system-preset/00-shedos.preset \
