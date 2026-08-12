@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# The one writer of the ShedOS blocks in /etc/pacman.conf.
+#
+#   pacman-fence render <stable|canary> [--commented]
+#       the canonical fenced block for one channel, on stdout
+#
+#   pacman-fence rewrite [--canary-enabled]
+#       a pacman.conf on stdin, the same file with exactly one canonical copy
+#       of both blocks on stdout
+#
+# The rewrite drops every existing copy of either block — fenced or bare, in
+# any order — and appends the canonical pair, canary first. pacman hands a
+# package to the first repo that lists it, so that order is what lets an
+# enabled canary override stable during an RC soak. It also squeezes trailing
+# blank lines, because the append adds one and running twice must produce the
+# same bytes as running once.
+#
+# The channel names and URLs come from the shedman config, with the values
+# ShedOS ships compiled in as defaults, so an absent or unreadable file
+# changes nothing.
+set -uo pipefail
+
+CONFIG=${SHEDMAN_CONFIG:-/etc/shedman/shedman.toml}
+
+_config() {
+    local key=$1 value
+    value=$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*\"\([^\"]*\)\".*/\1/p" \
+        "$CONFIG" 2>/dev/null | head -1)
+    printf '%s\n' "${value:-$2}"
+}
+
+STABLE_REPO=$(_config repo shedos)
+STABLE_URL=$(_config repo-url 'https://repo.shedos.org/stable/$arch')
+CANARY_REPO=$(_config canary-repo shedostest)
+CANARY_URL=$(_config canary-url 'https://repo.shedos.org/test/$arch')
+SIGLEVEL='Required DatabaseRequired'
+
+die() { printf 'pacman-fence: %s\n' "$*" >&2; exit 2; }
+
+open_marker()  { printf '# >>> %s <<<\n' "$1"; }
+close_marker() { printf '# <<< %s >>>\n' "$1"; }
+
+render() {
+    local channel=$1 c=${2:-}
+    case $channel in
+        stable)
+            open_marker "$STABLE_REPO"
+            printf '# Managed by shedos-system; do not edit between these markers.\n'
+            printf '# Run `pacman -R shedos-system` to remove automatically.\n'
+            printf '%s[%s]\n' "$c" "$STABLE_REPO"
+            printf '%sSigLevel = %s\n' "$c" "$SIGLEVEL"
+            printf '%sServer = %s\n' "$c" "$STABLE_URL"
+            close_marker "$STABLE_REPO"
+            ;;
+        canary)
+            open_marker "$CANARY_REPO"
+            printf '# ShedOS canary channel; RC packages land here before they are promoted\n'
+            printf '# to the stable channel behind [%s]. Listed first: pacman prefers the\n' "$STABLE_REPO"
+            printf '# first repo that carries a package, so enabling this is what makes an RC\n'
+            printf '# install track the canary. Enable or comment the three lines below as one\n'
+            printf '# to opt in or out; RC installs ship it enabled, stable installs commented.\n'
+            printf '%s[%s]\n' "$c" "$CANARY_REPO"
+            printf '%sSigLevel = %s\n' "$c" "$SIGLEVEL"
+            printf '%sServer = %s\n' "$c" "$CANARY_URL"
+            close_marker "$CANARY_REPO"
+            ;;
+        *) die "no such channel: $channel" ;;
+    esac
+}
+
+strip() {
+    # A bare block runs to the next section, the next blank line or the next
+    # fence marker, so a block sitting immediately above one is never
+    # swallowed with it.
+    awk -v stable="$STABLE_REPO" -v canary="$CANARY_REPO" '
+        $0 == "# >>> " stable " <<<"  { skip = 1; next }
+        $0 == "# <<< " stable " >>>"  { skip = 0; next }
+        $0 == "# >>> " canary " <<<"  { skip = 1; next }
+        $0 == "# <<< " canary " >>>"  { skip = 0; next }
+        $0 == "[" stable "]" || $0 == "[" canary "]" { skip = 2; next }
+        skip == 2 && (/^\[/ || /^[[:space:]]*$/ || /^# >>> /) { skip = 0 }
+        !skip { print }
+    '
+}
+
+rewrite() {
+    local c=$1 body
+    body=$(strip)
+    printf '%s\n\n' "$body"
+    render canary "$c"
+    printf '\n'
+    render stable
+}
+
+(( $# > 0 )) || die 'usage: pacman-fence render <stable|canary> [--commented] | rewrite [--canary-enabled]'
+verb=$1; shift
+
+case $verb in
+    render)
+        (( $# > 0 )) || die 'render takes a channel'
+        channel=$1; shift
+        commented=
+        [[ ${1:-} == --commented ]] && commented='#'
+        render "$channel" "$commented"
+        ;;
+    rewrite)
+        commented='#'
+        [[ ${1:-} == --canary-enabled ]] && commented=
+        rewrite "$commented"
+        ;;
+    *) die "no such command: $verb" ;;
+esac

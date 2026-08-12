@@ -17,12 +17,63 @@ _ok()  { echo "ok: $1"; }
 _bad() { echo "FAIL: $1" >&2; fail=1; }
 
 # The scriptlet is pure function definitions; source it and drive
-# _add_shedos_repo through its test-harness path overrides.
+# _add_shedos_repo through its test-harness path overrides. The blocks it
+# writes come from the library beside it rather than the installed one.
+fence=$repo_root/tree/usr/lib/shedos/pacman-fence
+export SHEDOS_PACMAN_FENCE=$fence
 # shellcheck source=/dev/null
 source "$install_file"
 
+# The canonical pair, byte for byte, as it read before there was a library to
+# write it. Anything the library changes about this text changes what lands in
+# every /etc/pacman.conf on the fleet, so it is pinned rather than described.
+read -r -d '' want_pair <<'EOF'
+# >>> shedostest <<<
+# ShedOS canary channel; RC packages land here before they are promoted
+# to the stable channel behind [shedos]. Listed first: pacman prefers the
+# first repo that carries a package, so enabling this is what makes an RC
+# install track the canary. Enable or comment the three lines below as one
+# to opt in or out; RC installs ship it enabled, stable installs commented.
+#[shedostest]
+#SigLevel = Required DatabaseRequired
+#Server = https://repo.shedos.org/test/$arch
+# <<< shedostest >>>
+
+# >>> shedos <<<
+# Managed by shedos-system; do not edit between these markers.
+# Run `pacman -R shedos-system` to remove automatically.
+[shedos]
+SigLevel = Required DatabaseRequired
+Server = https://repo.shedos.org/stable/$arch
+# <<< shedos >>>
+EOF
+
+if [[ "$(bash "$fence" render canary --commented; echo; bash "$fence" render stable)" == "$want_pair" ]]; then
+    _ok "T0 the library writes the block the scriptlet used to write"
+else
+    _bad "T0 the library writes the block the scriptlet used to write"
+    diff <(printf '%s\n' "$want_pair") \
+         <(bash "$fence" render canary --commented; echo; bash "$fence" render stable) >&2
+fi
+
+if [[ "$(SHEDMAN_CONFIG=/nonexistent bash "$fence" render stable)" \
+      == "$(bash "$fence" render stable)" ]]; then
+    _ok "T0 no config file changes nothing"
+else
+    _bad "T0 no config file changes nothing"
+fi
+
+
 td=$(mktemp -d)
 trap 'rm -rf "$td"' EXIT
+
+printf 'repo = "mirror"\nrepo-url = "https://mirror.example/stable/$arch"\n' > "$td/cfg.toml"
+if SHEDMAN_CONFIG=$td/cfg.toml bash "$fence" render stable \
+        | grep -qxF 'Server = https://mirror.example/stable/$arch'; then
+    _ok "T0 the channel comes out of the config when one names it"
+else
+    _bad "T0 the channel comes out of the config when one names it"
+fi
 
 _base_conf() {
     cat <<'EOF'

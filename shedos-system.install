@@ -58,53 +58,22 @@ _add_shedos_repo() {
         : > "$sentinel"
     fi
 
+    # One writer for these blocks: /usr/lib/shedos/pacman-fence holds the
+    # text and the strip-then-append, and this decides what to ask it for.
+    # Missing means the package is half-installed, and rewriting the file
+    # from a scriptlet that cannot see the canonical text is worse than
+    # leaving it for the next transaction.
+    local fence=${SHEDOS_PACMAN_FENCE:-/usr/lib/shedos/pacman-fence}
+    [[ -x $fence ]] || return 0
+
+    local canary=()
+    (( testing_enabled == 1 )) && canary=(--canary-enabled)
+
     local tmp
     tmp=$(mktemp)
-
-    # Drop every existing copy of both blocks (fenced or bare) so exactly
-    # one canonical pair remains after the append. The bare scans also stop
-    # at any fence marker so an adjacent block without a blank separator is
-    # never swallowed.
-    awk '
-        /^# >>> shedos <<<$/                                { skip=1; next }
-        /^# <<< shedos >>>$/                                { skip=0; next }
-        /^# >>> shedostest <<<$/                            { skip=1; next }
-        /^# <<< shedostest >>>$/                            { skip=0; next }
-        /^\[shedos\][[:space:]]*$/                          { skip=2; next }
-        /^\[shedostest\][[:space:]]*$/                      { skip=2; next }
-        skip==2 && (/^\[/ || /^[[:space:]]*$/ || /^# >>> /) { skip=0 }
-        !skip                                               { print }
-    ' "$pacman_conf" > "$tmp"
-    # Squeeze trailing blank lines so the blank the append adds below doesn't
-    # accumulate one copy per run — the rewrite must be byte-idempotent.
-    printf '%s\n' "$(< "$tmp")" > "$tmp"
-
-    # Comment prefix for the canary lines; the whole block toggles as one.
-    local c="#"
-    [[ $testing_enabled == 1 ]] && c=""
-
-    cat >> "$tmp" <<EOF
-
-# >>> shedostest <<<
-# ShedOS canary channel; RC packages land here before they are promoted
-# to the stable channel behind [shedos]. Listed first: pacman prefers the
-# first repo that carries a package, so enabling this is what makes an RC
-# install track the canary. Enable or comment the three lines below as one
-# to opt in or out; RC installs ship it enabled, stable installs commented.
-${c}[shedostest]
-${c}SigLevel = Required DatabaseRequired
-${c}Server = https://repo.shedos.org/test/\$arch
-# <<< shedostest >>>
-
-# >>> shedos <<<
-# Managed by shedos-system; do not edit between these markers.
-# Run \`pacman -R shedos-system\` to remove automatically.
-[shedos]
-SigLevel = Required DatabaseRequired
-Server = https://repo.shedos.org/stable/\$arch
-# <<< shedos >>>
-EOF
-    install -Dm644 "$tmp" "$pacman_conf"
+    if bash "$fence" rewrite "${canary[@]}" < "$pacman_conf" > "$tmp"; then
+        install -Dm644 "$tmp" "$pacman_conf"
+    fi
     rm -f "$tmp"
 }
 
