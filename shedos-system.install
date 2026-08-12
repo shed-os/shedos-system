@@ -80,6 +80,9 @@ _add_shedos_repo() {
     tmp=$(mktemp)
     if bash "$fence" rewrite "${canary[@]}" < "$pacman_conf" > "$tmp"; then
         install -Dm644 "$tmp" "$pacman_conf"
+    else
+        printf 'shedos-system: %s could not rewrite %s; left alone\n' \
+            "$fence" "$pacman_conf" >&2
     fi
     rm -f "$tmp"
 }

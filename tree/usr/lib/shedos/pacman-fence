@@ -33,10 +33,16 @@
 # enabled canary override stable during an RC soak, and what keeps a declared
 # repository from quietly outranking both.
 #
-# A block between the markers is ours: a hand-written one for a repository
+# A block between the markers is ours when the marker names something pacman
+# would take as a repository section, and it is left exactly where it sits when
+# it does not. Of the ones that are ours: a hand-written block for a repository
 # nobody declared is reconciled away on the next run, and an edit inside one
 # lasts until then. That is the whole of the do-not-edit contract the markers
 # state.
+#
+# A rewrite that cannot read the whole file prints nothing and exits nonzero.
+# Half a pacman.conf is a machine that can reach no repository at all, so a
+# caller must never be handed one to install.
 #
 # The rewrite squeezes trailing blank lines, because the append adds one and
 # running twice must produce the same bytes as running once.
@@ -62,6 +68,14 @@ CANARY_URL=$(_config canary-url 'https://repo.shedos.org/test/$arch')
 SIGLEVEL='Required DatabaseRequired'
 
 die() { printf 'pacman-fence: %s\n' "$*" >&2; exit 2; }
+
+# What pacman will take as a section, and what this may safely use as the name
+# of a capture file. `.` and `..` are the reason the second half is not a
+# by-product of the first: a name that resolves to a directory turns the
+# capture into a redirect awk cannot open, and awk dies mid-file.
+NAME_RE='^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$'
+
+valid_repo_name() { [[ $1 =~ $NAME_RE ]]; }
 
 open_marker()  { printf '# >>> %s <<<\n' "$1"; }
 close_marker() { printf '# <<< %s >>>\n' "$1"; }
@@ -117,15 +131,16 @@ render_repo() {  # $1=name $2=server $3=siglevel
 # runs to the next section, the next blank line or the next marker, so a block
 # sitting immediately above one is never swallowed with it.
 strip() {
-    awk -v capture="$1" -v stable="$STABLE_REPO" -v canary="$CANARY_REPO" '
+    awk -v capture="$1" -v stable="$STABLE_REPO" -v canary="$CANARY_REPO" \
+        -v name_re="$NAME_RE" '
         function name_of(line,   n) {
             n = line
             sub(/^# >>> /, "", n); sub(/ <<<$/, "", n)
             return n
         }
-            # A repository name is what pacman will accept as a section, so a
-        # marker carrying anything else is not one of ours to capture.
-        /^# >>> .* <<<$/ && held == "" && name_of($0) ~ /^[A-Za-z0-9._-]+$/ {
+            # A marker carrying anything else names nothing this manages, so it
+        # is left where it sits rather than captured under it.
+        /^# >>> .* <<<$/ && held == "" && name_of($0) ~ name_re {
             held = name_of($0); next
         }
         held != "" && $0 == "# <<< " held " >>>" { held = ""; next }
@@ -159,7 +174,10 @@ rewrite() {  # $1=comment prefix for the canary
     local c=$1 dir text name
     local -a blocks=()
     dir=$(mktemp -d) || die 'no temporary directory'
-    text=$(strip "$dir")
+    # Nothing is printed until the whole file has been read. A pass that ends
+    # early has read part of a pacman.conf, and half of one is a machine that
+    # can reach no repository at all.
+    text=$(strip "$dir") || { rm -rf "$dir"; die 'could not read the file to rewrite'; }
     blocks+=("$(render canary "$c")" "$(render stable)")
     # Whatever else was fenced keeps its place after the channels, in name
     # order, exactly as it was written.
@@ -195,7 +213,7 @@ rewrite_repos() {
     done
 
     dir=$(mktemp -d) || die 'no temporary directory'
-    text=$(strip "$dir")
+    text=$(strip "$dir") || { rm -rf "$dir"; die 'could not read the file to rewrite'; }
     for name in "$CANARY_REPO" "$STABLE_REPO"; do
         block=$(captured "$dir" "$name") && blocks+=("$block")
     done
@@ -217,6 +235,8 @@ reserved() { printf '%s\n%s\n' "$CANARY_REPO" "$STABLE_REPO"; }
 refuse_reserved() {
     [[ $1 == "$STABLE_REPO" || $1 == "$CANARY_REPO" ]] \
         && die "$1 is a ShedOS channel and shedos-system writes it"
+    valid_repo_name "$1" \
+        || die "$1 is not a name pacman would take as a repository section"
     return 0
 }
 

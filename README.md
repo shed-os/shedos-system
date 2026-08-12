@@ -32,9 +32,11 @@ then the declared repositories alphabetically. pacman hands a package to the
 first repository that lists it, so that is what lets an enabled canary override
 stable during an RC soak.
 
-A block between the markers is ours. A hand-written one for a repository nobody
-declared is reconciled away on the next run, and an edit inside one lasts until
-then — declare the repository instead.
+A block between the markers is ours when the marker names something pacman
+would take as a repository section, and is left exactly where it sits when it
+does not. Of the ones that are ours: a hand-written block for a repository
+nobody declared is reconciled away on the next run, and an edit inside one
+lasts until then — declare the repository instead.
 
 ```
 pacman-fence reserved
@@ -53,7 +55,8 @@ the desktop configuration.
 
 ## Tests
 
-Every suite runs from the checkout with no root and no network:
+Every suite runs from the checkout with no network and no root, except
+`unlock`, whose container cases want both and bow out without them:
 
 ```
 for s in test/*/run.sh; do bash "$s"; done
