@@ -104,6 +104,28 @@ if [[ "$(printf '%s\n' "$_odd_conf" \
 else
     _bad "T0 a configured channel name survives both lanes"
 fi
+
+# Which names are reserved is whatever the config says the channels are, not
+# the two ShedOS ships: a literal in either comparison refuses the wrong name
+# on a box that renamed them, and lets the real ones through.
+if [[ "$(SHEDMAN_CONFIG=$td/cfg-odd.toml bash "$fence" reserved)" \
+      == $'my_repo-2-test\nmy_repo-2' ]]; then
+    _ok "T0 the reserved names are the configured channels"
+else
+    _bad "T0 the reserved names are the configured channels: $(SHEDMAN_CONFIG=$td/cfg-odd.toml bash "$fence" reserved | tr '\n' ' ')"
+fi
+for _r in my_repo-2 my_repo-2-test; do
+    if SHEDMAN_CONFIG=$td/cfg-odd.toml bash "$fence" render-repo "$_r" https://example.invalid >/dev/null 2>&1; then
+        _bad "T0 a declaration of the configured channel $_r is refused"
+    else
+        _ok "T0 a declaration of the configured channel $_r is refused"
+    fi
+done
+if SHEDMAN_CONFIG=$td/cfg-odd.toml bash "$fence" render-repo shedos https://example.invalid >/dev/null 2>&1; then
+    _ok "T0 a name that is no longer a channel may be declared"
+else
+    _bad "T0 a name that is no longer a channel may be declared"
+fi
 if SHEDMAN_CONFIG=$td/cfg.toml bash "$fence" render stable \
         | grep -qxF 'Server = https://mirror.example/stable/$arch'; then
     _ok "T0 the channel comes out of the config when one names it"
