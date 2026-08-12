@@ -154,35 +154,28 @@ limit = 50       # NUMBER_LIMIT — max snapshots before oldest get culled
 # [pacman.repos.<name>]; managed stanzas in /etc/pacman.conf
 # ---------------------------------------------------------------------------
 #
-# shedman apply owns a fenced block between `# >>> shedos <<<` and
-# `# <<< shedos >>>` in /etc/pacman.conf. The install scriptlet writes the
-# initial fence on first install; ongoing edits flow through shedman apply.
-#
-# Each repo table below becomes one [<name>] stanza inside the fence.
-# Anything outside the fence (e.g. [core], [extra], [multilib], or the
-# global [options] block) is left strictly alone.
+# Every repository declared here gets a fenced block of its own in
+# /etc/pacman.conf, between `# >>> <name> <<<` and `# <<< <name> >>>`.
+# `shedman apply` writes them; anything outside a fence (e.g. [core],
+# [extra], [multilib], or the global [options] block) is left strictly
+# alone.
 #
 # Required keys per repo:
 #   server   ; the Server URL (supports $arch)
 # Optional:
 #   siglevel ; SigLevel directive (default "Required DatabaseRequired")
 #
-# Dropping the entire [pacman.repos] table removes all managed repos on
-# the next apply (the fence stays empty). Removing a single stanza
-# removes just that repo.
-
-[pacman.repos.shedos]
-server   = "https://repo.shedos.org/stable/$arch"
-siglevel = "Required DatabaseRequired"
-
-# Opt in to the canary (testing) channel by uncommenting the block
-# below. RC packages land here before reaching [shedos]. Stable cuts
-# also publish to /test/x86_64/, so opting in only changes behavior
-# during RC windows.
+# Dropping a table removes that repository's block on the next apply,
+# and dropping the whole [pacman.repos] table removes every one of
+# them. A fenced block for a repository nobody declares is reconciled
+# away the same way, so an edit inside one lasts until the next apply.
 #
-# [pacman.repos.shedostest]
-# server   = "https://repo.shedos.org/test/$arch"
-# siglevel = "Required DatabaseRequired"
+# [shedos] and [shedostest] are NOT declared here. They are the ShedOS
+# channels, shedos-system writes them, and declaring either is refused
+# with an error rather than honoured — two writers of one block is how
+# a mirror you added disappeared on the next pacman transaction. Opt
+# into the canary by uncommenting the three lines inside the
+# `# >>> shedostest <<<` block in /etc/pacman.conf itself.
 
 # Add your own repo:
 # [pacman.repos.my-mirror]

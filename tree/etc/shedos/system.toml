@@ -73,12 +73,12 @@ limit = 50
 # Only declare drop-ins here that aren't already pacman-managed. See the
 # example template for syntax.
 
-# The [shedos] repo stanza in /etc/pacman.conf. The install scriptlet
-# writes an initial fence on first install; ongoing edits flow through
-# `shedman apply` so you can add extra repos or tweak SigLevel here.
-[pacman.repos.shedos]
-server   = "https://repo.shedos.org/stable/$arch"
-siglevel = "Required DatabaseRequired"
+# Extra pacman repositories. Each table below becomes its own fenced
+# block in /etc/pacman.conf, written by `shedman apply` and removed
+# again when you drop the table. The two ShedOS channels are not
+# yours to declare here: shedos-system owns [shedos] and [shedostest]
+# and keeps them right, and naming either is refused. See the example
+# template for the whole contract.
 
 # PostgreSQL bootstrap; mirrors what the install scriptlet enables.
 # Flip either to false to mask the corresponding unit.
