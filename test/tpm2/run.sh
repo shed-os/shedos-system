@@ -10,7 +10,7 @@ set -uo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-verb=$repo_root/packaging/shedos-system/tree/usr/libexec/shedman/tpm2
+verb=$repo_root/tree/usr/libexec/shedman/tpm2
 
 pass=0; fail=0; failures=()
 _ok()   { printf 'ok: %s\n' "$1"; ((pass++)); }
@@ -333,7 +333,7 @@ rm -rf "$d"
 #      cmdline gains tpm2-device=auto, UKIs rebuild, all idempotent, and
 #      deconfigure restores the exact original state.
 # --------------------------------------------------------------------------
-helper=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/tpm2-pin-boot.sh
+helper=$repo_root/tree/usr/lib/shedos/tpm2-pin-boot.sh
 d=$(mktemp -d); mkdir -p "$d/bin"
 cat > "$d/bin/build-uki" <<EOF
 #!/usr/bin/env bash

@@ -10,7 +10,7 @@ set -uo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-install_file=$repo_root/packaging/shedos-system/shedos-system.install
+install_file=$repo_root/shedos-system.install
 
 fail=0
 _ok()  { echo "ok: $1"; }

@@ -9,7 +9,7 @@ set -uo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-tree=$repo_root/packaging/shedos-system/tree
+tree=$repo_root/tree
 placer=$tree/usr/lib/shedos/build-uki.sh
 lib=$tree/usr/lib/shedos/uki-place.sh
 migrate=$tree/usr/lib/shedos/migrate-mkinitcpio-hooks.sh

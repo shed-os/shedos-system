@@ -9,7 +9,7 @@ set -uo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-retire=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/retire-shedos-kernel
+retire=$repo_root/tree/usr/lib/shedos/retire-shedos-kernel
 
 pass=0
 fail=0

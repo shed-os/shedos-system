@@ -8,7 +8,7 @@
 set -uo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-recon=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/encrypt-reconfigure.sh
+recon=$repo_root/tree/usr/lib/shedos/encrypt-reconfigure.sh
 
 pass=0; fail=0; failures=()
 _ok()   { printf 'ok: %s\n' "$1"; pass=$((pass + 1)); }
@@ -136,7 +136,7 @@ cl=$(cat "$d/etc/kernel/cmdline" 2>/dev/null)
 if [[ $cl == *"nvidia_drm.modeset=1"* && $cl == *"mitigations=off"* && $cl == *"root=/dev/mapper/luks-RUUID"* ]]; then _ok RC7_preserves_tuning; else _fail RC7_preserves_tuning "$cl"; fi
 
 # RC8: the PKGBUILD ships the reconfigure lib (the staged-but-not-installed bug).
-pkgbuild=$repo_root/packaging/shedos-system/PKGBUILD
+pkgbuild=$repo_root/PKGBUILD
 if grep -q 'tree/usr/lib/shedos/encrypt-reconfigure.sh' "$pkgbuild" 2>/dev/null; then _ok RC8_packaged; else _fail RC8_packaged "missing install line"; fi
 
 # RC9: a placeholder /etc/kernel/cmdline is ignored; the real cmdline is lifted

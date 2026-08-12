@@ -5,7 +5,7 @@
 set -uo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-sys=$repo_root/packaging/shedos-system/tree
+sys=$repo_root/tree
 helper=$sys/usr/lib/shedos/switch-user
 rule=$sys/usr/share/polkit-1/rules.d/49-shedos-switch-user.rules
 policy=$sys/usr/share/polkit-1/actions/org.shedos.switch-user.policy

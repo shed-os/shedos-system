@@ -8,7 +8,7 @@
 set -uo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-fin=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/encrypt-finalize.sh
+fin=$repo_root/tree/usr/lib/shedos/encrypt-finalize.sh
 
 pass=0; fail=0; failures=()
 _ok()   { printf 'ok: %s\n' "$1"; pass=$((pass + 1)); }

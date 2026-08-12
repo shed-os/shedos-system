@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
-# Guided emergency recovery checks. Auto-discovered by run-shell-tests.sh;
-# hermetic + root-less.
+# Guided emergency recovery checks. Hermetic and root-less; the QEMU proof
+# that boots the composed unit stays with the image build that can run it.
 #   E1  entrypoint + UI parse/compile
 #   E2  fix-action logic (compute_offerable / apply_fix)
 #   E3  mount-report detection (skip network/bind, report a missing local)
 #   E4  drop-in structure (ExecStart reset before override, leading -)
 #   E5  fallback is a clean root shell before sulogin, with a full PATH
 #   E6  systemd-analyze verify of the composed unit (guarded)
-#   E7  end-to-end QEMU proof (self-skips without qemu/kvm/image)
 set -uo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd -- "$here/../.." && pwd)
-tree=$repo/packaging/shedos-system/tree
-lib=$tree/usr/lib/shedos
+tree=$repo/tree
+# The UI imports apply_core, which ships with shedman, so the modules the
+# cases run against are this repository's laid over whatever is installed.
+lib=$(mktemp -d); trap 'rm -rf "$lib"' EXIT
+for _src in /usr/lib/shedos "$tree/usr/lib/shedos"; do
+    [[ -d $_src ]] || continue
+    for _f in "$_src"/*; do ln -sfn "$_f" "$lib/${_f##*/}"; done
+done
 ui=$lib/emergency-recovery-ui.py
 entry=$lib/emergency-recovery
 dropin=$tree/usr/lib/systemd/system/emergency.service.d/50-shedos-guided.conf
@@ -127,23 +132,6 @@ else
         fi
     fi
     rm -rf "$tmp"
-fi
-
-# E7 — end-to-end QEMU proof (exit 77 = skip)
-qemu_assert=$repo/scripts/emergency-boot-assert.sh
-if [[ -x $qemu_assert ]]; then
-    if "$qemu_assert"; then
-        _ok E7_qemu_end_to_end
-    else
-        rc=$?
-        if (( rc == 77 )); then
-            _skip E7_qemu_end_to_end "no qemu/kvm/base image"
-        else
-            _fail E7_qemu_end_to_end "emergency->fix->multi-user failed (rc=$rc)"
-        fi
-    fi
-else
-    _skip E7_qemu_end_to_end "scripts/emergency-boot-assert.sh not present yet"
 fi
 
 echo

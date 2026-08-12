@@ -8,7 +8,7 @@ set -uo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-lib=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/esp-state.sh
+lib=$repo_root/tree/usr/lib/shedos/esp-state.sh
 
 pass=0; fail=0
 _ok()   { printf 'ok: %s\n' "$1"; pass=$((pass + 1)); }

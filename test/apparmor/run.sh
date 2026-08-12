@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Guard the "AppArmor on by default" invariants. Stock linux-zen's
-# CONFIG_LSM omits apparmor, so ShedOS switches it on via the kernel lsm=
-# cmdline — baked into the install-time cmdline for fresh installs and
-# backfilled onto existing installs — with apparmor.service enabled to load
-# the /etc/apparmor.d profile set at boot.
+# Guard the "AppArmor on by default" invariants this package answers for.
+# Stock linux-zen's CONFIG_LSM omits apparmor, so ShedOS switches it on via
+# the kernel lsm= cmdline, backfilled onto existing installs by the scriptlet
+# here with apparmor.service enabled to load the /etc/apparmor.d profile set
+# at boot. The two other halves of the invariant belong to whoever owns them:
+# apparmor being an explicit package root, and the same token being baked into
+# the installer's install-time cmdline.
 
 set -uo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-base_txt=$repo_root/packages/official/base.txt
-bootloader=$repo_root/installer/shedos_installer/core/bootloader.py
-install_scriptlet=$repo_root/packaging/shedos-system/shedos-system.install
+install_scriptlet=$repo_root/shedos-system.install
 
 # Arch's default LSM order with apparmor inserted; lsm= is a full override,
 # so the whole set must be present or an LSM would be silently dropped.
@@ -22,24 +22,6 @@ fail=0
 failures=()
 _ok()   { printf 'ok: %s\n' "$1"; ((pass++)); }
 _fail() { printf 'FAIL: %s — %s\n' "$1" "$2" >&2; failures+=("$1"); ((fail++)); }
-
-# A1: apparmor is an explicit root, so it installs + lands in the closure,
-#     meta, and airootfs.
-if grep -qxF apparmor "$base_txt"; then
-    _ok A1_apparmor_in_base
-else
-    _fail A1_apparmor_in_base "apparmor missing from packages/official/base.txt"
-fi
-
-# A2: the exact LSM token is baked into the install-time cmdline, so a fresh
-#     install is enforcing from the very first boot (before any apply). The
-#     exact-string match also guards against an LSM being dropped by a typo.
-if grep -qF "$lsm_token" "$bootloader"; then
-    _ok A2_lsm_baked_into_install_cmdline
-else
-    _fail A2_lsm_baked_into_install_cmdline \
-        "exact lsm token not found in bootloader.py _build_cmdline"
-fi
 
 # A3: existing installs get the same token via the upgrade backfill.
 if grep -q '_backfill_apparmor_lsm' "$install_scriptlet" \

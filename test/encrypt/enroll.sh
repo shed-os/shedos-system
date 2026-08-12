@@ -9,8 +9,8 @@
 set -uo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-enroller=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/encrypt-enroll.sh
-keyverb=$repo_root/packaging/shedos-system/tree/usr/libexec/shedman/key
+enroller=$repo_root/tree/usr/lib/shedos/encrypt-enroll.sh
+keyverb=$repo_root/tree/usr/libexec/shedman/key
 
 pass=0; fail=0; failures=()
 _ok()   { printf 'ok: %s\n' "$1"; pass=$((pass + 1)); }
@@ -210,7 +210,7 @@ d=$(_mk_sandbox)
 printf 'phase=flip-pending\nenroll_containers=/dev/disk/by-uuid/AA\n' > "$d/esp/state"
 printf 'diskpw' > "$d/esp/key"; chmod 600 "$d/esp/key"
 DUMP_JSON='{"keyslots":{"0":{}},"tokens":{}}' _run_enroll "$d" >/dev/null 2>&1
-val=$(ESP_STATE_FILE="$d/esp/state" bash -c "source '$repo_root/packaging/shedos-system/tree/usr/lib/shedos/esp-state.sh'; esp_state_get enroll_containers")
+val=$(ESP_STATE_FILE="$d/esp/state" bash -c "source '$repo_root/tree/usr/lib/shedos/esp-state.sh'; esp_state_get enroll_containers")
 if [[ -z $val ]]; then _ok EN12_clears_handoff; else _fail EN12_clears_handoff "enroll_containers=[$val]"; fi
 
 # EN13a/b/c: _machine_key classifies a machine with NO stashed key — mint when
@@ -229,7 +229,7 @@ if [[ ${r%%|*} == 1 && -z ${r#*|} ]]; then _ok EN13c_loud_on_partial; else _fail
 
 # EN9: the unit self-gates on the ESP state file, is a oneshot, runs the enroller,
 # and is pulled into multi-user.target.
-unit=$repo_root/packaging/shedos-system/tree/usr/lib/systemd/system/shedos-encrypt-enroll.service
+unit=$repo_root/tree/usr/lib/systemd/system/shedos-encrypt-enroll.service
 if grep -q '^ConditionPathExists=/boot/efi/shedos-encrypt/state$' "$unit" 2>/dev/null \
    && grep -q '^Type=oneshot$' "$unit" 2>/dev/null \
    && grep -q '^ExecStart=/usr/lib/shedos/encrypt-enroll.sh$' "$unit" 2>/dev/null \
@@ -241,8 +241,8 @@ fi
 
 # EN10: the scriptlet enables the unit on install AND upgrade, and the PKGBUILD
 # ships both files (the staged-but-not-installed class of bug).
-scriptlet=$repo_root/packaging/shedos-system/shedos-system.install
-pkgbuild=$repo_root/packaging/shedos-system/PKGBUILD
+scriptlet=$repo_root/shedos-system.install
+pkgbuild=$repo_root/PKGBUILD
 n=$(grep -c 'systemctl enable shedos-encrypt-enroll.service' "$scriptlet" 2>/dev/null)
 if (( n >= 2 )) \
    && grep -q 'tree/usr/lib/shedos/encrypt-enroll.sh' "$pkgbuild" 2>/dev/null \

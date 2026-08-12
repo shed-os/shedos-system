@@ -8,8 +8,8 @@
 set -uo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-verb=$repo_root/packaging/shedos-system/tree/usr/libexec/shedman/encrypt
-esp_lib=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/esp-state.sh
+verb=$repo_root/tree/usr/libexec/shedman/encrypt
+esp_lib=$repo_root/tree/usr/lib/shedos/esp-state.sh
 
 pass=0; fail=0; failures=()
 _ok()   { printf 'ok: %s\n' "$1"; pass=$((pass + 1)); }
@@ -166,7 +166,7 @@ else
 fi
 
 # AR9: the encrypt verb is in the PKGBUILD's _libexec_shedman install array.
-if grep -A4 '_libexec_shedman=(' "$repo_root/packaging/shedos-system/PKGBUILD" 2>/dev/null | grep -qw encrypt; then _ok AR9_packaged; else _fail AR9_packaged "encrypt not in _libexec_shedman"; fi
+if grep -A4 '_libexec_shedman=(' "$repo_root/PKGBUILD" 2>/dev/null | grep -qw encrypt; then _ok AR9_packaged; else _fail AR9_packaged "encrypt not in _libexec_shedman"; fi
 
 # AR10: a boot-image rebuild failure arms NOTHING — the conf is reverted (no
 # reencrypt hook), no keyfile, no state, no reboot — so a later kernel rebuild

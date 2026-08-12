@@ -5,7 +5,7 @@ from pathlib import Path
 
 SCRIPT = (
     Path(__file__).resolve().parents[2]
-    / "packaging/shedos-system/tree/usr/lib/shedos/backfill-uki-cmdline.py"
+    / "tree/usr/lib/shedos/backfill-uki-cmdline.py"
 )
 
 LIMINE = """\

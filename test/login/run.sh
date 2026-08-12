@@ -3,7 +3,7 @@
 set -uo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-login=$repo_root/packaging/shedos-system/tree/usr/libexec/shedman/login
+login=$repo_root/tree/usr/libexec/shedman/login
 
 pass=0; fail=0
 _ok()   { pass=$((pass+1)); printf 'ok   %s\n' "$1"; }
@@ -45,7 +45,7 @@ for flag in --complete-bash --complete-zsh --complete-fish; do
 done
 
 # --- record-last-login pam_exec marker (Task 10) ---
-marker=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/record-last-login
+marker=$repo_root/tree/usr/lib/shedos/record-last-login
 export SHEDOS_LAST_LOGIN_FILE=$tmp/last-login
 PAM_TYPE=open_session PAM_USER=alice "$marker"
 [[ $(cat "$tmp/last-login" 2>/dev/null) == alice ]] && _ok marker-open || _fail marker-open "got: $(cat "$tmp/last-login" 2>/dev/null)"

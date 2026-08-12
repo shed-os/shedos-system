@@ -9,7 +9,7 @@ set -uo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-verb=$repo_root/packaging/shedos-system/tree/usr/libexec/shedman/key
+verb=$repo_root/tree/usr/libexec/shedman/key
 
 pass=0; fail=0; failures=()
 _ok()   { printf 'ok: %s\n' "$1"; pass=$((pass + 1)); }

@@ -1,72 +1,26 @@
 #!/usr/bin/env bash
-# Guard the shedos-kernel -> linux-zen migration invariants.
+# Guard the boot half of the shedos-kernel -> linux-zen migration.
 #
 # ShedOS no longer vendors a kernel (Arch owns linux-zen's config), so there
-# is no storage-driver config to contract-test. Instead we assert the wiring
-# that keeps the migration correct: linux-zen is the primary kernel, stock
-# linux is an installable fallback, shedos-kernel is fully retired, and the
-# limine renderer + preset still produce a bootable default + recovery entry.
+# is no storage-driver config to contract-test. What this package answers for
+# is the boot payload: the limine renderer and the preset still produce a
+# bootable default plus a recovery entry, and the Secure Boot backends the
+# verbs shell out to are declared. Which packages an install pulls in, and
+# whether the retired kernel is gone from the build wiring, is decided where
+# those lists live rather than here.
 
 set -uo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-base_txt=$repo_root/packages/official/base.txt
-meta_render=$repo_root/scripts/render-meta-depends.sh
-build_script=$repo_root/scripts/build-shedos-packages.sh
-renderer=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/render-limine-config.sh
-preset=$repo_root/packaging/shedos-system/tree/etc/mkinitcpio.d/linux-zen.preset
+renderer=$repo_root/tree/usr/lib/shedos/render-limine-config.sh
+preset=$repo_root/tree/etc/mkinitcpio.d/linux-zen.preset
 
 pass=0
 fail=0
 failures=()
 _ok()   { printf 'ok: %s\n' "$1"; ((pass++)); }
 _fail() { printf 'FAIL: %s — %s\n' "$1" "$2" >&2; failures+=("$1"); ((fail++)); }
-
-# ---------------------------------------------------------------------------
-# K1: linux-zen (primary) + stock linux (fallback), with their headers, are
-#     explicit roots so all four install and land in closure/meta/airootfs.
-# ---------------------------------------------------------------------------
-for pkg in linux-zen linux-zen-headers linux linux-headers; do
-    if grep -qxF "$pkg" "$base_txt"; then
-        _ok "K1_base_has_$pkg"
-    else
-        _fail "K1_base_has_$pkg" "missing from packages/official/base.txt"
-    fi
-done
-
-# ---------------------------------------------------------------------------
-# K2: shedos-kernel is fully retired — no package tree, no build-order entry,
-#     no meta-depends entry. (The shedos-system retirement one-shot may still
-#     name it; we only scan the build/package-set wiring here.)
-# ---------------------------------------------------------------------------
-if [[ -e $repo_root/packaging/shedos-kernel ]]; then
-    _fail K2_package_deleted "packaging/shedos-kernel/ still exists"
-else
-    _ok K2_package_deleted
-fi
-if grep -q 'shedos-kernel' "$build_script"; then
-    _fail K2_build_clean "shedos-kernel still referenced in $build_script"
-else
-    _ok K2_build_clean
-fi
-if grep -q 'shedos-kernel' "$meta_render"; then
-    _fail K2_meta_clean "shedos-kernel still referenced in $meta_render"
-else
-    _ok K2_meta_clean
-fi
-
-# ---------------------------------------------------------------------------
-# K3: the fallback kernel can actually install — stock linux must NOT be
-#     conflicted by shedos-meta (it was, while shedos-kernel was the only
-#     kernel we shipped).
-# ---------------------------------------------------------------------------
-if awk '/^shedos_conflicts=\(/{c=1;next} /^\)/{c=0} c' "$meta_render" \
-        | grep -qE "^[[:space:]]*'?linux'?[[:space:]]*$"; then
-    _fail K3_linux_not_conflicted "stock linux is still in shedos_conflicts"
-else
-    _ok K3_linux_not_conflicted
-fi
 
 # ---------------------------------------------------------------------------
 # K4: ShedOS ships a linux-zen.preset forcing BOTH default + fallback images.
@@ -352,23 +306,10 @@ fi
 rm -rf "$t13"
 
 # ---------------------------------------------------------------------------
-# SB1: Secure Boot / TPM2 / UKI tooling is in the base closure roots so it
-#      lands on every install — sbctl + tpm2-tools backends, and systemd-ukify
-#      the single signer that sbsigns + PCR-11-signs the UKI.
-# ---------------------------------------------------------------------------
-for pkg in sbctl tpm2-tools systemd-ukify; do
-    if grep -qxF "$pkg" "$base_txt"; then
-        _ok "SB1_base_has_$pkg"
-    else
-        _fail "SB1_base_has_$pkg" "missing from packages/official/base.txt"
-    fi
-done
-
-# ---------------------------------------------------------------------------
 # SB2: shedos-system declares the same three as runtime depends so they're
 #      present when the secureboot/tpm2 verbs shell out to them.
 # ---------------------------------------------------------------------------
-sys_pkgbuild=$repo_root/packaging/shedos-system/PKGBUILD
+sys_pkgbuild=$repo_root/PKGBUILD
 for pkg in sbctl tpm2-tools systemd-ukify; do
     if grep -qE "^\s*'$pkg'" "$sys_pkgbuild"; then
         _ok "SB2_depends_has_$pkg"
@@ -382,7 +323,7 @@ done
 #      — the package() install loop fails the build if a name has no tree/
 #      file, so assert both halves together.
 # ---------------------------------------------------------------------------
-libexec_sys=$repo_root/packaging/shedos-system/tree/usr/libexec/shedman
+libexec_sys=$repo_root/tree/usr/libexec/shedman
 for verb in secureboot tpm2; do
     if awk '/_libexec_shedman=\(/,/^[[:space:]]*\)/' "$sys_pkgbuild" \
             | grep -qE "(^|[[:space:]])$verb([[:space:]]|\$)"; then

@@ -9,7 +9,7 @@ set -uo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-verb=$repo_root/packaging/shedos-system/tree/usr/libexec/shedman/encrypt
+verb=$repo_root/tree/usr/libexec/shedman/encrypt
 
 pass=0; fail=0; failures=()
 _ok()   { printf 'ok: %s\n' "$1"; pass=$((pass + 1)); }
@@ -204,7 +204,7 @@ if grep -q 'hunter2-secret' "$d"/*.log 2>/dev/null; then _fail S1_no_secret_argv
 # U1-U2: the reencrypt one-shot is an initrd-only oneshot ordered before
 # sysroot.mount and pulled in by initrd-root-fs.target — and must NOT order after
 # cryptsetup.target (it decides the device's fate) or mount the live root.
-unit=$repo_root/packaging/shedos-system/tree/usr/lib/systemd/system/shedos-reencrypt.service
+unit=$repo_root/tree/usr/lib/systemd/system/shedos-reencrypt.service
 if [[ -f $unit ]] \
    && grep -q '^DefaultDependencies=no$'                        "$unit" \
    && grep -q '^ConditionPathExists=/etc/initrd-release$'       "$unit" \
@@ -221,7 +221,7 @@ if grep -qiE '^(after|wants|requires|bindsto)=.*cryptsetup' "$unit" 2>/dev/null;
 
 # H1-H2: the install hook stages the offline-reencrypt toolchain and symlinks the
 # unit into initrd-root-fs.target.wants (a unit not symlinked there never starts).
-hook=$repo_root/packaging/shedos-system/tree/usr/lib/initcpio/install/shedos-reencrypt
+hook=$repo_root/tree/usr/lib/initcpio/install/shedos-reencrypt
 _h() { grep -q "$1" "$hook" 2>/dev/null; }
 if [[ -f $hook ]] \
    && _h "add_binary /usr/bin/cryptsetup" \
@@ -240,7 +240,7 @@ fi
 if _h 'initrd-root-fs.target.wants/shedos-reencrypt.service'; then _ok H2_hook_enables; else _fail H2_hook_enables "$(grep -n target.wants "$hook" 2>/dev/null)"; fi
 
 # DS1-DS5: _detect_state branches read-only on isLuks + the ESP phase.
-driver=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/reencrypt-driver.sh
+driver=$repo_root/tree/usr/lib/shedos/reencrypt-driver.sh
 _ds() {  # $1=isluks-exit(1=plaintext,0=luks) $2=phase
     local dd; dd=$(_mk_sandbox); mkdir -p "$dd/esp/shedos-encrypt"
     [[ -n $2 ]] && printf 'phase=%s\n' "$2" > "$dd/esp/shedos-encrypt/state"
@@ -320,7 +320,7 @@ if [[ $rc -ne 0 ]]; then _ok RR4_missing_partuuid_fails; else _fail RR4_missing_
 
 # P1: the unit + hook + driver are actually installed by package() — a staged
 # file PKGBUILD never installs ships nothing (the _libexec_shedman class of bug).
-pkgbuild=$repo_root/packaging/shedos-system/PKGBUILD
+pkgbuild=$repo_root/PKGBUILD
 if grep -q 'tree/usr/lib/systemd/system/shedos-reencrypt.service' "$pkgbuild" \
    && grep -q 'tree/usr/lib/initcpio/install/shedos-reencrypt' "$pkgbuild" \
    && grep -q 'tree/usr/lib/shedos/reencrypt-driver.sh' "$pkgbuild"; then

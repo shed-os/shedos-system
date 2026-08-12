@@ -6,7 +6,7 @@
 set -uo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-driver=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/reencrypt-driver.sh
+driver=$repo_root/tree/usr/lib/shedos/reencrypt-driver.sh
 
 if [[ $(id -u) -ne 0 ]] || ! command -v losetup >/dev/null 2>&1; then
     echo "loop-e2e: SKIP (needs root + losetup; the stub layer covers logic in CI)"

@@ -17,7 +17,7 @@ fi
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-recover=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/recover-esp.sh
+recover=$repo_root/tree/usr/lib/shedos/recover-esp.sh
 
 work=$(mktemp -d)
 trap 'umount "$work/mnt" 2>/dev/null; rm -rf "$work"' EXIT

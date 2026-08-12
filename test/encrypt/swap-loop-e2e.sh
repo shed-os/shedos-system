@@ -7,7 +7,7 @@
 set -uo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-driver=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/reencrypt-driver.sh
+driver=$repo_root/tree/usr/lib/shedos/reencrypt-driver.sh
 
 if [[ $(id -u) -ne 0 ]] || ! command -v losetup >/dev/null 2>&1; then
     echo "swap-loop-e2e: SKIP (needs root + losetup; the stub layer covers logic in CI)"
@@ -49,7 +49,7 @@ mkdir -p "$esp/shedos-encrypt"
 kf="$esp/key"; printf 'e2epass' > "$kf"; chmod 600 "$kf"
 
 # shellcheck source=/dev/null
-source "$repo_root/packaging/shedos-system/tree/usr/lib/shedos/esp-state.sh"
+source "$repo_root/tree/usr/lib/shedos/esp-state.sh"
 export ESP_STATE_FILE="$esp/shedos-encrypt/state"
 # Pin the absolute shrink target the way the arm step does (partition size minus the
 # RAM-GiB swap + 32M header), so this exercises the real pinned-target path.

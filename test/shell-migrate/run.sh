@@ -5,8 +5,7 @@ set -uo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-tool=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/shell-migrate
-skel=$repo_root/packaging/shedos-hyprland/tree/etc/skel
+tool=$repo_root/tree/usr/lib/shedos/shell-migrate
 
 pass=0; fail=0; failures=()
 _ok()   { printf 'ok: %s\n' "$1"; pass=$((pass + 1)); }
@@ -30,11 +29,29 @@ echo "\$*" >> "$work/systemctl.log"
 EOF
 chmod +x "$work/bin"/*
 
-# The stock Arch pair, byte-identical to what the hashes in the tool
-# name; taken from the live /etc/skel, which the bash package owns.
-stock_rc=/etc/skel/.bashrc
-stock_profile=/etc/skel/.bash_profile
-[[ -f $stock_rc && -f $stock_profile ]] || { echo "shell-migrate: SKIP (no stock skel to compare)"; exit 0; }
+# The stock pair the tool will overwrite, taken from the live /etc/skel that
+# the bash package owns — and only if it still hashes to what the tool names,
+# because a box whose skel another package has already replaced would hand
+# this a file the tool is right to keep and the case would pass on the wrong
+# reason. SHEDOS_SM_STOCK_SKEL points at a pristine pair on such a box.
+stock_skel=${SHEDOS_SM_STOCK_SKEL:-/etc/skel}
+stock_rc=$stock_skel/.bashrc
+stock_profile=$stock_skel/.bash_profile
+_is_stock() {
+    [[ -f $1 ]] && grep -qF "$(sha256sum "$1" | cut -d' ' -f1)" "$tool"
+}
+if ! _is_stock "$stock_rc" || ! _is_stock "$stock_profile"; then
+    echo "shell-migrate: SKIP (this box's /etc/skel is not the stock pair)"
+    exit 0
+fi
+
+# What the tool seeds from. The files it seeds ship with the desktop package,
+# and the tool's contract is the seeding, not their content — so the fixture
+# is a skel of its own, which also keeps it reliably unlike the stock pair.
+skel=$work/skel
+mkdir -p "$skel"
+printf '# the shell this box ships\n' > "$skel/.bashrc"
+printf '# the profile this box ships\n' > "$skel/.bash_profile"
 
 _run() {
     : > "$work/chsh.log"; : > "$work/systemctl.log"
@@ -46,8 +63,9 @@ _run() {
 }
 
 # Fixture homes: zsh user with stock files, zsh user with a customized
-# rc, a bash user, root on zsh, and a system account on zsh.
-mkdir -p "$work/homes/home/alice" "$work/homes/home/bob" "$work/homes/home/carol" "$work/homes/root"
+# rc, zsh user with no rc at all, a bash user, root on zsh, and a system
+# account on zsh.
+mkdir -p "$work/homes/home"/{alice,bob,carol,dave} "$work/homes/root"
 cp "$stock_rc" "$work/homes/home/alice/.bashrc"
 cp "$stock_profile" "$work/homes/home/alice/.bash_profile"
 printf '# my precious customizations\n' > "$work/homes/home/bob/.bashrc"
@@ -57,6 +75,7 @@ sysacct:x:998:998::/var/empty:/usr/bin/zsh
 alice:x:1000:1000::/home/alice:/usr/bin/zsh
 bob:x:1001:1001::/home/bob:/usr/bin/zsh
 carol:x:1002:1002::/home/carol:/usr/bin/bash
+dave:x:1003:1003::/home/dave:/usr/bin/zsh
 EOF
 _run
 
@@ -76,6 +95,11 @@ if diff -q "$skel/.bashrc" "$work/homes/home/alice/.bashrc" >/dev/null; then
     _ok M3_stock_rc_replaced_with_the_shipped_one
 else
     _fail M3_stock_rc_replaced_with_the_shipped_one "alice's rc not seeded"
+fi
+if diff -q "$skel/.bashrc" "$work/homes/home/dave/.bashrc" >/dev/null; then
+    _ok M3b_absent_rc_seeded
+else
+    _fail M3b_absent_rc_seeded "dave had no rc and did not get one"
 fi
 if [[ $(cat "$work/homes/home/bob/.bashrc") == '# my precious customizations' ]]; then
     _ok M4_customized_rc_kept

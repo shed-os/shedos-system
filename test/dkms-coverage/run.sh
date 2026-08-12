@@ -6,7 +6,7 @@ set -uo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
-cov=$repo_root/packaging/shedos-system/tree/usr/lib/shedos/dkms-coverage
+cov=$repo_root/tree/usr/lib/shedos/dkms-coverage
 
 pass=0
 fail=0
