@@ -210,6 +210,64 @@ else
     _bad "T0 a server URL keeps every character it was given"
 fi
 
+# A marker is only ours if what it names is a name pacman would take as a
+# section. Anything else is left where it sits — and the rest of the file has
+# to come through whatever it was, because this is the one path that decides
+# whether a box can reach any repository at all.
+_odd_marker() {  # $1=case $2=marker name
+    local dir=$td/odd-$1
+    mkdir -p "$dir"
+    { _base_conf; printf '\n# >>> %s <<<\n[weird]\nServer = https://x/\n# <<< %s >>>\n' "$2" "$2"
+      printf '\n[extra]\nInclude = /etc/pacman.d/mirrorlist\n'; } > "$dir/in"
+    if ! bash "$fence" rewrite --canary-enabled < "$dir/in" > "$dir/out" 2>"$dir/err"; then
+        _bad "T0 a marker named $1 leaves the file whole: refused with $(tr -d '\n' < "$dir/err")"
+        return
+    fi
+    if grep -qxF '[core]' "$dir/out" && grep -qxF '[extra]' "$dir/out" \
+        && grep -qF ">>> $2 <<<" "$dir/out" && grep -qxF '[shedos]' "$dir/out"; then
+        _ok "T0 a marker named $1 leaves the file whole"
+    else
+        _bad "T0 a marker named $1 leaves the file whole: $(grep -cE '^\[' "$dir/out") section(s) left"
+    fi
+}
+_odd_marker dotdot '..'
+_odd_marker dot '.'
+_odd_marker overlong "$(printf 'r%.0s' $(seq 1 300))"
+
+# A name pacman would take, however unusual it looks, is still managed: it is
+# captured, carried through and re-ordered after the channels.
+_valid=A_repo-9
+mkdir -p "$td/oddvalid"
+{ _base_conf; printf '\n# >>> %s <<<\n[%s]\nServer = https://x/\n# <<< %s >>>\n' \
+    "$_valid" "$_valid" "$_valid"; } > "$td/oddvalid/in"
+if bash "$fence" rewrite --canary-enabled < "$td/oddvalid/in" > "$td/oddvalid/out" 2>/dev/null \
+    && [[ "$(grep -oE '^#?\[[A-Za-z0-9_.-]+\]$' "$td/oddvalid/out" | tr '\n' ' ')" \
+          == "[options] [core] [extra] [shedostest] [shedos] [$_valid] " ]]; then
+    _ok "T0 an unusual but valid name is still managed"
+else
+    _bad "T0 an unusual but valid name is still managed"
+fi
+
+# A name the library could not manage is refused when it is handed one, rather
+# than half-written.
+if bash "$fence" render-repo 'bad/name' https://x >/dev/null 2>&1 \
+    || bash "$fence" rewrite-repos --repo '..' https://x >/dev/null 2>&1; then
+    _bad "T0 a name pacman would not take is refused"
+else
+    _ok "T0 a name pacman would not take is refused"
+fi
+
+# Nothing may reach stdout when the rewrite cannot finish: a caller that
+# installs a partial file has written a pacman.conf with no repositories in it.
+if TMPDIR=$td/nosuchdir bash "$fence" rewrite --canary-enabled \
+        < "$td/oddvalid/in" > "$td/partial" 2>/dev/null; then
+    _bad "T0 a rewrite that cannot finish refuses"
+elif [[ -s $td/partial ]]; then
+    _bad "T0 a rewrite that cannot finish refuses: it wrote $(wc -c < "$td/partial") byte(s) anyway"
+else
+    _ok "T0 a rewrite that cannot finish refuses"
+fi
+
 # The two writers compose: whichever ran last, the channels come first in
 # canary-then-stable order and the declared repositories follow, and neither
 # touches a block whose name belongs to the other.
