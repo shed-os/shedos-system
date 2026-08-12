@@ -1,0 +1,4 @@
+name = "login"
+package = "shedos-system"
+man = "shedman-login.1"
+description = "show or hide the username field on the login and lock screens"

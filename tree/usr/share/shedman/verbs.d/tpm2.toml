@@ -1,0 +1,4 @@
+name = "tpm2"
+package = "shedos-system"
+man = "shedman-tpm2.1"
+description = "manage TPM2-backed unlock for the encrypted disk"

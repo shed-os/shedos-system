@@ -1,0 +1,4 @@
+name = "secureboot"
+package = "shedos-system"
+man = "shedman-secureboot.1"
+description = "manage Secure Boot keys and the signed boot images"

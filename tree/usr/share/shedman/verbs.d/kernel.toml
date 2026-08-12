@@ -1,0 +1,4 @@
+name = "kernel"
+package = "shedos-system"
+man = "shedman-kernel.1"
+description = "list installed kernels and set the default Limine boot entry"

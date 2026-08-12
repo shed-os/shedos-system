@@ -1,0 +1,5 @@
+name = "lock"
+package = "shedos-system"
+man = "shedman-lock.1"
+description = "lock the session"
+completes = false

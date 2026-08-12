@@ -1,0 +1,4 @@
+name = "fingerprint"
+package = "shedos-system"
+man = "shedman-fingerprint.1"
+description = "manage your fingerprint enrollments"

@@ -1,0 +1,4 @@
+name = "key"
+package = "shedos-system"
+man = "shedman-key.1"
+description = "change the passphrase, manage keyslots, rotate the recovery key"

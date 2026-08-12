@@ -1,0 +1,4 @@
+name = "encrypt"
+package = "shedos-system"
+man = "shedman-encrypt.1"
+description = "encrypt this machine's existing unencrypted disk in place"
