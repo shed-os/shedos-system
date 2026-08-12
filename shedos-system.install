@@ -12,7 +12,9 @@ _add_shedos_repo() {
     # a repo whose db doesn't yet exist (we're building what would land
     # there). Pacstrap and Calamares chroot into a target rootfs, so the
     # marker at container / isn't visible to them; they get normal behavior.
-    [[ -e /.shedos-build-environment ]] && return 0
+    # The path is overridable for the test harness only — the suite that
+    # tests this function runs inside exactly such a container.
+    [[ -e ${SHEDOS_BUILD_MARKER:-/.shedos-build-environment} ]] && return 0
 
     # /etc/pacman.conf is owned by `pacman`; we manage two fenced blocks in
     # it. [shedos] ALWAYS points at the stable channel. [shedostest] carries

@@ -121,12 +121,16 @@ else
     if systemd-analyze verify "$tmp/emergency.service" 2>"$tmp/err"; then
         _ok E6_analyze_verify
     else
-        # A man-less runner makes systemd-analyze exit non-zero just for
-        # failing to render Documentation= links ("Can't show sulogin(8):
-        # Protocol error") — not an override error. Drop those before judging.
-        grep -vE "Can't show .*: Protocol error" "$tmp/err" > "$tmp/err.real" || true
+        # A runner with no manual makes systemd-analyze exit non-zero just
+        # for failing to render Documentation= links — the man helper fails
+        # and the link it was rendering is reported unshowable. Neither is an
+        # error in the override, so drop both before judging.
+        grep -vE "Can't show .*: Protocol error|'\(man\)' failed with exit status" \
+            "$tmp/err" > "$tmp/err.real" || true
         if grep -qiE 'ExecStart|shedos|emergency-recovery' "$tmp/err.real"; then
             _fail E6_analyze_verify "$(cat "$tmp/err.real")"
+        elif [[ ! -s $tmp/err.real ]]; then
+            _ok E6_analyze_verify
         else
             _skip E6_analyze_verify "verify noise unrelated to the override"
         fi

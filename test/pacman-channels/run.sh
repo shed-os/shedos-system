@@ -21,6 +21,9 @@ _bad() { echo "FAIL: $1" >&2; fail=1; }
 # writes come from the library beside it rather than the installed one.
 fence=$repo_root/tree/usr/lib/shedos/pacman-fence
 export SHEDOS_PACMAN_FENCE=$fence
+# The scriptlet is a no-op inside the package-build container, and the suite
+# runs in one, so it is pointed at a marker that is not there.
+export SHEDOS_BUILD_MARKER=/nonexistent
 # shellcheck source=/dev/null
 source "$install_file"
 
@@ -148,6 +151,20 @@ _assert_parses() {
         _bad "$case: pacman-conf rejects the result"
     fi
 }
+
+# The override above must not be the only thing standing between a build
+# container and a rewritten /etc/pacman.conf, so the guard is checked too.
+: > "$td/marker"
+mkdir -p "$td/guard/state"
+_base_conf > "$td/guard/pacman.conf"
+SHEDOS_BUILD_MARKER="$td/marker" SHEDOS_PACMAN_CONF="$td/guard/pacman.conf" \
+SHEDOS_CHANNEL_FILE="$td/guard/channel" SHEDOS_STATE_DIR="$td/guard/state" \
+    _add_shedos_repo
+if ! grep -q 'shedos' "$td/guard/pacman.conf"; then
+    _ok "T0 a build container is left alone"
+else
+    _bad "T0 a build container is left alone"
+fi
 
 # T1: fresh RC install (channel=test, no fences) — canary on, stable [shedos].
 t1=$td/t1
