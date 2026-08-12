@@ -31,6 +31,19 @@ _add_shedos_repo() {
     local state_dir=${SHEDOS_STATE_DIR:-/var/lib/shedos}
     [[ -f $pacman_conf ]] || return 0
 
+    # One writer for these blocks: /usr/lib/shedos/pacman-fence holds the text
+    # and the strip-then-append, and this decides what to ask it for. Checked
+    # before the sentinel below is written, so a transaction that cannot reach
+    # the library does not spend the one-shot heal doing nothing. A scriptlet
+    # must not abort the transaction it runs inside, so this says so and leaves
+    # the file for the next one rather than dying or going quiet.
+    local fence=${SHEDOS_PACMAN_FENCE:-/usr/lib/shedos/pacman-fence}
+    if [[ ! -x $fence ]]; then
+        printf 'shedos-system: %s is missing; %s left alone\n' \
+            "$fence" "$pacman_conf" >&2
+        return 0
+    fi
+
     # Whether [shedostest] should be enabled, decided BEFORE any rewrite.
     # The live Server line is the only reliable signal of the user's current
     # choice — the header and SigLevel lines can be edited independently,
@@ -59,14 +72,6 @@ _add_shedos_repo() {
         mkdir -p "$state_dir"
         : > "$sentinel"
     fi
-
-    # One writer for these blocks: /usr/lib/shedos/pacman-fence holds the
-    # text and the strip-then-append, and this decides what to ask it for.
-    # Missing means the package is half-installed, and rewriting the file
-    # from a scriptlet that cannot see the canonical text is worse than
-    # leaving it for the next transaction.
-    local fence=${SHEDOS_PACMAN_FENCE:-/usr/lib/shedos/pacman-fence}
-    [[ -x $fence ]] || return 0
 
     local canary=()
     (( testing_enabled == 1 )) && canary=(--canary-enabled)

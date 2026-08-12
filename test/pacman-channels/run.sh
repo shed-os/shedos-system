@@ -166,6 +166,21 @@ else
     _bad "T0 a build container is left alone"
 fi
 
+# A library that is not there leaves the file alone, says so, and does not
+# spend the one-shot heal — the next transaction gets its turn.
+mkdir -p "$td/nofence/state"
+_base_conf > "$td/nofence/pacman.conf"
+nofence_err=$(SHEDOS_PACMAN_FENCE="$td/nosuch" SHEDOS_PACMAN_CONF="$td/nofence/pacman.conf" \
+    SHEDOS_CHANNEL_FILE="$td/nofence/channel" SHEDOS_STATE_DIR="$td/nofence/state" \
+    _add_shedos_repo 2>&1)
+if ! grep -q 'shedos' "$td/nofence/pacman.conf" \
+    && grep -q 'is missing' <<<"$nofence_err" \
+    && [[ ! -f $td/nofence/state/.pacman-channels-seeded ]]; then
+    _ok "T0 a missing library says so and keeps the heal"
+else
+    _bad "T0 a missing library says so and keeps the heal: [$nofence_err]"
+fi
+
 # T1: fresh RC install (channel=test, no fences) — canary on, stable [shedos].
 t1=$td/t1
 mkdir -p "$t1"; _base_conf > "$t1/pacman.conf"
