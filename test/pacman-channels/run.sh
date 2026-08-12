@@ -90,6 +90,20 @@ td=$(mktemp -d)
 trap 'rm -rf "$td"' EXIT
 
 printf 'repo = "mirror"\nrepo-url = "https://mirror.example/stable/$arch"\n' > "$td/cfg.toml"
+# A configured channel name has to satisfy the same bound the capture does, or
+# the block would be written and then not found again on the next pass.
+printf 'repo = "my_repo-2"\ncanary-repo = "my_repo-2-test"\n' > "$td/cfg-odd.toml"
+_odd_conf=$(printf '[options]\n' \
+    | SHEDMAN_CONFIG=$td/cfg-odd.toml bash "$fence" rewrite --canary-enabled)
+if [[ "$(printf '%s\n' "$_odd_conf" \
+        | SHEDMAN_CONFIG=$td/cfg-odd.toml bash "$fence" rewrite-repos --repo other https://x/ \
+        | SHEDMAN_CONFIG=$td/cfg-odd.toml bash "$fence" rewrite --canary-enabled \
+        | grep -oE '^\[[A-Za-z0-9_.-]+\]$' | tr '\n' ' ')" \
+      == '[options] [my_repo-2-test] [my_repo-2] [other] ' ]]; then
+    _ok "T0 a configured channel name survives both lanes"
+else
+    _bad "T0 a configured channel name survives both lanes"
+fi
 if SHEDMAN_CONFIG=$td/cfg.toml bash "$fence" render stable \
         | grep -qxF 'Server = https://mirror.example/stable/$arch'; then
     _ok "T0 the channel comes out of the config when one names it"
