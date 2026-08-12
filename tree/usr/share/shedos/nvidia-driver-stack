@@ -1,0 +1,21 @@
+# The NVIDIA driver stack ShedOS ships, one package per line. Read by
+# /usr/lib/shedos/nvidia-reap, which strips it off a box with no NVIDIA card,
+# and by the installer, which strips it out of a fresh install for the same
+# reason. Named in full because pacstrap installs everything as explicit, so
+# -Rns never cascades.
+#
+# linux-firmware-nvidia is deliberately not here: nouveau loads it on legacy
+# cards, so whether it goes with the stack is a decision each caller makes.
+nvidia-open-dkms
+nvidia-utils
+nvidia-settings
+nvidia-prime
+libva-nvidia-driver
+nvidia-container-toolkit
+libnvidia-container
+libxnvctrl
+egl-wayland
+egl-wayland2
+egl-gbm
+egl-x11
+eglexternalplatform

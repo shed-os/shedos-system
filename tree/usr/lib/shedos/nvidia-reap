@@ -3,12 +3,17 @@
 # explicit where one does. Runs once, disables itself. Doubt keeps.
 set -uo pipefail
 
-STACK=(nvidia-open-dkms nvidia-utils nvidia-settings nvidia-prime
-       libva-nvidia-driver nvidia-container-toolkit libnvidia-container
-       libxnvctrl egl-wayland egl-wayland2 egl-gbm egl-x11 eglexternalplatform
-       linux-firmware-nvidia)
+STACK_FILE=${SHEDOS_NVIDIA_STACK_FILE:-/usr/share/shedos/nvidia-driver-stack}
 SYS=${SHEDOS_NVIDIA_SYS:-/sys/bus/pci/devices}
 PACMAN=${SHEDOS_NVIDIA_PACMAN:-pacman}
+
+# Without the list there is nothing to reap and no way to know it — leave the
+# unit armed so a boot that can read the file gets its turn.
+[[ -r $STACK_FILE ]] || exit 0
+# The firmware is not in the file — the installer keeps it on legacy cards
+# where nouveau wants it, and here there is no card at all to keep it for.
+mapfile -t STACK < <(grep -vE '^[[:space:]]*(#|$)' "$STACK_FILE")
+STACK+=(linux-firmware-nvidia)
 
 _disarm() { systemctl disable shedos-nvidia-reap.service 2>/dev/null || true; }
 

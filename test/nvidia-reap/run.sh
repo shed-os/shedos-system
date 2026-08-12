@@ -80,6 +80,14 @@ else
 fi
 
 printf 'nvidia-utils\nlinux-firmware-nvidia\n' > "$work/installed"
+_gpu 0x8086; _run "$work/nosuch"
+if ! grep -qE 'Rns|asexplicit' "$work/pacman.log" \
+   && ! grep -q 'disable shedos-nvidia-reap' "$work/systemctl.log"; then
+    _ok N4_no_list_reaps_nothing_and_stays_armed
+else
+    _fail N4_no_list_reaps_nothing_and_stays_armed "$(cat "$work/pacman.log" "$work/systemctl.log")"
+fi
+
 
 _gpu 0x8086; _run
 if grep -q '^-Rns --noconfirm nvidia-utils linux-firmware-nvidia$' "$work/pacman.log"; then
