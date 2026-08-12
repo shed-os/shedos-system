@@ -8,7 +8,9 @@ FPRINT_IFACE=net.reactivated.Fprint.Device
 
 # fprintd acts on a named user. Under sudo that must be the invoking
 # user — $USER is root there, and enrolling root's finger helps nobody.
-FP_USER=${SUDO_USER:-$USER}
+# id(1) is the fallback because $USER is not set at all in a non-login
+# environment, and this file must still answer a completion there.
+FP_USER=${SUDO_USER:-${USER:-$(id -un)}}
 
 VALID_FINGERS=(
     left-thumb left-index-finger left-middle-finger left-ring-finger left-little-finger
