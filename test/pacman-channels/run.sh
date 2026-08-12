@@ -27,16 +27,20 @@ export SHEDOS_BUILD_MARKER=/nonexistent
 # shellcheck source=/dev/null
 source "$install_file"
 
-# The canonical pair, byte for byte, as it read before there was a library to
-# write it. Anything the library changes about this text changes what lands in
-# every /etc/pacman.conf on the fleet, so it is pinned rather than described.
+# The canonical pair, byte for byte. Anything the library changes about this
+# text changes what lands in every /etc/pacman.conf on the fleet, so it is
+# pinned rather than described. The first line of every block is the same
+# whoever wrote it: ownership is decided by the repository name, so nothing
+# reads a preamble to work out whose a block is.
 read -r -d '' want_pair <<'EOF'
 # >>> shedostest <<<
-# ShedOS canary channel; RC packages land here before they are promoted
-# to the stable channel behind [shedos]. Listed first: pacman prefers the
-# first repo that carries a package, so enabling this is what makes an RC
-# install track the canary. Enable or comment the three lines below as one
-# to opt in or out; RC installs ship it enabled, stable installs commented.
+# Managed by shedos-system; do not edit between these markers.
+# The ShedOS canary channel; RC packages land here before they are
+# promoted to the stable channel behind [shedos]. Listed first: pacman
+# prefers the first repository that carries a package, so enabling this
+# is what makes an RC install track the canary. Enable or comment the
+# three lines below as one to opt in or out; RC installs ship it
+# enabled, stable installs commented.
 #[shedostest]
 #SigLevel = Required DatabaseRequired
 #Server = https://repo.shedos.org/test/$arch
@@ -52,12 +56,27 @@ Server = https://repo.shedos.org/stable/$arch
 EOF
 
 if [[ "$(bash "$fence" render canary --commented; echo; bash "$fence" render stable)" == "$want_pair" ]]; then
-    _ok "T0 the library writes the block the scriptlet used to write"
+    _ok "T0 the pair reads as it is meant to"
 else
-    _bad "T0 the library writes the block the scriptlet used to write"
+    _bad "T0 the pair reads as it is meant to"
     diff <(printf '%s\n' "$want_pair") \
          <(bash "$fence" render canary --commented; echo; bash "$fence" render stable) >&2
 fi
+
+# The two channel names are this package's and nobody else may declare them.
+if [[ "$(bash "$fence" reserved)" == $'shedostest\nshedos' ]]; then
+    _ok "T0 the reserved names are the two channels"
+else
+    _bad "T0 the reserved names are the two channels: $(bash "$fence" reserved | tr '\n' ' ')"
+fi
+for _r in shedos shedostest; do
+    if bash "$fence" render-repo "$_r" https://example.invalid >/dev/null 2>&1 \
+        || bash "$fence" rewrite-repos "$_r=https://example.invalid" >/dev/null 2>&1; then
+        _bad "T0 a declaration of $_r is refused"
+    else
+        _ok "T0 a declaration of $_r is refused"
+    fi
+done
 
 if [[ "$(SHEDMAN_CONFIG=/nonexistent bash "$fence" render stable)" \
       == "$(bash "$fence" render stable)" ]]; then
@@ -179,6 +198,37 @@ if ! grep -q 'shedos' "$td/nofence/pacman.conf" \
     _ok "T0 a missing library says so and keeps the heal"
 else
     _bad "T0 a missing library says so and keeps the heal: [$nofence_err]"
+fi
+
+# The two writers compose: whichever ran last, the channels come first in
+# canary-then-stable order and the declared repositories follow, and neither
+# touches a block whose name belongs to the other.
+t0=$td/t0; mkdir -p "$t0"; _base_conf > "$t0/pacman.conf"
+_run "$t0" test
+bash "$fence" rewrite-repos 'my-mirror=https://pkgs.example.org/$arch=Optional TrustAll' \
+    < "$t0/pacman.conf" > "$t0/with-mirror"
+if [[ "$(grep -oE '^#?\[(shedostest|shedos|my-mirror)\]$' "$t0/with-mirror" | tr '\n' ' ')" \
+      == '[shedostest] [shedos] [my-mirror] ' ]]; then
+    _ok "T0 the channels lead and a declared repository follows"
+else
+    _bad "T0 the channels lead and a declared repository follows: $(grep -oE '^#?\[[a-z-]+\]$' "$t0/with-mirror" | tr '\n' ' ')"
+fi
+
+SHEDOS_PACMAN_CONF="$t0/with-mirror" SHEDOS_CHANNEL_FILE="$t0/channel" \
+    SHEDOS_STATE_DIR="$t0/state" _add_shedos_repo
+if grep -q 'Optional TrustAll' "$t0/with-mirror" \
+    && [[ "$(grep -oE '^#?\[(shedostest|shedos|my-mirror)\]$' "$t0/with-mirror" | tr '\n' ' ')" \
+          == '[shedostest] [shedos] [my-mirror] ' ]]; then
+    _ok "T0 the scriptlet leaves a repository it does not own alone"
+else
+    _bad "T0 the scriptlet leaves a repository it does not own alone"
+fi
+
+bash "$fence" rewrite-repos < "$t0/with-mirror" > "$t0/no-mirror"
+if ! grep -q 'my-mirror' "$t0/no-mirror" && grep -q '>>> shedos <<<' "$t0/no-mirror"; then
+    _ok "T0 dropping the declaration takes its block and leaves the channels"
+else
+    _bad "T0 dropping the declaration takes its block and leaves the channels: $(grep -oE '^#?\[[a-z-]+\]$' "$t0/no-mirror" | tr '\n' ' ')"
 fi
 
 # T1: fresh RC install (channel=test, no fences) — canary on, stable [shedos].
