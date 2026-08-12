@@ -27,4 +27,4 @@ and manages which one Limine boots first.
 
 # SEE ALSO
 
-*shedman-rollback*(1)
+*shedman*(1), *shedman-rollback*(1)

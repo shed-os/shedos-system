@@ -17,4 +17,4 @@ fail-closed lock client (password + fingerprint unlock). Bound to
 
 # SEE ALSO
 
-*shedman-fingerprint*(1)
+*shedman*(1), *shedman-fingerprint*(1)
