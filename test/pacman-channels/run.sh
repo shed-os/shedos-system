@@ -71,7 +71,7 @@ else
 fi
 for _r in shedos shedostest; do
     if bash "$fence" render-repo "$_r" https://example.invalid >/dev/null 2>&1 \
-        || bash "$fence" rewrite-repos "$_r=https://example.invalid" >/dev/null 2>&1; then
+        || bash "$fence" rewrite-repos --repo "$_r" https://example.invalid >/dev/null 2>&1; then
         _bad "T0 a declaration of $_r is refused"
     else
         _ok "T0 a declaration of $_r is refused"
@@ -200,12 +200,22 @@ else
     _bad "T0 a missing library says so and keeps the heal: [$nofence_err]"
 fi
 
+# A Server URL may carry an `=` of its own, so each field is its own argument
+# and nothing cuts the URL at the first one.
+if [[ "$(printf '[options]\n' \
+        | bash "$fence" rewrite-repos --repo m 'https://mirror.example/?arch=x86_64' \
+        | sed -n 's/^Server = //p')" == 'https://mirror.example/?arch=x86_64' ]]; then
+    _ok "T0 a server URL keeps every character it was given"
+else
+    _bad "T0 a server URL keeps every character it was given"
+fi
+
 # The two writers compose: whichever ran last, the channels come first in
 # canary-then-stable order and the declared repositories follow, and neither
 # touches a block whose name belongs to the other.
 t0=$td/t0; mkdir -p "$t0"; _base_conf > "$t0/pacman.conf"
 _run "$t0" test
-bash "$fence" rewrite-repos 'my-mirror=https://pkgs.example.org/$arch=Optional TrustAll' \
+bash "$fence" rewrite-repos --repo my-mirror 'https://pkgs.example.org/$arch' 'Optional TrustAll' \
     < "$t0/pacman.conf" > "$t0/with-mirror"
 if [[ "$(grep -oE '^#?\[(shedostest|shedos|my-mirror)\]$' "$t0/with-mirror" | tr '\n' ' ')" \
       == '[shedostest] [shedos] [my-mirror] ' ]]; then

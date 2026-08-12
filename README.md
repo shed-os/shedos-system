@@ -36,6 +36,14 @@ A block between the markers is ours. A hand-written one for a repository nobody
 declared is reconciled away on the next run, and an edit inside one lasts until
 then — declare the repository instead.
 
+```
+pacman-fence reserved
+pacman-fence render <stable|canary> [--commented]
+pacman-fence render-repo <name> <server> [siglevel]
+pacman-fence rewrite [--canary-enabled]              < conf > conf
+pacman-fence rewrite-repos [--repo <name> <server> [siglevel]]...  < conf > conf
+```
+
 ## What it does not ship
 
 Four things came out of this package and live on their own now: the `shedman`

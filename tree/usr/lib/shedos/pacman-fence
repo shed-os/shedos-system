@@ -16,10 +16,11 @@
 #       of the two channels on stdout. Every other managed block is carried
 #       through untouched.
 #
-#   pacman-fence rewrite-repos [<name>=<server>[=<siglevel>]]...
+#   pacman-fence rewrite-repos [--repo <name> <server> [siglevel]]...
 #       the same from the other side: the declared repositories are replaced
 #       by exactly what is named here, and the two channels are carried
-#       through untouched.
+#       through untouched. Each field is its own argument, because a Server
+#       URL may carry an `=` of its own and a packed form would cut it there.
 #
 # Ownership is by name and nothing else. The scriptlet owns the two reserved
 # names; whatever declares repositories owns every other name. Neither reads
@@ -122,7 +123,11 @@ strip() {
             sub(/^# >>> /, "", n); sub(/ <<<$/, "", n)
             return n
         }
-        /^# >>> .* <<<$/ && held == "" { held = name_of($0); next }
+            # A repository name is what pacman will accept as a section, so a
+        # marker carrying anything else is not one of ours to capture.
+        /^# >>> .* <<<$/ && held == "" && name_of($0) ~ /^[A-Za-z0-9._-]+$/ {
+            held = name_of($0); next
+        }
         held != "" && $0 == "# <<< " held " >>>" { held = ""; next }
         held != "" { print > (capture "/" held); next }
         $0 == "[" stable "]" || $0 == "[" canary "]" { bare = 1; next }
@@ -170,32 +175,52 @@ rewrite() {  # $1=comment prefix for the canary
 }
 
 rewrite_repos() {
-    local dir text spec name server siglevel block
-    local -a blocks=()
+    local dir text name block i
+    local -a names=() servers=() siglevels=() blocks=()
+
+    while (( $# )); do
+        [[ $1 == --repo ]] || die 'rewrite-repos takes --repo <name> <server> [siglevel]'
+        shift
+        (( $# >= 2 )) || die '--repo takes a name and a server'
+        names+=("$1"); servers+=("$2"); shift 2
+        # The optional third field, told from the next --repo by the sentinel.
+        if (( $# )) && [[ $1 != --repo ]]; then
+            siglevels+=("$1"); shift
+        else
+            siglevels+=("$SIGLEVEL")
+        fi
+    done
+    for name in "${names[@]}"; do
+        refuse_reserved "$name"
+    done
+
     dir=$(mktemp -d) || die 'no temporary directory'
     text=$(strip "$dir")
     for name in "$CANARY_REPO" "$STABLE_REPO"; do
         block=$(captured "$dir" "$name") && blocks+=("$block")
     done
     rm -rf "$dir"
-    while IFS= read -r spec; do
-        [[ -n $spec ]] || continue
-        name=${spec%%=*}
-        server=${spec#*=}
-        siglevel=$SIGLEVEL
-        if [[ $server == *=* ]]; then
-            siglevel=${server#*=}
-            server=${server%%=*}
-        fi
-        blocks+=("$(render_repo "$name" "$server" "$siglevel")")
-    done < <(printf '%s\n' "$@" | LC_ALL=C sort)
+
+    while IFS=$'\t' read -r name i; do
+        [[ -n $name ]] || continue
+        blocks+=("$(render_repo "$name" "${servers[$i]}" "${siglevels[$i]}")")
+    done < <(for i in "${!names[@]}"; do
+                 printf '%s\t%s\n' "${names[$i]}" "$i"
+             done | LC_ALL=C sort)
+
     printf '%s\n' "$text"
     (( ${#blocks[@]} == 0 )) || emit_blocks "${blocks[@]}"
 }
 
 reserved() { printf '%s\n%s\n' "$CANARY_REPO" "$STABLE_REPO"; }
 
-(( $# > 0 )) || die 'usage: pacman-fence reserved | render <stable|canary> [--commented] | render-repo <name> <server> [siglevel] | rewrite [--canary-enabled] | rewrite-repos [<name>=<server>[=<siglevel>]]...'
+refuse_reserved() {
+    [[ $1 == "$STABLE_REPO" || $1 == "$CANARY_REPO" ]] \
+        && die "$1 is a ShedOS channel and shedos-system writes it"
+    return 0
+}
+
+(( $# > 0 )) || die 'usage: pacman-fence reserved | render <stable|canary> [--commented] | render-repo <name> <server> [siglevel] | rewrite [--canary-enabled] | rewrite-repos [--repo <name> <server> [siglevel]]...'
 verb=$1; shift
 
 case $verb in
@@ -209,9 +234,7 @@ case $verb in
         ;;
     render-repo)
         (( $# >= 2 )) || die 'render-repo takes a name and a server'
-        for r in $(reserved); do
-            [[ $1 == "$r" ]] && die "$1 is a ShedOS channel and shedos-system writes it"
-        done
+        refuse_reserved "$1"
         render_repo "$1" "$2" "${3:-$SIGLEVEL}"
         ;;
     rewrite)
@@ -219,14 +242,6 @@ case $verb in
         [[ ${1:-} == --canary-enabled ]] && commented=
         rewrite "$commented"
         ;;
-    rewrite-repos)
-        for spec in "$@"; do
-            for r in $(reserved); do
-                [[ ${spec%%=*} == "$r" ]] \
-                    && die "${spec%%=*} is a ShedOS channel and shedos-system writes it"
-            done
-        done
-        rewrite_repos "$@"
-        ;;
+    rewrite-repos) rewrite_repos "$@" ;;
     *) die "no such command: $verb" ;;
 esac
