@@ -6,6 +6,18 @@ set -uo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$here/../.." && pwd)
 tool=$repo_root/tree/usr/lib/shedos/nvidia-reap
+stack_file=$repo_root/tree/usr/share/shedos/nvidia-driver-stack
+
+# The installer names the same set when it strips the stack off a box with no
+# nvidia card, and it has no way to read this package's tree at build time, so
+# the list is written down once here and generated there. These thirteen are
+# what both carried before there was one file; the firmware package is not one
+# of them because the installer decides separately whether to keep it.
+want_stack=(
+    nvidia-open-dkms nvidia-utils nvidia-settings nvidia-prime
+    libva-nvidia-driver nvidia-container-toolkit libnvidia-container
+    libxnvctrl egl-wayland egl-wayland2 egl-gbm egl-x11 eglexternalplatform
+)
 
 pass=0; fail=0; failures=()
 _ok()   { printf 'ok: %s\n' "$1"; pass=$((pass + 1)); }
@@ -15,6 +27,19 @@ _summary() {
     if (( fail > 0 )); then printf '  %s\n' "${failures[@]}" >&2; exit 1; fi
     exit 0
 }
+
+if [[ -f $stack_file ]] \
+   && [[ "$(grep -vE '^[[:space:]]*(#|$)' "$stack_file")" == "$(printf '%s\n' "${want_stack[@]}")" ]]; then
+    _ok N1_one_file_holds_the_driver_list
+else
+    _fail N1_one_file_holds_the_driver_list "$stack_file missing or not the thirteen"
+fi
+
+if grep -qE '(nvidia-open-dkms|egl-wayland|libxnvctrl)' "$tool"; then
+    _fail N2_the_tool_keeps_no_list_of_its_own "package names are still spelled out in $tool"
+else
+    _ok N2_the_tool_keeps_no_list_of_its_own
+fi
 
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin"
@@ -40,8 +65,19 @@ _gpu() {  # $1=vendor written into a single fake PCI device
 _run() {
     : > "$work/pacman.log"; : > "$work/systemctl.log"
     PATH="$work/bin:$PATH" SHEDOS_NVIDIA_SYS="$work/sys" \
+    SHEDOS_NVIDIA_STACK_FILE="${1:-$stack_file}" \
         bash "$tool" >"$work/out" 2>&1
 }
+
+# A name only the file could have supplied proves the tool reads it.
+printf '# a fixture list\nnvidia-invented\n' > "$work/stack"
+printf 'nvidia-invented\n' > "$work/installed"
+_gpu 0x8086; _run "$work/stack"
+if grep -q '^-Rns --noconfirm nvidia-invented$' "$work/pacman.log"; then
+    _ok N3_the_tool_reaps_what_the_file_names
+else
+    _fail N3_the_tool_reaps_what_the_file_names "$(cat "$work/pacman.log")"
+fi
 
 printf 'nvidia-utils\nlinux-firmware-nvidia\n' > "$work/installed"
 
