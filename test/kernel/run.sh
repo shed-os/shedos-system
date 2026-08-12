@@ -319,17 +319,17 @@ for pkg in sbctl tpm2-tools systemd-ukify; do
 done
 
 # ---------------------------------------------------------------------------
-# SB3: the secureboot + tpm2 verbs are allowlisted AND their executables exist
-#      — the package() install loop fails the build if a name has no tree/
-#      file, so assert both halves together.
+# SB3: the secureboot + tpm2 verbs ship — a declaration names each and the
+#      executable it names is there. package() installs from the declarations,
+#      so those two together are what decides whether the verb reaches a box.
 # ---------------------------------------------------------------------------
 libexec_sys=$repo_root/tree/usr/libexec/shedman
+decls_sys=$repo_root/tree/usr/share/shedman/verbs.d
 for verb in secureboot tpm2; do
-    if awk '/_libexec_shedman=\(/,/^[[:space:]]*\)/' "$sys_pkgbuild" \
-            | grep -qE "(^|[[:space:]])$verb([[:space:]]|\$)"; then
-        _ok "SB3_allowlist_has_$verb"
+    if [[ -f $decls_sys/$verb.toml ]]; then
+        _ok "SB3_declared_$verb"
     else
-        _fail "SB3_allowlist_has_$verb" "not in _libexec_shedman allowlist"
+        _fail "SB3_declared_$verb" "no declaration at $decls_sys/$verb.toml"
     fi
     if [[ -x $libexec_sys/$verb ]]; then
         _ok "SB3_verb_file_$verb"

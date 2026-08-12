@@ -319,7 +319,8 @@ out=$(STUB_A2="$UU" _resolve "$d" 2>/dev/null); rc=$?
 if [[ $rc -ne 0 ]]; then _ok RR4_missing_partuuid_fails; else _fail RR4_missing_partuuid_fails "rc=$rc out=[$out]"; fi
 
 # P1: the unit + hook + driver are actually installed by package() — a staged
-# file PKGBUILD never installs ships nothing (the _libexec_shedman class of bug).
+# file PKGBUILD never installs ships nothing, which is the whole class of bug
+# a hand-kept install list invites.
 pkgbuild=$repo_root/PKGBUILD
 if grep -q 'tree/usr/lib/systemd/system/shedos-reencrypt.service' "$pkgbuild" \
    && grep -q 'tree/usr/lib/initcpio/install/shedos-reencrypt' "$pkgbuild" \

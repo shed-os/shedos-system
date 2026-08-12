@@ -165,8 +165,9 @@ else
     _fail AR8_non_standard_refused "rc=$rc out=$out key=$([[ -e $d/esp/key ]]&&echo y)"
 fi
 
-# AR9: the encrypt verb is in the PKGBUILD's _libexec_shedman install array.
-if grep -A4 '_libexec_shedman=(' "$repo_root/PKGBUILD" 2>/dev/null | grep -qw encrypt; then _ok AR9_packaged; else _fail AR9_packaged "encrypt not in _libexec_shedman"; fi
+# AR9: the encrypt verb ships — package() installs what the declarations name,
+# so a verb with no declaration does not reach a box at all.
+if [[ -f $repo_root/tree/usr/share/shedman/verbs.d/encrypt.toml ]]; then _ok AR9_packaged; else _fail AR9_packaged "no declaration names encrypt"; fi
 
 # AR10: a boot-image rebuild failure arms NOTHING — the conf is reverted (no
 # reencrypt hook), no keyfile, no state, no reboot — so a later kernel rebuild

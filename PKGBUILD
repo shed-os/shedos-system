@@ -1,23 +1,31 @@
 # Maintainer: ShedOS <https://github.com/Theshedman/shedos>
 #
-# Root-owned system payload: the unified `shedman` CLI (plus its
-# subcommand binaries under /usr/libexec/shedman/), systemd units, and /etc
-# drop-ins. Legacy `shedos-*` names survive as silent back-compat shims in
-# /usr/bin/. Anything DE-specific (hyprland bindings, waybar launchers)
-# lives in shedos-hyprland, not here.
+# Root-owned system payload: boot and UKI assembly, the Limine renderer,
+# full-disk encryption, Secure Boot and TPM2, the session and login wiring,
+# systemd units and /etc drop-ins. The eight verbs it adds to shedman ship
+# with declarations beside them. Legacy `shedos-*` names survive as silent
+# back-compat shims in /usr/bin/. Anything DE-specific (hyprland bindings,
+# waybar launchers) lives in shedos-hyprland, not here.
 
 pkgname=shedos-system
 pkgver=2026.08.09
 pkgrel=1
 pkgdesc='ShedOS system utilities (shedman CLI), systemd units, and /etc drop-ins'
 arch=('any')
-url='https://github.com/Theshedman/shedos'
+url='https://github.com/shed-os/shedos-system'
 license=('GPL-3.0-or-later')
 makedepends=(
     'scdoc'            # renders man/*.scd → /usr/share/man/man1/*.1
 )
+# Carried whole from the package this was split out of. Several entries below
+# belong to verbs that ship from shedman or the theme engine now, and they stay
+# until the cutover reconciles the whole set: a bootstrap package that declares
+# one dependency too few breaks boxes, and one too many costs disk.
 depends=(
     'bash'
+    'shedman'          # the dispatcher the eight verbs here plug into, and
+                       # apply_core, which the recovery UI and mount-report
+                       # import
     'systemd'
     'pacman-contrib'   # checkupdates
     'coreutils'        # sha256sum, install
@@ -71,9 +79,6 @@ replaces=('power-profiles-daemon')
 optdepends=(
     'postgresql: shedos-pg-initdb.service initializes a cluster on first boot'
     'code: opt-in GUI merge backend for shedman config --review --gui (satisfied by code from extra or visual-studio-code-bin from AUR)'
-    'bash-completion: tab-complete subcommands and flags in bash'
-    'zsh: tab-complete subcommands and flags in zsh (via /usr/share/zsh/site-functions/_shedman)'
-    'fish: tab-complete subcommands and flags in fish (via /usr/share/fish/vendor_completions.d/shedman.fish)'
 )
 backup=(
     'etc/sudoers.d/wheel'
@@ -88,13 +93,15 @@ backup=(
 )
 install=shedos-system.install
 
+source=("git+https://github.com/shed-os/shedos-system.git#tag=$pkgver")
+sha256sums=('SKIP')
+
 prepare() {
-    # Render scdoc-format man-page sources to groff (.1) files. Source
-    # of truth lives at man/*.scd; the rendered .1 files land in
-    # man/build/ and are installed by package() below. Keeping the
-    # render step out of package() means a malformed .scd surfaces
-    # before the real install happens.
-    cd "$startdir"
+    # Render scdoc-format man-page sources to groff files. Source of truth
+    # lives at man/*.scd; the rendered pages land in man/build/ and are
+    # installed by package() below. Keeping the render step out of package()
+    # means a malformed .scd surfaces before the real install happens.
+    cd "$srcdir/shedos-system"
     install -d man/build
     for src in man/*.scd; do
         out=man/build/$(basename "${src%.scd}")
@@ -103,23 +110,19 @@ prepare() {
 }
 
 package() {
-    cd "$startdir"
+    cd "$srcdir/shedos-system"
 
-    # The shedman dispatcher and its subcommand binaries. Users type
-    # `shedman <cmd>`; the dispatcher execs /usr/libexec/shedman/<cmd>.
-    install -Dm755 tree/usr/bin/shedman \
-        "$pkgdir/usr/bin/shedman"
-
-    install -d "$pkgdir/usr/libexec/shedman"
-    local _libexec_shedman=(
-        apply config conflicts datetime db dock doctor encrypt fingerprint health install kernel key lock login logs
-        rollback secureboot services snapshot status theme tpm2 uninstall update updates upgrade-history
-        _config-sync _config-review
-    )
-    local _name
-    for _name in "${_libexec_shedman[@]}"; do
+    # The verbs this package adds to shedman. The declarations are the
+    # manifest: a verb ships because one names it, so a verb added without
+    # its declaration does not ship silently — it does not ship at all, and
+    # the pipeline's completeness check says which way round the mistake was.
+    local _decl _name
+    for _decl in tree/usr/share/shedman/verbs.d/*.toml; do
+        _name=$(sed -n 's/^name = "\(.*\)"$/\1/p' "$_decl")
         install -Dm755 "tree/usr/libexec/shedman/$_name" \
             "$pkgdir/usr/libexec/shedman/$_name"
+        install -Dm644 "$_decl" \
+            "$pkgdir/usr/share/shedman/verbs.d/$(basename "$_decl")"
     done
 
     # Silent back-compat shims at the legacy /usr/bin/shedos-* paths.
@@ -140,11 +143,6 @@ package() {
     # autostart helper), so it stays as a plain /usr/bin/ binary.
     install -Dm755 tree/usr/bin/shedos-user-session \
         "$pkgdir/usr/bin/shedos-user-session"
-
-    # Shared plan engine; both `shedman apply` and `shedman doctor` add
-    # /usr/lib/shedos to sys.path and `import apply_core`.
-    install -Dm644 tree/usr/lib/shedos/apply_core.py \
-        "$pkgdir/usr/lib/shedos/apply_core.py"
 
     # Orchestration state lib for in-place encryption; sourced by the reencrypt
     # driver and the encrypt subcommand. usr/lib/shedos installs file-by-file,
@@ -195,22 +193,15 @@ package() {
     install -Dm644 tree/usr/lib/systemd/system/shedos-encrypt-finalize.service \
         "$pkgdir/usr/lib/systemd/system/shedos-encrypt-finalize.service"
 
-    # Shared palette loader; the Textual TUIs add /usr/lib/shedos to
-    # sys.path and `import shedos_palette` to colour themselves live.
-    install -Dm644 tree/usr/lib/shedos/shedos_palette.py \
-        "$pkgdir/usr/lib/shedos/shedos_palette.py"
+    # The one writer of the ShedOS blocks in /etc/pacman.conf: the install
+    # scriptlet here and `shedman migrate` both ask it for the text.
+    install -Dm755 tree/usr/lib/shedos/pacman-fence \
+        "$pkgdir/usr/lib/shedos/pacman-fence"
 
-    # Theme reconciler: reads /etc/shedos/system.toml [theme] + the
-    # named palette under /etc/shedos/themes/palettes/, renders into
-    # /etc/shedos/themes/current/ (palette.conf, palette.css,
-    # greeter.toml, gsettings.sh, wallpaper.png symlink). Re-rendered
-    # on every shedman apply / theme apply / install scriptlet run.
-    install -Dm755 tree/usr/lib/shedos/theme_renderer.py \
-        "$pkgdir/usr/lib/shedos/theme_renderer.py"
-    for _palette in tree/etc/shedos/themes/palettes/*.toml; do
-        install -Dm644 "$_palette" \
-            "$pkgdir/etc/shedos/themes/palettes/$(basename "$_palette")"
-    done
+    # The NVIDIA driver stack, written down once. nvidia-reap reads it and
+    # the installer generates its own copy from it.
+    install -Dm644 tree/usr/share/shedos/nvidia-driver-stack \
+        "$pkgdir/usr/share/shedos/nvidia-driver-stack"
 
     # Single source of truth for the reflector flag set, exec'd by
     # shedos-mirrorlist.service (live ISO), shedos-reflector.service
@@ -520,14 +511,6 @@ package() {
     # scopes silences "[ OK ] Started/Stopped foo" chatter that would
     # otherwise reach /dev/console = /dev/tty1, land in vcs1, and be
     # painted by fbcon during DRM-master gaps at compositor handoffs.
-    # System-wide GTK theme defaults. Per-user ~/.config/gtk-*/settings.ini
-    # (seeded from /etc/skel by shedos-hyprland) wins when present; these
-    # files cover any user that doesn't have one.
-    install -Dm644 tree/etc/gtk-3.0/settings.ini \
-        "$pkgdir/etc/gtk-3.0/settings.ini"
-    install -Dm644 tree/etc/gtk-4.0/settings.ini \
-        "$pkgdir/etc/gtk-4.0/settings.ini"
-
     install -Dm644 tree/etc/systemd/system.conf.d/shedos-quiet-status.conf \
         "$pkgdir/etc/systemd/system.conf.d/shedos-quiet-status.conf"
     install -Dm644 tree/etc/systemd/user.conf.d/shedos-quiet-status.conf \
@@ -572,16 +555,6 @@ package() {
         "$pkgdir/etc/systemd/oomd.conf.d/shedos.conf"
     install -Dm644 tree/etc/security/limits.d/30-shedos-realtime.conf \
         "$pkgdir/etc/security/limits.d/30-shedos-realtime.conf"
-
-    # Shell completions. Dispatcher-level discovery at completion time,
-    # with per-subcommand flag completion via
-    # `--complete-{bash,zsh,fish}`.
-    install -Dm644 tree/usr/share/zsh/site-functions/_shedman \
-        "$pkgdir/usr/share/zsh/site-functions/_shedman"
-    install -Dm644 tree/usr/share/bash-completion/completions/shedman \
-        "$pkgdir/usr/share/bash-completion/completions/shedman"
-    install -Dm644 tree/usr/share/fish/vendor_completions.d/shedman.fish \
-        "$pkgdir/usr/share/fish/vendor_completions.d/shedman.fish"
 
     # Man pages; rendered from man/*.scd by prepare() above; install
     # the rendered .1 files. `shedman help` is the primary discovery

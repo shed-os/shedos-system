@@ -1,0 +1,28 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+# The build pushes the pkgrel bump back here when a release is already
+# published, and a reusable workflow cannot grant itself the write.
+permissions:
+  contents: write
+jobs:
+  pipeline:
+    uses: shed-os/shedos-ci/.github/workflows/package-pipeline.yml@main
+    with:
+      packages: '["."]'
+      # scdoc and man-db are what the manual suite renders and opens its pages
+      # with; python-tomlkit is what the login verb round-trips system.toml
+      # with; sbsigntools signs the UKIs the boot suite verifies; pytest runs
+      # the cmdline backfill. shedman brings apply_core, which the guided
+      # recovery UI imports.
+      test_packages: >-
+        scdoc man-db python-tomlkit sbsigntools python-pytest shedman
+      # unlock's container cases want root and a loop device, and neither is
+      # here. Everything it can check without one still runs; the rollup calls
+      # the suite skipped anyway, because a suite that bowed out of part of
+      # its job has not been tested.
+      allowed_skips: '["unlock"]'
+    secrets:
+      SHEDOS_DISPATCH_TOKEN: ${{ secrets.SHEDOS_DISPATCH_TOKEN }}
